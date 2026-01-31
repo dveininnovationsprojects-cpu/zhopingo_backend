@@ -23,6 +23,10 @@ app.use('/api/v1/products', require('./routes/productRoutes'));
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/wallet', walletRoutes);
 
+app.get("/", (req, res) => {
+  res.send("Backend is running 🚀");
+});
+
 console.log("MONGO_URI =", process.env.MONGO_URI);
 
 mongoose.connect(process.env.MONGO_URI )
