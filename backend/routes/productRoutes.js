@@ -3,7 +3,7 @@ const express = require('express');
 const router = express.Router();
 const productCtrl = require('../controllers/productController');
 const { protect } = require('../middleware/authMiddleware');
-const upload = require('../middleware/multerConfig'); // உங்க மல்டர் கான்பிக்
+const upload = require('../middleware/multerConfig'); 
 
 // Public
 router.get('/all', productCtrl.getAllProducts);

@@ -13,7 +13,7 @@ exports.createProduct = async (req, res) => {
         if (foodCategories.includes(req.body.categoryName) && !seller.fssaiNumber) {
             return res.status(400).json({ 
                 success: false, 
-                message: "உணவுப் பொருட்களை விற்க FSSAI எண் கட்டாயம்! உங்கள் ப்ரொபைலில் அதை அப்டேட் செய்யவும்." 
+                message: "fssaiNumber is required for food category products." 
             });
         }
 

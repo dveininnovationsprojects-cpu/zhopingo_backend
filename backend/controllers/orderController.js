@@ -3,7 +3,7 @@ const User = require('../models/User');
 const DeliveryCharge = require('../models/DeliveryCharge');
 const Payout = require('../models/Payout');
 
-// 1. CREATE ORDER
+
 exports.createOrder = async (req, res) => {
     try {
         const { items, customerId, shippingAddress, paymentMethod } = req.body;
@@ -26,7 +26,7 @@ exports.createOrder = async (req, res) => {
         let customerDeliveryCharge = sellerFreeDeliveryApplied ? 0 : baseDeliveryCharge;
         let finalOrderAmount = totalProductAmount + customerDeliveryCharge;
 
-        // WALLET PAYMENT LOGIC
+       
         if (paymentMethod === 'WALLET') {
             const user = await User.findById(customerId);
             if (!user || user.walletBalance < finalOrderAmount) {
@@ -39,7 +39,7 @@ exports.createOrder = async (req, res) => {
             await user.save();
         }
 
-        // ✅ Constructor Error வராமல் இருக்க இப்போ இது சரியாக வேலை செய்யும்
+        
         const newOrder = new Order({
             customerId, 
             items, 

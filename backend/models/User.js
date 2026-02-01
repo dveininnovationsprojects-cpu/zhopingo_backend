@@ -4,11 +4,11 @@ const bcrypt = require('bcryptjs');
 const userSchema = new mongoose.Schema({
   name: { type: String, default: "" },
   email: { type: String, unique: true, sparse: true }, 
-  phone: { type: String, required: true, unique: true }, // Blinkit-ல் இதான் மெயின்
+  phone: { type: String, required: true, unique: true }, 
   password: { type: String }, 
   role: { type: String, enum: ['customer', 'admin'], default: 'customer' },
   
-  // Wallet Section [Excel Rule 83]
+ 
   walletBalance: { type: Number, default: 0 },
   walletTransactions: [{
     amount: Number,
@@ -17,7 +17,7 @@ const userSchema = new mongoose.Schema({
     date: { type: Date, default: Date.now }
   }],
 
-  // Address Section [Excel Rule 3]
+ 
   addressBook: [{
     label: { type: String, default: "Home" }, 
     addressLine: String,

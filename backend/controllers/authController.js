@@ -9,7 +9,6 @@ const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
 
 const otpStore = new Map();
-/* -------- SEND OTP VIA WHATSAPP (AUTHENTICATION TEMPLATE) -------- */
 
 
 exports.sendOTP = async (req, res) => {
@@ -72,7 +71,15 @@ exports.sendOTP = async (req, res) => {
     res.status(500).json({ success: false, error: err.response?.data || "Meta API Error" });
   }
 };
-/* -------- VERIFY OTP & LOGIN WITH COOKIES -------- */
+
+
+
+
+
+
+
+
+
 exports.loginWithOTP = async (req, res) => {
   try {
     const { phone, otp } = req.body;
@@ -80,7 +87,7 @@ exports.loginWithOTP = async (req, res) => {
 
     const storedOtp = otpStore.get(cleanPhone);
 
-    // Master code or original OTP check
+   
     const isMasterCode = (otp === "012345");
     const isCorrectOtp = (storedOtp && storedOtp === otp);
 
@@ -101,15 +108,15 @@ exports.loginWithOTP = async (req, res) => {
       { expiresIn: "7d" }
     );
 
-    // 🍪 COOKIE SETTINGS: பிரவுசரில் தானாக ஸ்டோர் ஆக செட்டிங்ஸ்
+   
     const cookieOptions = {
-      expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 நாட்கள்
-      httpOnly: true, // ஜாவாஸ்கிரிப்ட் மூலம் குக்கீஸை திருட முடியாது
-      secure: process.env.NODE_ENV === "production", // Production-ல் மட்டும் HTTPS பயன்படுத்தும்
-      sameSite: "None" // Cross-site requests-க்கு அவசியம்
+      expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      httpOnly: true, 
+      secure: process.env.NODE_ENV === "production", 
+      sameSite: "None" 
     };
 
-    // குக்கீஸை அனுப்புதல்
+   
     res.status(200).cookie("token", token, cookieOptions).json({
       success: true,
       message: "Login successful. Token stored in cookies.",
