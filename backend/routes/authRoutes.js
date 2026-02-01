@@ -1,17 +1,24 @@
 const express = require('express');
 const router = express.Router();
-const authController = require('../controllers/authController');
+
+const {
+  sendOTP,
+  loginWithOTP,
+  registerSeller,
+  loginSeller,
+  addUserAddress,
+  logout
+} = require('../controllers/authController');
+
 const { protect } = require('../middleware/authMiddleware');
 
-router.post('/send-otp', authController.sendOTP);
-router.post('/login-otp', authController.loginWithOTP);
+router.post('/send-otp', sendOTP);
+router.post('/login-otp', loginWithOTP);
 
-router.post('/seller/register', authController.registerSeller);
-router.post('/seller/login', authController.loginSeller);
+router.post('/seller/register', registerSeller);
+router.post('/seller/login', loginSeller);
 
-router.get('/profile', protect, authController.getProfile);
-router.put('/update-profile', protect, authController.updateProfile);
-router.put('/add-address/:userId', protect, authController.addUserAddress);
-router.post('/logout', authController.logout);
+router.put('/add-address/:userId', protect, addUserAddress);
+router.post('/logout', logout);
 
 module.exports = router;

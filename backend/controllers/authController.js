@@ -1,37 +1,63 @@
-const User = require('../models/User');
-const Seller = require('../models/Seller');
-const jwt = require('jsonwebtoken');
-const axios = require('axios');
+const axios = require("axios");
+const jwt = require("jsonwebtoken");
+const User = require("../models/User");
 
-// ENV
-const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
-const PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
+
 const JWT_SECRET = process.env.JWT_SECRET;
 
+const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
+const PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
 
 const otpStore = new Map();
+/* -------- SEND OTP VIA WHATSAPP (AUTHENTICATION TEMPLATE) -------- */
 
-/* -------- SEND OTP -------- */
+
 exports.sendOTP = async (req, res) => {
   try {
     const { phone } = req.body;
-    const cleanPhone = phone.startsWith('+') ? phone.slice(1) : phone;
+    if (!phone) return res.status(400).json({ success: false, message: "Phone required" });
 
+    const cleanPhone = phone.replace("+", ""); 
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    otpStore.set(phone, otp);
+
+    otpStore.set(cleanPhone, otp);
+
+    const whatsappPayload = {
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: cleanPhone,
+      type: "template",
+      template: {
+        name: "otp", 
+        language: { code: "en" }, 
+        components: [
+          {
+            type: "body", 
+            parameters: [
+              {
+                type: "text",
+                text: otp 
+              }
+            ]
+          },
+          {
+            type: "button", 
+            sub_type: "url", 
+            index: 0,
+            parameters: [
+              {
+                type: "text",
+                text: otp 
+              }
+            ]
+          }
+        ]
+      }
+    };
 
     await axios.post(
-      `https://graph.facebook.com/v18.0/${PHONE_NUMBER_ID}/messages`,
-      {
-        messaging_product: "whatsapp",
-        to: cleanPhone,
-        type: "template",
-        template: {
-          name: "otp",
-          language: { code: "en" },
-          components: [{ type: "body", parameters: [{ type: "text", text: otp }] }]
-        }
-      },
+      `https://graph.facebook.com/v23.0/${PHONE_NUMBER_ID}/messages`,
+      whatsappPayload,
       {
         headers: {
           Authorization: `Bearer ${WHATSAPP_TOKEN}`,
@@ -40,54 +66,71 @@ exports.sendOTP = async (req, res) => {
       }
     );
 
-    res.json({ success: true, message: "OTP sent" });
+    res.json({ success: true, message: "OTP sent with fixed sub_type" });
+  } catch (err) {
+    console.error("WhatsApp Error Log:", JSON.stringify(err.response?.data || err.message, null, 2));
+    res.status(500).json({ success: false, error: err.response?.data || "Meta API Error" });
+  }
+};
+/* -------- VERIFY OTP & LOGIN WITH COOKIES -------- */
+exports.loginWithOTP = async (req, res) => {
+  try {
+    const { phone, otp } = req.body;
+    const cleanPhone = phone.replace("+", "");
+
+    const storedOtp = otpStore.get(cleanPhone);
+
+    // Master code or original OTP check
+    const isMasterCode = (otp === "012345");
+    const isCorrectOtp = (storedOtp && storedOtp === otp);
+
+    if (!isMasterCode && !isCorrectOtp) {
+      return res.status(400).json({ success: false, message: "Invalid OTP" });
+    }
+
+    otpStore.delete(cleanPhone);
+
+    let user = await User.findOne({ phone: cleanPhone });
+    if (!user) {
+      user = await User.create({ phone: cleanPhone, role: "customer" });
+    }
+
+    const token = jwt.sign(
+      { id: user._id, role: user.role },
+      JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    // 🍪 COOKIE SETTINGS: பிரவுசரில் தானாக ஸ்டோர் ஆக செட்டிங்ஸ்
+    const cookieOptions = {
+      expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 நாட்கள்
+      httpOnly: true, // ஜாவாஸ்கிரிப்ட் மூலம் குக்கீஸை திருட முடியாது
+      secure: process.env.NODE_ENV === "production", // Production-ல் மட்டும் HTTPS பயன்படுத்தும்
+      sameSite: "None" // Cross-site requests-க்கு அவசியம்
+    };
+
+    // குக்கீஸை அனுப்புதல்
+    res.status(200).cookie("token", token, cookieOptions).json({
+      success: true,
+      message: "Login successful. Token stored in cookies.",
+      user: {
+        id: user._id,
+        phone: user.phone,
+        role: user.role,
+        addressBook: user.addressBook || []
+      }
+    });
+
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 };
 
-/* -------- VERIFY OTP -------- */
-exports.loginWithOTP = async (req, res) => {
-  const { phone, otp } = req.body;
-  const storedOtp = otpStore.get(phone);
-
-  if (otp !== storedOtp && otp !== "012345") {
-    return res.status(400).json({ success: false, message: "Invalid OTP" });
-  }
-
-  otpStore.delete(phone);
-
-  let user = await User.findOne({ phone });
-  if (!user) {
-    user = new User({ phone, role: "customer", walletBalance: 0 });
-    await user.save();
-  }
-
-  const token = jwt.sign({ id: user._id, role: user.role }, JWT_SECRET, { expiresIn: "7d" });
-
-  res.json({ success: true, token, user });
-};
-
-/* -------- PROFILE -------- */
-exports.getProfile = async (req, res) => {
-  const user = await User.findById(req.user.id);
-  res.json({ success: true, user });
-};
-
-exports.updateProfile = async (req, res) => {
-  const user = await User.findByIdAndUpdate(req.user.id, req.body, { new: true });
-  res.json({ success: true, user });
-};
-
-/* -------- ADDRESS (YOU ASKED THIS 👇) -------- */
+/* -------- ADDRESS -------- */
 exports.addUserAddress = async (req, res) => {
-  const { userId } = req.params;
-  const address = req.body;
-
-  const user = await User.findById(userId);
-  user.addressBook.push(address);
+  const user = await User.findById(req.params.userId);
+  user.addressBook.push(req.body);
   await user.save();
-
   res.json({ success: true, addressBook: user.addressBook });
 };
 
@@ -108,5 +151,5 @@ exports.loginSeller = async (req, res) => {
 
 /* -------- LOGOUT -------- */
 exports.logout = async (req, res) => {
-  res.json({ success: true, message: "Logged out" });
+  res.json({ success: true });
 };
