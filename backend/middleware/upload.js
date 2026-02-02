@@ -1,5 +1,6 @@
 const multer = require("multer");
 const path = require("path");
+const fs = require("fs");
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -10,6 +11,10 @@ const storage = multer.diskStorage({
     if (file.fieldname === "fssai_doc") folder = "uploads/kyc/fssai";
     if (file.fieldname === "msme_doc") folder = "uploads/kyc/msme";
 
+    // போல்டர் இல்லை என்றால் உருவாக்குவதற்கான லாஜிக்
+    if (!fs.existsSync(folder)) {
+      fs.mkdirSync(folder, { recursive: true });
+    }
     cb(null, folder);
   },
   filename: (req, file, cb) => {
@@ -28,11 +33,13 @@ const fileFilter = (req, file, cb) => {
   ];
 
   if (allowed.includes(file.mimetype)) cb(null, true);
-  else cb(new Error("File type not allowed"));
+  else cb(new Error("File type not allowed"), false);
 };
 
-module.exports = multer({
+const upload = multer({
   storage,
   fileFilter,
   limits: { fileSize: 10 * 1024 * 1024 }
 });
+
+module.exports = upload; 
