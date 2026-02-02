@@ -10,5 +10,7 @@ router.post('/refund', walletController.refundToWallet);
 
 
 router.get('/status/:userId', walletController.getWalletStatus);
+router.post('/create-topup', walletController.createWalletTopupSession);
+router.get('/verify-topup', walletController.verifyWalletTopup);
 
 module.exports = router;

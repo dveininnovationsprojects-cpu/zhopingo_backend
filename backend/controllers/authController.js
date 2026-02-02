@@ -74,52 +74,48 @@ exports.sendOTP = async (req, res) => {
 
 
 
-
-
-
-
-
-
 exports.loginWithOTP = async (req, res) => {
   try {
     const { phone, otp } = req.body;
+    
     const cleanPhone = phone.replace("+", "");
 
     const storedOtp = otpStore.get(cleanPhone);
 
-   
-    const isMasterCode = (otp === "012345");
+  
     const isCorrectOtp = (storedOtp && storedOtp === otp);
 
-    if (!isMasterCode && !isCorrectOtp) {
+    if (!isCorrectOtp) {
       return res.status(400).json({ success: false, message: "Invalid OTP" });
     }
 
     otpStore.delete(cleanPhone);
 
+   
     let user = await User.findOne({ phone: cleanPhone });
     if (!user) {
       user = await User.create({ phone: cleanPhone, role: "customer" });
     }
 
+   
     const token = jwt.sign(
       { id: user._id, role: user.role },
       JWT_SECRET,
       { expiresIn: "7d" }
     );
 
-   
+
     const cookieOptions = {
       expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
       httpOnly: true, 
       secure: process.env.NODE_ENV === "production", 
-      sameSite: "None" 
+      sameSite: "Lax" 
     };
 
-   
+ 
     res.status(200).cookie("token", token, cookieOptions).json({
       success: true,
-      message: "Login successful. Token stored in cookies.",
+      token: token, 
       user: {
         id: user._id,
         phone: user.phone,

@@ -22,7 +22,7 @@ exports.createSession = async (req, res) => {
                 },
                 order_meta: {
                     // Updated return URL for production/mobile app handling
-                    return_url: `http://192.168.1.10:5000/api/v1/payments/verify?order_id={order_id}`
+                    return_url: `/api/v1/payments/verify?order_id={order_id}`
                 }
             },
             {

@@ -1,38 +1,73 @@
-const express = require('express');
-const mongoose = require('mongoose');
-const cookieParser = require('cookie-parser');
-const cors = require('cors');
-require('dotenv').config();
-const path = require('path');
-const authRoutes = require('./routes/authRoutes');
-const walletRoutes = require('./routes/walletRoutes');
+const axios = require('axios');
+const Payment = require('../models/Payment');
+const Order = require('../models/Order');
 
-const app = express();
-app.use(express.json());
-app.use(cookieParser()); // Mukkiyam: Cookie handling-ku
-app.use(cors({ 
-  origin: true, 
-  credentials: true 
-})); // Cookie support-ku
+const CF_APP_ID = process.env.CF_APP_ID;
+const CF_SECRET = process.env.CF_SECRET;
+const CF_URL = process.env.CF_URL; // e.g., https://sandbox.cashfree.com/pg/orders
 
-const apiRoutes = require('./routes/apiRoutes');
-app.use('/api/v1', apiRoutes);
-app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')));
-app.use('/api/v1/catalog', require('./routes/catalogRoutes'));
-app.use('/api/v1/products', require('./routes/productRoutes'));
-app.use('/api/v1/auth', authRoutes);
-app.use('/api/v1/wallet', walletRoutes);
+exports.createSession = async (req, res) => {
+    try {
+        const { orderId, amount, customerId, customerPhone, customerName } = req.body;
 
-app.get("/", (req, res) => {
-  res.send("Backend is running 🚀");
-});
+        const response = await axios.post(CF_URL,
+            {
+                order_id: orderId,
+                order_amount: amount,
+                order_currency: "INR",
+                customer_details: {
+                    customer_id: customerId,
+                    customer_phone: customerPhone,
+                    customer_name: customerName
+                },
+                order_meta: {
+                    
+                    return_url: `http://54.157.210.26/api/v1/payments/verify?order_id={order_id}`
+                }
+            },
+            {
+                headers: {
+                    "x-client-id": CF_APP_ID,
+                    "x-client-secret": CF_SECRET,
+                    "x-api-version": "2023-08-01"
+                }
+            }
+        );
 
-console.log("MONGO_URI =", process.env.MONGO_URI);
+        res.json({
+            success: true,
+            payment_url: response.data.payment_link || response.data.order_pay_url
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.response?.data?.message || err.message });
+    }
+};
 
-mongoose.connect(process.env.MONGO_URI )
-  .then(() => console.log('✅ Zhopingo DB Connected'))
-  .catch(err => console.error(err));
+exports.verifyPayment = async (req, res) => {
+    try {
+        const orderId = req.query.order_id || req.body.orderId;
 
-app.listen(5000, '0.0.0.0', () => {
-  console.log('🚀 Server running on 0.0.0.0:5000');
-});
+        const response = await axios.get(`${CF_URL}/${orderId}`, {
+            headers: {
+                "x-client-id": CF_APP_ID,
+                "x-client-secret": CF_SECRET,
+                "x-api-version": "2023-08-01"
+            }
+        });
+
+        if (response.data.order_status === "PAID") {
+           
+            await Order.findByIdAndUpdate(orderId, { 
+                status: 'Placed', 
+                paymentStatus: 'Paid' 
+            });
+
+            
+            res.send("<h1>Payment Successful!</h1><p>You can close this window now.</p>");
+        } else {
+            res.status(400).send("<h1>Payment Failed</h1>");
+        }
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
