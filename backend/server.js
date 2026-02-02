@@ -24,16 +24,23 @@ app.use(cors({
 })); 
 
 const apiRoutes = require('./routes/apiRoutes');
-app.use('/api/v1', apiRoutes);
+// --- 🌟 STATIC FILES ---
 app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')));
+app.use('/uploads/kyc', express.static(path.join(__dirname, 'uploads/kyc')));
+
+// --- 🌟 ROUTES ---
+// Customer & Auth Routes
+app.use('/api/v1/auth', require('./routes/authRoutes'));
+app.use('/api/v1/wallet', require('./routes/walletRoutes'));
 app.use('/api/v1/catalog', require('./routes/catalogRoutes'));
 app.use('/api/v1/products', require('./routes/productRoutes'));
-app.use('/api/v1/auth', authRoutes);
-app.use('/api/v1/wallet', walletRoutes);
-app.use("/uploads", express.static("uploads"));
-app.use("/api/v1/seller", require("./routes/sellerRoutes"));
-app.use('/uploads', express.static('public/uploads'));
+app.use('/api/v1/orders', require('./routes/orderRoutes'));
+app.use('/api/v1/payments', require('./routes/paymentRoutes'));
+app.use('/api/v1/reels', require('./routes/reelRoutes'));
 
+// Seller & Admin Routes
+app.use('/api/v1/seller', require('./routes/sellerRoutes'));
+app.use('/api/v1/admin', require('./routes/adminRoutes'));
 
 app.get("/", (req, res) => {
   res.send("Backend is running 🚀");

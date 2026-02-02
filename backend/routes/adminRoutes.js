@@ -1,19 +1,20 @@
 const express = require('express');
 const router = express.Router();
-const DeliveryCharge = require('../models/DeliveryCharge');
+const { 
+  adminLogin, 
+  getAllSellers, 
+  verifySellerStatus, 
+  uploadDeliveryRates 
+} = require("../controllers/adminController"); // 🌟 adminLogin சேர்க்கப்பட்டது
 
-router.post('/bulk-upload-pincodes', async (req, res) => {
-    try {
-        const operations = req.body.map(item => ({
-            updateOne: {
-                filter: { pincode: item.pincode },
-                update: { $set: { charge: item.charge } },
-                upsert: true
-            }
-        }));
-        await DeliveryCharge.bulkWrite(operations);
-        res.json({ success: true, message: "Updated" });
-    } catch (err) { res.status(500).json({ error: err.message }); }
-});
+// அட்மின் லாகின்
+router.post("/login", adminLogin);
+
+// பின்கோடு அப்லோட்
+router.post('/bulk-upload-pincodes', uploadDeliveryRates);
+
+// செலர் மேலாண்மை
+router.get("/sellers", getAllSellers);
+router.post("/verify-seller", verifySellerStatus);
 
 module.exports = router;

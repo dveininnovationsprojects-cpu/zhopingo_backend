@@ -157,20 +157,8 @@ exports.addUserAddress = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
-/* -------- SELLER -------- */
-exports.registerSeller = async (req, res) => {
-  const seller = new Seller(req.body);
-  await seller.save();
-  res.json({ success: true, seller });
-};
 
-exports.loginSeller = async (req, res) => {
-  const seller = await Seller.findOne({ email: req.body.email });
-  if (!seller) return res.status(401).json({ success: false });
 
-  const token = jwt.sign({ id: seller._id, role: "seller" }, JWT_SECRET);
-  res.json({ success: true, token });
-};
 
 /* -------- LOGOUT -------- */
 exports.logout = async (req, res) => {
