@@ -28,6 +28,9 @@ app.use('/api/v1/catalog', require('./routes/catalogRoutes'));
 app.use('/api/v1/products', require('./routes/productRoutes'));
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/wallet', walletRoutes);
+app.use("/uploads", express.static("uploads"));
+app.use("/api/v1/seller", require("./routes/sellerRoutes"));
+
 
 app.get("/", (req, res) => {
   res.send("Backend is running 🚀");
