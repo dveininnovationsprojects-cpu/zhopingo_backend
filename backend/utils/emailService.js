@@ -11,7 +11,7 @@ const transporter = nodemailer.createTransport({
 exports.sendAdminNotification = async (sellerData) => {
   const mailOptions = {
     from: process.env.EMAIL_USER,
-    to: 'admin@zhopingo.com', // 🌟 இங்கே உங்கள் ஸ்டேட்டிக் அட்மின் மெயில் ஐடி கொடுக்கவும்
+    to: 'navinvms2065@gmail.com', // 🌟 இங்கே உங்கள் ஸ்டேட்டிக் அட்மின் மெயில் ஐடி கொடுக்கவும்
     subject: 'New Seller Registration Alert - Zhopingo',
     html: `
       <div style="font-family: sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
