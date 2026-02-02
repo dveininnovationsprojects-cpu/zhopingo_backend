@@ -1,6 +1,7 @@
 const axios = require('axios');
 const Payment = require('../models/Payment');
 const Order = require('../models/Order');
+const Wallet = require('../models/Wallet');
 
 const CF_APP_ID = process.env.CF_APP_ID;
 const CF_SECRET = process.env.CF_SECRET;
@@ -8,9 +9,41 @@ const CF_URL = process.env.CF_URL;
 
 exports.createSession = async (req, res) => {
     try {
-        const { orderId, amount, customerId, customerPhone, customerName } = req.body;
+        const { orderId, amount, customerId, customerPhone, customerName, paymentMethod } = req.body;
 
-        // 🌟 முக்கியமான மாற்றம்: முழுமையான URL தேவை (உங்கள் சர்வர் IP)
+       
+        if (paymentMethod === 'WALLET') {
+            const wallet = await Wallet.findOne({ userId: customerId });
+            
+            if (!wallet || wallet.balance < amount) {
+                return res.status(400).json({ success: false, error: "Insufficient Wallet Balance" });
+            }
+
+           
+            wallet.balance -= amount;
+            wallet.transactions.push({
+                amount,
+                type: 'Debit',
+                description: `Payment for Order: ${orderId}`
+            });
+            await wallet.save();
+
+           
+            await Order.findByIdAndUpdate(orderId, { status: 'Placed' });
+
+       
+            await Payment.create({
+                orderId,
+                userId: customerId,
+                amount,
+                method: 'WALLET',
+                status: 'Success'
+            });
+
+            return res.json({ success: true, message: "Paid via Wallet successfully" });
+        }
+
+      
         const serverURL = "http://54.157.210.26"; 
 
         const response = await axios.post(CF_URL,
@@ -24,7 +57,6 @@ exports.createSession = async (req, res) => {
                     customer_name: customerName
                 },
                 order_meta: {
-                    // 🌟 பிழை நீக்கப்பட்டது: முழுமையான URL செட் செய்யப்பட்டுள்ளது
                     return_url: `${serverURL}/api/v1/payments/verify?order_id={order_id}`
                 }
             },
@@ -47,7 +79,6 @@ exports.createSession = async (req, res) => {
         res.status(500).json({ success: false, error: err.response?.data?.message || err.message });
     }
 };
-
 exports.verifyPayment = async (req, res) => {
     try {
         const orderId = req.body.orderId || req.query.order_id;
