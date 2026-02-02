@@ -1,9 +1,15 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const sellerCtrl = require('../controllers/sellerController');
 
+const {
+  registerSeller,
+  loginSeller,
+  logoutSeller
+} = require("../controllers/sellerController");
 
-router.get('/stats/:sellerId', sellerCtrl.getDashboardStats); 
-router.get('/inventory/:sellerId', sellerCtrl.getInventory);
+/* Auth Routes */
+router.post("/register", registerSeller);
+router.post("/login", loginSeller);
+router.post("/logout", logoutSeller);
 
 module.exports = router;
