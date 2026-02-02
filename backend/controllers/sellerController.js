@@ -6,62 +6,118 @@ const JWT_SECRET = process.env.JWT_SECRET || "secret123";
 
 /* ================= REGISTER SELLER ================= */
 /* OTP verify mudincha apram details + password */
+// exports.registerSeller = async (req, res) => {
+//   try {
+//     const {
+//       name,
+//       phone,
+//       email,
+//       password,
+//       shopName,
+//       panNumber,
+//       gstNumber,
+//       fssaiNumber
+//     } = req.body;
+
+//     if (!name || !phone || !password) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Required fields missing"
+//       });
+//     }
+
+//     const existing = await Seller.findOne({ phone });
+//     if (existing) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Seller already exists"
+//       });
+//     }
+
+//     const hashedPassword = await bcrypt.hash(password, 10);
+
+//     const seller = await Seller.create({
+//       name,
+//       phone,
+//       email,
+//       password: hashedPassword,
+//       shopName,
+//       panNumber,
+//       gstNumber,
+//       fssaiNumber,
+//       kycStatus: "not_submitted",
+//       isVerified: false
+//     });
+
+//     res.status(201).json({
+//       success: true,
+//       message: "Seller registered successfully",
+//       sellerId: seller._id
+//     });
+//     await sendAdminNotification(seller);
+
+//   } catch (err) {
+//     res.status(500).json({
+//       success: false,
+//       error: err.message
+//     });
+//   }
+// };
+
+
+
+/* ================= REGISTER SELLER ================= */
 exports.registerSeller = async (req, res) => {
   try {
-    const {
-      name,
-      phone,
-      email,
-      password,
-      shopName,
-      panNumber,
-      gstNumber,
-      fssaiNumber
-    } = req.body;
+    const { name, phone, email, password, shopName, panNumber, gstNumber, fssaiNumber } = req.body;
 
+   
     if (!name || !phone || !password) {
-      return res.status(400).json({
-        success: false,
-        message: "Required fields missing"
-      });
+      return res.status(400).json({ success: false, message: "Required fields missing" });
     }
-
+    
     const existing = await Seller.findOne({ phone });
     if (existing) {
-      return res.status(400).json({
-        success: false,
-        message: "Seller already exists"
-      });
+      return res.status(400).json({ success: false, message: "Seller already exists" });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
+    
     const seller = await Seller.create({
-      name,
-      phone,
-      email,
+      name, phone, email,
       password: hashedPassword,
-      shopName,
-      panNumber,
-      gstNumber,
-      fssaiNumber,
+      shopName, panNumber, gstNumber, fssaiNumber,
       kycStatus: "not_submitted",
       isVerified: false
     });
 
-    res.status(201).json({
+  
+    try {
+      if (typeof sendAdminNotification === 'function') {
+        await sendAdminNotification(seller);
+      }
+    } catch (mailErr) {
+      console.error("Admin Notification Mail Failed:", mailErr.message);
+      
+    }
+
+   
+    return res.status(201).json({
       success: true,
       message: "Seller registered successfully",
       sellerId: seller._id
     });
 
   } catch (err) {
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: err.message
     });
   }
 };
+
+
 
 /* ================= UPLOAD KYC DOCUMENTS ================= */
 /* Files only – PAN / GST / FSSAI / MSME */
