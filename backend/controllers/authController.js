@@ -130,9 +130,13 @@ exports.loginWithOTP = async (req, res) => {
 };
 
 
+/* -------- ADDRESS -------- */
 exports.addUserAddress = async (req, res) => {
   try {
-    const user = await User.findById(req.params.userId);
+    
+    const userId = req.user ? req.user.id : req.params.userId;
+    
+    const user = await User.findById(userId);
     if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
     
@@ -141,14 +145,13 @@ exports.addUserAddress = async (req, res) => {
 
     res.json({ 
       success: true, 
-      message: "Address saved!", 
+      message: "Address saved successfully",
       addressBook: user.addressBook 
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 };
-
 /* -------- SELLER -------- */
 exports.registerSeller = async (req, res) => {
   const seller = new Seller(req.body);
