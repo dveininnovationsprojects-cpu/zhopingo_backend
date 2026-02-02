@@ -32,6 +32,7 @@ app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/wallet', walletRoutes);
 app.use("/uploads", express.static("uploads"));
 app.use("/api/v1/seller", require("./routes/sellerRoutes"));
+app.use('/uploads', express.static('public/uploads'));
 
 
 app.get("/", (req, res) => {

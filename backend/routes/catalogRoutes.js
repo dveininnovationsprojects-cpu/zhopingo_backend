@@ -1,31 +1,58 @@
-// routes/catalogRoutes.js
 const express = require('express');
 const router = express.Router();
 const Category = require('../models/Category');
 const SubCategory = require('../models/SubCategory');
+const upload = require('../middleware/multerConfig'); 
 
-// Category Routes
-router.post('/categories', async (req, res) => {
-    const cat = new Category(req.body);
-    await cat.save();
-    res.status(201).json(cat);
+
+router.post('/categories', upload.single('image'), async (req, res) => {
+    try {
+        const { name, description } = req.body;
+        const imagePath = req.file ? `/uploads/${req.file.filename}` : null;
+
+        if (!imagePath) return res.status(400).json({ error: "Image file is required" });
+
+        const cat = new Category({ name, description, image: imagePath });
+        await cat.save();
+        res.status(201).json({ success: true, data: cat });
+    } catch (error) {
+        res.status(400).json({ error: error.message });
+    }
 });
+
 
 router.get('/categories', async (req, res) => {
-    const cats = await Category.find({ isActive: true });
-    res.json({ success: true, data: cats });
+    try {
+        const cats = await Category.find({ isActive: true });
+        res.json({ success: true, data: cats });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
 });
 
-// Sub-Category Routes
-router.post('/sub-categories', async (req, res) => {
-    const sub = new SubCategory(req.body);
-    await sub.save();
-    res.status(201).json(sub);
+
+router.post('/sub-categories', upload.single('image'), async (req, res) => {
+    try {
+        const { name, category, description, hsnCode } = req.body;
+        const imagePath = req.file ? `/uploads/${req.file.filename}` : null;
+
+        const sub = new SubCategory({ name, category, description, hsnCode, image: imagePath });
+        await sub.save();
+        res.status(201).json({ success: true, data: sub });
+    } catch (error) {
+        res.status(400).json({ error: error.message });
+    }
 });
+
 
 router.get('/sub-categories/:catId', async (req, res) => {
-    const subs = await SubCategory.find({ category: req.params.catId });
-    res.json({ success: true, data: subs });
+    try {
+       
+        const subs = await SubCategory.find({ category: req.params.catId }).populate('category');
+        res.json({ success: true, data: subs });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
 });
 
-module.exports = router;
+module.exports = router; 
