@@ -129,18 +129,23 @@ exports.loginWithOTP = async (req, res) => {
   }
 };
 
-
-/* -------- ADDRESS -------- */
 exports.addUserAddress = async (req, res) => {
   try {
-    
-    const userId = req.user ? req.user.id : req.params.userId;
+   
+    const userId = req.user.id; 
     
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-    
-    user.addressBook.push(req.body);
+  
+    const newAddress = {
+      label: req.body.addressType || "Home",
+      addressLine: req.body.flatNo,
+      pincode: req.body.pincode,
+      isDefault: false
+    };
+
+    user.addressBook.push(newAddress);
     await user.save();
 
     res.json({ 
