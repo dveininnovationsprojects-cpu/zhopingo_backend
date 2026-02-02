@@ -10,6 +10,9 @@ exports.createSession = async (req, res) => {
     try {
         const { orderId, amount, customerId, customerPhone, customerName } = req.body;
 
+        // 🌟 முக்கியமான மாற்றம்: முழுமையான URL தேவை (உங்கள் சர்வர் IP)
+        const serverURL = "http://54.157.210.26"; 
+
         const response = await axios.post(CF_URL,
             {
                 order_id: orderId,
@@ -21,8 +24,8 @@ exports.createSession = async (req, res) => {
                     customer_name: customerName
                 },
                 order_meta: {
-                    // Updated return URL for production/mobile app handling
-                    return_url: `/api/v1/payments/verify?order_id={order_id}`
+                    // 🌟 பிழை நீக்கப்பட்டது: முழுமையான URL செட் செய்யப்பட்டுள்ளது
+                    return_url: `${serverURL}/api/v1/payments/verify?order_id={order_id}`
                 }
             },
             {
@@ -37,7 +40,7 @@ exports.createSession = async (req, res) => {
         res.json({
             success: true,
             order_id: response.data.order_id,
-            payment_session_id: response.data.payment_session_id, // Needed for SDK
+            payment_session_id: response.data.payment_session_id,
             payment_url: response.data.payment_link || response.data.order_pay_url
         });
     } catch (err) {
