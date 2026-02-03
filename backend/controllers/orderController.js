@@ -3,15 +3,18 @@ const User = require('../models/User');
 const DeliveryCharge = require('../models/DeliveryCharge');
 const Payout = require('../models/Payout');
 const Seller = require("../models/Seller");
-
 exports.createOrder = async (req, res) => {
     try {
         const { items, customerId, shippingAddress, paymentMethod } = req.body;
 
-        if (!shippingAddress?.pincode) {
-            return res.status(400).json({ success: false, message: "Pincode is required for delivery calculation." });
+        // 🌟 SAFETY CHECK: Ensure items exist
+        if (!items || items.length === 0) {
+            return res.status(400).json({ success: false, message: "No items in cart." });
         }
 
+        if (!shippingAddress?.pincode) {
+            return res.status(400).json({ success: false, message: "Pincode is required." });
+        }
 
         const deliveryConfig = await DeliveryCharge.findOne({ pincode: shippingAddress.pincode });
         let baseDeliveryCharge = deliveryConfig ? deliveryConfig.charge : 50; 
@@ -20,8 +23,12 @@ exports.createOrder = async (req, res) => {
         let finalDeliveryCharge = 0;
         let sellerWiseSplit = {};
 
-    
         for (let item of items) {
+            // 🌟 FIX: Safety check for sellerId
+            if (!item.sellerId) {
+                return res.status(400).json({ success: false, message: `Product ${item.name} is missing seller info.` });
+            }
+
             const sellerId = item.sellerId.toString();
             
             if (!sellerWiseSplit[sellerId]) {
@@ -35,7 +42,6 @@ exports.createOrder = async (req, res) => {
                 };
             }
 
-            
             if (item.isFreeDeliveryBySeller) {
                 sellerWiseSplit[sellerId].deliveryChargeApplied = 0;
             }
@@ -45,26 +51,22 @@ exports.createOrder = async (req, res) => {
             totalProductAmount += (item.price * item.quantity);
         }
 
-       
         Object.values(sellerWiseSplit).forEach(split => {
             finalDeliveryCharge += split.deliveryChargeApplied;
         });
 
         let finalOrderAmount = totalProductAmount + finalDeliveryCharge;
 
+        // 🌟 WALLET CHECK
         if (paymentMethod === 'WALLET') {
             const user = await User.findById(customerId);
             if (!user || user.walletBalance < finalOrderAmount) {
                 return res.status(400).json({ success: false, message: "Insufficient Wallet Balance" });
             }
-            user.walletBalance -= finalOrderAmount;
-            user.walletTransactions.unshift({ 
-                amount: finalOrderAmount, type: 'DEBIT', reason: `Payment for Order`, date: new Date() 
-            });
-            await user.save();
+            // Note: Wallet deduction is usually handled in the Payment Session 
+            // to avoid "Double Charging" if createOrder succeeds but payment fails.
         }
 
-       
         const newOrder = new Order({
             customerId, 
             items, 
@@ -73,19 +75,17 @@ exports.createOrder = async (req, res) => {
             deliveryChargeApplied: finalDeliveryCharge,
             paymentMethod, 
             shippingAddress, 
-            status: (paymentMethod === 'ONLINE' || paymentMethod === 'WALLET') ? 'Placed' : 'Pending' 
+            status: 'Pending' // Always start as Pending until Payment is confirmed
         });
 
         await newOrder.save();
-
-        
         res.status(201).json({ success: true, order: newOrder });
 
     } catch (err) { 
+        console.error("Order Creation Error:", err); //  Log this to your terminal!
         res.status(500).json({ success: false, error: err.message }); 
     }
 };
-
 
 exports.updateOrderStatus = async (req, res) => {
     try {
