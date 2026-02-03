@@ -2,43 +2,43 @@ const DeliveryCharge = require('../models/DeliveryCharge');
 const Seller = require("../models/Seller");
 const User = require("../models/User");
 const jwt = require("jsonwebtoken");
-const bcrypt = require("bcryptjs"); // 🌟 பிழை சரி செய்யப்பட்டது
 
 const JWT_SECRET = process.env.JWT_SECRET || "secret123";
 
+// 🌟 அட்மின் லாகின் - நிலையான விவரங்கள் (Fixed Credentials)
 exports.adminLogin = async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // 1. மின்னஞ்சல் மூலம் அட்மினைத் தேடுதல்
-    const admin = await User.findOne({ email, role: "admin" });
-    if (!admin) {
-      return res.status(401).json({ success: false, message: "Admin not found or access denied" });
+    // நிலையான அட்மின் விவரங்களைச் சரிபார்த்தல்
+    const DEFAULT_ADMIN_EMAIL = "admin@gmail.com";
+    const DEFAULT_ADMIN_PASS = "admin@123";
+
+    if (email === DEFAULT_ADMIN_EMAIL && password === DEFAULT_ADMIN_PASS) {
+      // டோக்கன் உருவாக்குதல்
+      const token = jwt.sign(
+        { id: "static_admin_id", role: "admin" },
+        JWT_SECRET,
+        { expiresIn: "7d" }
+      );
+
+      return res.json({
+        success: true,
+        token,
+        user: { email: DEFAULT_ADMIN_EMAIL, role: "admin" }
+      });
+    } else {
+      return res.status(401).json({ 
+        success: false, 
+        message: "Invalid Admin Credentials" 
+      });
     }
-
-    // 2. பாஸ்வேர்டு சரிபார்த்தல் (bcrypt பயன்படுத்தி)
-    const isMatch = await bcrypt.compare(password, admin.password);
-    if (!isMatch) {
-      return res.status(401).json({ success: false, message: "Invalid credentials" });
-    }
-
-    // 3. டோக்கன் உருவாக்குதல்
-    const token = jwt.sign(
-      { id: admin._id, role: "admin" },
-      JWT_SECRET,
-      { expiresIn: "7d" }
-    );
-
-    res.json({
-      success: true,
-      token,
-      user: { id: admin._id, email: admin.email, role: "admin" }
-    });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 };
 
+// டெலிவரி கட்டணங்களைப் பதிவேற்றுதல்
 exports.uploadDeliveryRates = async (req, res) => {
   try {
     const ratesArray = req.body; 
@@ -54,13 +54,10 @@ exports.uploadDeliveryRates = async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 };
 
-
-
+// அனைத்து செல்லர்களையும் பெறுதல்
 exports.getAllSellers = async (req, res) => {
   try {
-    
     const sellers = await Seller.find().sort({ createdAt: -1 });
-    
     res.json({ 
       success: true, 
       count: sellers.length,
@@ -71,16 +68,14 @@ exports.getAllSellers = async (req, res) => {
   }
 };
 
-
+// செல்லர் KYC நிலையைச் சரிபார்த்தல் (Approved/Rejected)
 exports.verifySellerStatus = async (req, res) => {
   try {
     const { sellerId, status, reason } = req.body; 
 
-    
     const seller = await Seller.findById(sellerId);
     if (!seller) return res.status(404).json({ message: "Seller not found" });
 
-   
     seller.kycStatus = status; // "approved" or "rejected"
     seller.isVerified = (status === "approved");
     

@@ -2,31 +2,56 @@ const Order = require('../models/Order');
 const User = require('../models/User');
 const DeliveryCharge = require('../models/DeliveryCharge');
 const Payout = require('../models/Payout');
-
+const Seller = require("../models/Seller");
 
 exports.createOrder = async (req, res) => {
     try {
         const { items, customerId, shippingAddress, paymentMethod } = req.body;
 
         if (!shippingAddress?.pincode) {
-            return res.status(400).json({ success: false, message: "Pincode is required." });
+            return res.status(400).json({ success: false, message: "Pincode is required for delivery calculation." });
         }
+
 
         const deliveryConfig = await DeliveryCharge.findOne({ pincode: shippingAddress.pincode });
         let baseDeliveryCharge = deliveryConfig ? deliveryConfig.charge : 50; 
 
         let totalProductAmount = 0;
-        let sellerFreeDeliveryApplied = false;
+        let finalDeliveryCharge = 0;
+        let sellerWiseSplit = {};
 
-        items.forEach(item => {
+    
+        for (let item of items) {
+            const sellerId = item.sellerId.toString();
+            
+            if (!sellerWiseSplit[sellerId]) {
+                const seller = await Seller.findById(sellerId);
+                sellerWiseSplit[sellerId] = {
+                    sellerId: sellerId,
+                    shopName: seller?.shopName || "Unknown Seller",
+                    items: [],
+                    sellerSubtotal: 0,
+                    deliveryChargeApplied: baseDeliveryCharge 
+                };
+            }
+
+            
+            if (item.isFreeDeliveryBySeller) {
+                sellerWiseSplit[sellerId].deliveryChargeApplied = 0;
+            }
+
+            sellerWiseSplit[sellerId].items.push(item);
+            sellerWiseSplit[sellerId].sellerSubtotal += (item.price * item.quantity);
             totalProductAmount += (item.price * item.quantity);
-            if (item.isFreeDeliveryBySeller) sellerFreeDeliveryApplied = true;
-        });
-
-        let customerDeliveryCharge = sellerFreeDeliveryApplied ? 0 : baseDeliveryCharge;
-        let finalOrderAmount = totalProductAmount + customerDeliveryCharge;
+        }
 
        
+        Object.values(sellerWiseSplit).forEach(split => {
+            finalDeliveryCharge += split.deliveryChargeApplied;
+        });
+
+        let finalOrderAmount = totalProductAmount + finalDeliveryCharge;
+
         if (paymentMethod === 'WALLET') {
             const user = await User.findById(customerId);
             if (!user || user.walletBalance < finalOrderAmount) {
@@ -39,18 +64,21 @@ exports.createOrder = async (req, res) => {
             await user.save();
         }
 
-        
+       
         const newOrder = new Order({
             customerId, 
             items, 
+            sellerSplitData: Object.values(sellerWiseSplit), 
             totalAmount: finalOrderAmount, 
-            deliveryChargeApplied: customerDeliveryCharge,
+            deliveryChargeApplied: finalDeliveryCharge,
             paymentMethod, 
             shippingAddress, 
-            status: paymentMethod === 'ONLINE' ? 'Pending' : 'Placed' 
+            status: (paymentMethod === 'ONLINE' || paymentMethod === 'WALLET') ? 'Placed' : 'Pending' 
         });
 
         await newOrder.save();
+
+        
         res.status(201).json({ success: true, order: newOrder });
 
     } catch (err) { 
@@ -58,7 +86,7 @@ exports.createOrder = async (req, res) => {
     }
 };
 
-// 2. UPDATE STATUS & PAYOUT
+
 exports.updateOrderStatus = async (req, res) => {
     try {
         const { status } = req.body;
@@ -68,18 +96,18 @@ exports.updateOrderStatus = async (req, res) => {
 
         if (status === 'Delivered') {
             let adminCommPercent = 10; 
-            for (let item of order.items) {
-                let itemTotal = item.price * item.quantity;
-                let commission = (itemTotal * adminCommPercent) / 100;
-                let deliveryDeduction = item.isFreeDeliveryBySeller ? order.deliveryChargeApplied : 0;
-                let finalSellerPay = itemTotal - commission - deliveryDeduction;
+            
+            
+            for (let split of order.sellerSplitData) {
+                let commission = (split.sellerSubtotal * adminCommPercent) / 100;
+                let finalSellerPay = split.sellerSubtotal - commission;
 
                 await Payout.create({
                     orderId: order._id, 
-                    sellerId: item.sellerId, 
-                    totalOrderAmount: itemTotal,
+                    sellerId: split.sellerId, 
+                    totalOrderAmount: split.sellerSubtotal,
                     adminCommission: commission, 
-                    deliveryCharges: deliveryDeduction,
+                    deliveryCharges: split.deliveryChargeApplied,
                     sellerSettlementAmount: finalSellerPay,
                     status: 'Pending'
                 });
@@ -91,7 +119,7 @@ exports.updateOrderStatus = async (req, res) => {
     }
 };
 
-// 3. CANCEL ORDER & REFUND
+// 3. CANCEL ORDER & REFUND (Wallet-க்கு ரீஃபண்ட் செய்தல்)
 exports.cancelOrder = async (req, res) => {
     try {
         const order = await Order.findById(req.params.orderId);
@@ -116,22 +144,33 @@ exports.cancelOrder = async (req, res) => {
     }
 };
 
-// 4. ADMIN: GET ALL ORDERS
+// 4. ADMIN & USER APIs
 exports.getOrders = async (req, res) => {
     try {
         const orders = await Order.find().populate('customerId', 'name phone').sort({ createdAt: -1 });
         res.json({ success: true, data: orders });
-    } catch (err) { 
-        res.status(500).json({ success: false, error: err.message }); 
-    }
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
-// 5. USER: GET MY ORDERS
 exports.getMyOrders = async (req, res) => {
     try {
         const orders = await Order.find({ customerId: req.params.userId }).sort({ createdAt: -1 });
         res.json({ success: true, data: orders });
-    } catch (err) { 
-        res.status(500).json({ success: false, error: err.message }); 
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+};
+
+
+exports.getSellerOrders = async (req, res) => {
+    try {
+        const { sellerId } = req.params;
+      
+        const orders = await Order.find({ 
+            "sellerSplitData.sellerId": sellerId,
+            status: { $ne: 'Pending' }
+        }).sort({ createdAt: -1 });
+
+        res.json({ success: true, data: orders });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
     }
 };

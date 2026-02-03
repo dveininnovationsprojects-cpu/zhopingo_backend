@@ -1,16 +1,14 @@
 const express = require('express');
 const router = express.Router();
 const walletController = require('../controllers/walletController');
+const { protect } = require('../middleware/authMiddleware');
 
 
-router.post('/admin-update', walletController.adminUpdateWallet);
+router.get('/status/:userId', protect, walletController.getWalletStatus);
+router.post('/create-topup', protect, walletController.createWalletTopupSession);
+router.get('/verify-topup', walletController.verifyWalletTopup); // Cashfree Return URL
 
 
-router.post('/refund', walletController.refundToWallet);
-
-
-router.get('/status/:userId', walletController.getWalletStatus);
-router.post('/create-topup', walletController.createWalletTopupSession);
-router.get('/verify-topup', walletController.verifyWalletTopup);
+router.post('/admin-update', protect, walletController.adminUpdateWallet);
 
 module.exports = router;

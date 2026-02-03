@@ -1,21 +1,12 @@
 const express = require("express");
 const router = express.Router();
+const upload = require("../middleware/upload"); 
+const sellerCtrl = require("../controllers/sellerController");
 
-const upload = require("../middleware/upload");
-const {
-  registerSeller,
-  uploadKyc,
-  loginSeller,
-  logoutSeller
-} = require("../controllers/sellerController");
 
-/* -------- REGISTER (DETAILS + PASSWORD) -------- */
-router.post("/register", registerSeller);
+router.post("/register", sellerCtrl.registerSeller);
+router.post("/login", sellerCtrl.loginSeller);
 
-/* -------- LOGIN -------- */
-router.post("/login", loginSeller);
-
-/* -------- KYC UPLOAD (FILES ONLY) -------- */
 router.post(
   "/kyc",
   upload.fields([
@@ -24,10 +15,10 @@ router.post(
     { name: "fssai_doc", maxCount: 1 },
     { name: "msme_doc", maxCount: 1 }
   ]),
-  uploadKyc
+  sellerCtrl.uploadKyc
 );
 
-/* -------- LOGOUT -------- */
-router.post("/logout", logoutSeller);
 
+router.get("/dashboard/:id", sellerCtrl.getSellerDashboard);
+ 
 module.exports = router;

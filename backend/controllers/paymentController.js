@@ -1,7 +1,7 @@
 const axios = require('axios');
 const Payment = require('../models/Payment');
 const Order = require('../models/Order');
-const Wallet = require('../models/Wallet');
+const User = require('../models/User');
 
 const CF_APP_ID = process.env.CF_APP_ID;
 const CF_SECRET = process.env.CF_SECRET;
@@ -11,40 +11,37 @@ exports.createSession = async (req, res) => {
     try {
         const { orderId, amount, customerId, customerPhone, customerName, paymentMethod } = req.body;
 
-       
+        // --- 🌟 WALLET PAYMENT LOGIC ---
         if (paymentMethod === 'WALLET') {
-            const wallet = await Wallet.findOne({ userId: customerId });
-            
-            if (!wallet || wallet.balance < amount) {
+            const user = await User.findById(customerId);
+            if (!user || user.walletBalance < amount) {
                 return res.status(400).json({ success: false, error: "Insufficient Wallet Balance" });
             }
 
-           
-            wallet.balance -= amount;
-            wallet.transactions.push({
+            user.walletBalance -= amount;
+            user.walletTransactions.unshift({
                 amount,
-                type: 'Debit',
-                description: `Payment for Order: ${orderId}`
+                type: 'DEBIT',
+                reason: `Payment for Order: ${orderId}`,
+                date: new Date()
             });
-            await wallet.save();
+            await user.save();
 
-           
-            await Order.findByIdAndUpdate(orderId, { status: 'Placed' });
-
-       
+            const order = await Order.findByIdAndUpdate(orderId, { status: 'Placed' }, { new: true });
             await Payment.create({
                 orderId,
-                userId: customerId,
+                transactionId: `WAL-${Date.now()}`,
                 amount,
-                method: 'WALLET',
                 status: 'Success'
             });
 
-            return res.json({ success: true, message: "Paid via Wallet successfully" });
+            return res.json({ success: true, message: "Paid via Wallet successfully", order });
         }
 
-      
+        // --- 🌟 CASHFREE ONLINE PAYMENT LOGIC ---
+        // பேஸ் யூஆர்எல் பயன்படுத்தி ரிட்டர்ன் யூஆர்எல் அமைத்தல்
         const serverURL = "http://54.157.210.26"; 
+        const returnURL = `${serverURL}/api/v1/payments/verify?order_id={order_id}`;
 
         const response = await axios.post(CF_URL,
             {
@@ -57,7 +54,7 @@ exports.createSession = async (req, res) => {
                     customer_name: customerName
                 },
                 order_meta: {
-                    return_url: `${serverURL}/api/v1/payments/verify?order_id={order_id}`
+                    return_url: returnURL 
                 }
             },
             {
@@ -75,13 +72,15 @@ exports.createSession = async (req, res) => {
             payment_session_id: response.data.payment_session_id,
             payment_url: response.data.payment_link || response.data.order_pay_url
         });
+
     } catch (err) {
         res.status(500).json({ success: false, error: err.response?.data?.message || err.message });
     }
 };
+
 exports.verifyPayment = async (req, res) => {
     try {
-        const orderId = req.body.orderId || req.query.order_id;
+        const orderId = req.query.order_id || req.body.orderId;
 
         const response = await axios.get(`${CF_URL}/${orderId}`, {
             headers: {
@@ -92,24 +91,43 @@ exports.verifyPayment = async (req, res) => {
         });
 
         if (response.data.order_status === "PAID") {
-            // 1. Update Payment Record
             await Payment.findOneAndUpdate(
                 { orderId },
-                { status: "Success", transactionId: response.data.order_id, rawResponse: response.data },
+                { 
+                    status: "Success", 
+                    transactionId: response.data.cf_order_id, 
+                    amount: response.data.order_amount,
+                    rawResponse: response.data 
+                },
                 { upsert: true }
             );
 
-            // 2. IMPORTANT: Update the Order Status to 'Placed'
-            const updatedOrder = await Order.findOneAndUpdate(
-                { _id: orderId },
+            const updatedOrder = await Order.findByIdAndUpdate(
+                orderId,
                 { status: 'Placed' },
                 { new: true }
             );
 
-            return res.json({ success: true, message: "Payment Verified & Order Placed", order: updatedOrder });
+            
+            res.send(`
+                <html>
+                    <body style="display:flex; justify-content:center; align-items:center; height:100vh; font-family:sans-serif;">
+                        <div style="text-align:center;">
+                            <h2 style="color:#0c831f;">Payment Successful! ✅</h2>
+                            <p>Order ID: ${orderId}</p>
+                            <p>Redirecting back to Zhopingo...</p>
+                            <script>
+                                setTimeout(function() {
+                                    window.location.href = "zhopingo://payment-success?order_id=${orderId}";
+                                }, 2000);
+                            </script>
+                        </div>
+                    </body>
+                </html>
+            `);
+        } else {
+            res.status(400).send("Payment failed or pending at Cashfree.");
         }
-
-        res.status(400).json({ success: false, message: "Payment failed or pending at Cashfree" });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }

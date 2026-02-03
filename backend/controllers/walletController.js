@@ -1,18 +1,22 @@
 const User = require('../models/User');
 const axios = require('axios');
 
-// Environment Variables
+// Cashfree Credentials from .env
 const CF_APP_ID = process.env.CF_APP_ID;
 const CF_SECRET = process.env.CF_SECRET;
 const CF_URL = process.env.CF_URL;
 
-// 🌟 1. CASHFREE TOP-UP SESSION 
+// 🌟 1. CREATE WALLET TOP-UP SESSION (Cashfree வழியாக பணம் ஏற்ற)
 exports.createWalletTopupSession = async (req, res) => {
     try {
         const { userId, amount, customerPhone, customerName } = req.body;
         
-       
+        // தனித்துவமான டாப்-அப் ஐடி (TOPUP_USERID_TIMESTAMP)
         const topupId = `TOPUP_${userId}_${Date.now()}`;
+
+        // 🌟 உங்கள் சர்வர் ஐபி (Port 80 - No need 5000 in URL)
+        const serverURL = "http://54.157.210.26"; 
+        const returnURL = `${serverURL}/api/v1/wallet/verify-topup?topup_id={order_id}`;
 
         const response = await axios.post(CF_URL,
             {
@@ -25,8 +29,7 @@ exports.createWalletTopupSession = async (req, res) => {
                     customer_name: customerName || "Zhopingo User"
                 },
                 order_meta: {
-                    
-                    return_url: `http://54.157.210.26/api/v1/wallet/verify-topup?topup_id={order_id}`
+                    return_url: returnURL
                 }
             },
             {
@@ -40,6 +43,7 @@ exports.createWalletTopupSession = async (req, res) => {
 
         res.json({
             success: true,
+            order_id: topupId,
             payment_url: response.data.payment_link || response.data.order_pay_url
         });
     } catch (err) {
@@ -47,12 +51,13 @@ exports.createWalletTopupSession = async (req, res) => {
     }
 };
 
-//  2. VERIFY CASHFREE TOP-UP (பேமெண்டை சரிபார்த்து வாலட்டில் ஏற்ற)
+// 🌟 2. VERIFY TOP-UP (பணத்தை உறுதி செய்து வாலட்டில் ஏற்ற)
 exports.verifyWalletTopup = async (req, res) => {
     try {
         const topupId = req.query.topup_id;
         if (!topupId) return res.status(400).send("Invalid Topup ID");
 
+        // ஐடியில் இருந்து யூசர் ஐடியைப் பிரித்தெடுத்தல்
         const userId = topupId.split('_')[1];
 
         const response = await axios.get(`${CF_URL}/${topupId}`, {
@@ -64,86 +69,80 @@ exports.verifyWalletTopup = async (req, res) => {
         });
 
         if (response.data.order_status === "PAID") {
-            const amount = response.data.order_amount;
+            const amount = Number(response.data.order_amount);
             const user = await User.findById(userId);
             
             if (!user) return res.status(404).send("User not found");
 
-            
-            user.walletBalance += Number(amount);
+            // வாலட் பேலன்ஸ் அப்டேட்
+            user.walletBalance += amount;
             user.walletTransactions.unshift({
-                amount: Number(amount),
+                amount: amount,
                 type: 'CREDIT',
-                reason: 'Online Top-up (Cashfree)',
+                reason: 'Wallet Recharge (Cashfree)',
                 date: new Date()
             });
 
             await user.save();
+
+            // 🌟 மொபைல் ஆப்பிற்குத் திரும்பும் வசதியுடன் கூடிய HTML
             res.send(`
                 <div style="text-align:center; padding:50px; font-family:sans-serif;">
-                    <h1 style="color:#0c831f;">Payment Successful! 🎉</h1>
-                    <p>₹${amount} has been added to your Zhopingo Wallet.</p>
-                    <p>You can close this window now.</p>
+                    <h1 style="color:#0c831f;">Payment Successful! ✅</h1>
+                    <p style="font-size:18px;">₹${amount} added to your Zhopingo Wallet.</p>
+                    <script>
+                        setTimeout(function() {
+                            window.location.href = "zhopingo://wallet-success";
+                        }, 2000);
+                    </script>
                 </div>
             `);
         } else {
-            res.status(400).send("<h1>Payment Failed or Pending</h1>");
+            res.status(400).send("<h1>Payment Pending or Failed at Gateway</h1>");
         }
     } catch (err) {
-        res.status(500).send("Server Error during verification");
+        res.status(500).send("Verification Error");
     }
 };
 
-//  3. ADMIN MANUAL UPDATE (நீங்கள் கொடுத்த அதே பழைய லாஜிக்)
-exports.adminUpdateWallet = async (req, res) => {
-    const { userId, amount, reason, type } = req.body; 
+// 🌟 3. GET WALLET STATUS (பேலன்ஸ் மற்றும் டிரான்ஸாக்ஷன்கள்)
+exports.getWalletStatus = async (req, res) => {
     try {
-        const user = await User.findById(userId);
-        if (!user) return res.status(404).json({ error: "User not found" });
+        const user = await User.findById(req.params.userId).select('walletBalance walletTransactions');
+        if (!user) return res.status(404).json({ success: false, message: "User not found" });
+        
+        res.json({
+            success: true,
+            balance: user.walletBalance || 0,
+            transactions: user.walletTransactions || []
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
 
-        const numAmount = Number(amount);
+// 🌟 4. ADMIN MANUAL UPDATE (அட்மின் பணத்தை கூட்டவோ குறைக்கவோ)
+exports.adminUpdateWallet = async (req, res) => {
+    try {
+        const { userId, amount, reason, type } = req.body; // type: 'CREDIT' or 'DEBIT'
+        const user = await User.findById(userId);
+        
+        if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
         if (type === 'CREDIT') {
-            user.walletBalance += numAmount;
+            user.walletBalance += Number(amount);
         } else {
-            if (user.walletBalance < numAmount) return res.status(400).json({ error: "Insufficient balance" });
-            user.walletBalance -= numAmount;
+            if (user.walletBalance < amount) return res.status(400).json({ error: "Insufficient balance" });
+            user.walletBalance -= Number(amount);
         }
 
         user.walletTransactions.unshift({ 
-            amount: numAmount, type, reason: reason || "Manual Update", date: new Date() 
+            amount: Number(amount), type, reason: reason || "Admin Adjustment", date: new Date() 
         });
 
         await user.save();
-        res.json({ success: true, newBalance: user.walletBalance, transactions: user.walletTransactions });
-    } catch (err) { res.status(500).json({ error: "Wallet update failed" }); }
-};
-
-//  4. REFUND TO WALLET
-exports.refundToWallet = async (req, res) => {
-    const { userId, orderId, refundAmount } = req.body;
-    try {
-        const user = await User.findById(userId);
-        if (!user) return res.status(404).json({ error: "User not found" });
-        user.walletBalance += Number(refundAmount);
-        user.walletTransactions.unshift({ 
-            amount: refundAmount, type: 'CREDIT', reason: `Refund for Order: ${orderId}`, date: new Date() 
-        });
-        await user.save();
-        res.json({ success: true, message: "Refund credited", balance: user.walletBalance });
-    } catch (err) { res.status(500).json({ error: "Refund failed" }); }
-};
-
-//  5. GET WALLET STATUS (
-exports.getWalletStatus = async (req, res) => {
-  try {
-    const user = await User.findById(req.params.userId).select('walletBalance walletTransactions');
-    if (!user) return res.status(404).json({ message: "User not found" });
-    
-    res.json({
-      balance: user.walletBalance || 0,
-      transactions: user.walletTransactions || []
-    });
-  } catch (err) {
-    res.status(500).json({ message: "Server Error", error: err.message });
-  }
+        res.json({ success: true, balance: user.walletBalance });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
 };
