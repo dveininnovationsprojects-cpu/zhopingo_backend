@@ -5,13 +5,23 @@ const SubCategory = require('../models/SubCategory');
 // 🌟 1. CREATE PRODUCT (With Inheritance & Media)
 exports.createProduct = async (req, res) => {
     try {
-        // 🌟 CHANGE: Use req.body.seller if req.user.id is missing (for Postman testing)
+        // 🌟 லாகின் செய்யாமல் டெஸ்ட் செய்யும்போது செல்லர் ஐடியை பாடியில் இருந்து எடுக்கும் வசதி
         const sellerId = req.user?.id || req.body.seller; 
         const seller = await Seller.findById(sellerId);
         if (!seller) return res.status(404).json({ success: false, message: "Seller not found" });
 
         const subCat = await SubCategory.findById(req.body.subCategory);
         if (!subCat) return res.status(400).json({ success: false, message: "Invalid SubCategory" });
+
+        // 🌟 செக்: சப்-கேட்டகரியில் gstRate அல்லது gstPercentage எது இருந்தாலும் அதை எடுக்கும்படி மாற்றுங்கள்
+        const taxRate = subCat.gstRate || subCat.gstPercentage;
+        
+        if (!taxRate) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Selected SubCategory does not have a GST rate. Please check HSN Master." 
+            });
+        }
 
         const images = req.files['images'] ? req.files['images'].map(f => f.filename) : [];
         const video = req.files['video'] ? req.files['video'][0].filename : "";
@@ -22,9 +32,8 @@ exports.createProduct = async (req, res) => {
 
         const product = new Product({
             ...req.body,
-            // 🌟 ENSURE: These names match exactly with what is in your SubCategory model
             hsnCode: subCat.hsnCode, 
-            gstPercentage: subCat.gstRate || subCat.gstPercentage, 
+            gstPercentage: taxRate, // 🌟 இப்போது இது காலியாக இருக்காது
             discountPercentage: discount,
             images,
             video,
@@ -35,12 +44,9 @@ exports.createProduct = async (req, res) => {
         await product.save();
         res.status(201).json({ success: true, data: product });
     } catch (err) { 
-        // 🌟 LOG: Always log the error to your console for easier debugging
-        console.error("Product Creation Error:", err);
         res.status(400).json({ success: false, error: err.message }); 
     }
 };
-
 // 🌟 2. GET ALL PRODUCTS (Customer View)
 exports.getAllProducts = async (req, res) => {
     try {
