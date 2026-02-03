@@ -5,7 +5,9 @@ const SubCategory = require('../models/SubCategory');
 // 🌟 1. CREATE PRODUCT (With Inheritance & Media)
 exports.createProduct = async (req, res) => {
     try {
-        const seller = await Seller.findById(req.user.id);
+        // 🌟 CHANGE: Use req.body.seller if req.user.id is missing (for Postman testing)
+        const sellerId = req.user?.id || req.body.seller; 
+        const seller = await Seller.findById(sellerId);
         if (!seller) return res.status(404).json({ success: false, message: "Seller not found" });
 
         const subCat = await SubCategory.findById(req.body.subCategory);
@@ -20,18 +22,23 @@ exports.createProduct = async (req, res) => {
 
         const product = new Product({
             ...req.body,
-            hsnCode: subCat.hsnCode, // Auto-Inherit
-            gstPercentage: subCat.gstRate, // Auto-Inherit
+            // 🌟 ENSURE: These names match exactly with what is in your SubCategory model
+            hsnCode: subCat.hsnCode, 
+            gstPercentage: subCat.gstRate || subCat.gstPercentage, 
             discountPercentage: discount,
             images,
             video,
             seller: seller._id,
-            variants: req.body.variants ? JSON.parse(req.body.variants) : [] // 🌟 Variants handling
+            variants: req.body.variants ? JSON.parse(req.body.variants) : [] 
         });
 
         await product.save();
         res.status(201).json({ success: true, data: product });
-    } catch (err) { res.status(400).json({ success: false, error: err.message }); }
+    } catch (err) { 
+        // 🌟 LOG: Always log the error to your console for easier debugging
+        console.error("Product Creation Error:", err);
+        res.status(400).json({ success: false, error: err.message }); 
+    }
 };
 
 // 🌟 2. GET ALL PRODUCTS (Customer View)
