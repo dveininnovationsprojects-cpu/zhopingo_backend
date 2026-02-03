@@ -3,47 +3,52 @@ const mongoose = require('mongoose');
 const productSchema = new mongoose.Schema({
   name: { type: String, required: true, index: true }, 
   description: String,
-  price: { 
-    type: Number, 
-    required: true,
-    min: [0, 'Price cannot be negative']
-  }, 
-  mrp: { 
-    type: Number, 
-    required: true,
-    validate: {
-      validator: function(val) {
-        return val >= this.price; 
-      },
-      message: 'MRP must be greater than or equal to the selling price'
-    }
-  },
-  hsnCode: { type: String, required: true }, 
-  gstPercentage: { type: Number, required: true }, 
-  stock: { type: Number, required: true, default: 0 },
-  images: [{ type: String }], 
-  video: { type: String }, 
   
 
-  category: { 
-    type: mongoose.Schema.Types.ObjectId, 
-    ref: 'Category', 
-    required: true,
-    index: true 
-  },
-  subCategory: { 
-    type: mongoose.Schema.Types.ObjectId, 
-    ref: 'SubCategory', 
-    required: true,
-    index: true
-  },
+  category: { type: mongoose.Schema.Types.ObjectId, ref: 'Category', required: true, index: true },
+  subCategory: { type: mongoose.Schema.Types.ObjectId, ref: 'SubCategory', required: true, index: true },
+  hsnCode: { type: String, required: true }, // Inherited from SubCategory
+  gstPercentage: { type: Number, required: true }, // Inherited from SubCategory
+
+
+  price: { type: Number, required: true, min: 0 }, 
+  mrp: { type: Number, required: true },
+  discountPercentage: { type: Number, default: 0 },
+  offerTag: { type: String }, // e.g., "Bestseller", "20% OFF"
+
+
+  variants: [{
+    attributeName: String, // e.g., "Volume"
+    attributeValue: String, // e.g., "500ml"
+    price: Number,
+    stock: Number,
+    isDefault: { type: Boolean, default: false }
+  }],
+
   
-  weight: { type: String },
-  seller: { type: mongoose.Schema.Types.ObjectId, ref: 'Seller', required: true },
+  images: [{ type: String }], 
+  video: { type: String }, 
+
+
+  stock: { type: Number, required: true, default: 0 },
+  seller: { type: mongoose.Schema.Types.ObjectId, ref: 'Seller', required: true, index: true },
+  isFreeDelivery: { type: Boolean, default: false }, // Seller setting
+  
+
+  fssaiLicense: { type: String }, // Shown if category is Food
   isReturnable: { type: Boolean, default: false },
   returnWindow: { type: Number, default: 0 }, 
   isCancellable: { type: Boolean, default: true },
-  offerTag: { type: String }, 
+
+  
+  ratings: [{
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    rating: { type: Number, min: 1, max: 5 },
+    comment: String,
+    createdAt: { type: Date, default: Date.now }
+  }],
+  averageRating: { type: Number, default: 0 },
+
   isArchived: { type: Boolean, default: false }
 }, { timestamps: true });
 

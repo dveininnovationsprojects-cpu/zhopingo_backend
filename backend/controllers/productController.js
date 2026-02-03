@@ -1,46 +1,40 @@
 const Product = require('../models/Product');
 const Seller = require('../models/Seller');
+const SubCategory = require('../models/SubCategory');
 
-
+// 🌟 1. CREATE PRODUCT (With Inheritance & Media)
 exports.createProduct = async (req, res) => {
     try {
-        
-        const seller = await Seller.findById(req.body.seller || req.user?.id);
+        const seller = await Seller.findById(req.user.id);
         if (!seller) return res.status(404).json({ success: false, message: "Seller not found" });
 
-        
-        const foodCategories = ["Food", "Beverages", "Snacks", "Health Supplements"];
-        if (foodCategories.includes(req.body.categoryName) && !seller.fssaiNumber) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "fssaiNumber is required for food category products." 
-            });
-        }
+        const subCat = await SubCategory.findById(req.body.subCategory);
+        if (!subCat) return res.status(400).json({ success: false, message: "Invalid SubCategory" });
 
-       
-        const images = req.files['images'] 
-            ? req.files['images'].map(f => f.filename) 
-            : [];
-        
+        const images = req.files['images'] ? req.files['images'].map(f => f.filename) : [];
         const video = req.files['video'] ? req.files['video'][0].filename : "";
+
+        const discount = req.body.mrp > req.body.price 
+            ? Math.round(((req.body.mrp - req.body.price) / req.body.mrp) * 100) 
+            : 0;
 
         const product = new Product({
             ...req.body,
+            hsnCode: subCat.hsnCode, // Auto-Inherit
+            gstPercentage: subCat.gstRate, // Auto-Inherit
+            discountPercentage: discount,
             images,
             video,
-            category: req.body.category, 
-            subCategory: req.body.subCategory,
-            seller: seller._id 
+            seller: seller._id,
+            variants: req.body.variants ? JSON.parse(req.body.variants) : [] // 🌟 Variants handling
         });
 
         await product.save();
         res.status(201).json({ success: true, data: product });
-    } catch (err) { 
-        res.status(400).json({ success: false, error: err.message }); 
-    }
+    } catch (err) { res.status(400).json({ success: false, error: err.message }); }
 };
 
-
+// 🌟 2. GET ALL PRODUCTS (Customer View)
 exports.getAllProducts = async (req, res) => {
     try {
         const { category, subCategory, search } = req.query;
@@ -51,33 +45,29 @@ exports.getAllProducts = async (req, res) => {
         if (search) query.name = { $regex: search, $options: 'i' };
 
         const products = await Product.find(query)
-            .populate('category', 'name image')
-            .populate('subCategory', 'name image hsnCode')
-            .populate('seller', 'shopName name address') 
+            .populate('category subCategory', 'name image')
+            .populate('seller', 'shopName name address')
             .sort({ createdAt: -1 });
 
-       
         const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
-        
-        const productsWithUrls = products.map(product => ({
-            ...product._doc,
-            images: product.images.map(img => baseUrl + img),
-            video: product.video ? baseUrl + product.video : ""
+        const data = products.map(p => ({
+            ...p._doc,
+            images: p.images.map(img => baseUrl + img),
+            video: p.video ? baseUrl + p.video : ""
         }));
 
-        res.status(200).json({ success: true, count: productsWithUrls.length, data: productsWithUrls });
-    } catch (err) { 
-        res.status(500).json({ success: false, error: err.message }); 
-    }
+        res.json({ success: true, count: data.length, data });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
+// 🌟 3. GET PRODUCT BY ID (Detailed View)
 exports.getProductById = async (req, res) => {
     try {
         const product = await Product.findById(req.params.id)
             .populate('category subCategory')
-            .populate('seller', 'name shopName phone address fssaiNumber'); 
+            .populate('seller', 'name shopName phone address fssaiNumber');
 
-        if (!product) return res.status(404).json({ message: "Product not found" });
+        if (!product) return res.status(404).json({ success: false, message: "Product not found" });
 
         const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
         const updatedProduct = {
@@ -87,49 +77,64 @@ exports.getProductById = async (req, res) => {
         };
 
         res.status(200).json({ success: true, data: updatedProduct });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
+// 🌟 4. GET MY PRODUCTS (Seller View Only)
+exports.getMyProducts = async (req, res) => {
+    try {
+        const products = await Product.find({ seller: req.user.id, isArchived: false })
+            .populate('category subCategory');
+        res.json({ success: true, data: products });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+};
 
+// 🌟 5. GET SIMILAR PRODUCTS
+exports.getSimilarProducts = async (req, res) => {
+    try {
+        const { category } = req.query;
+        const products = await Product.find({ 
+            category: category, 
+            _id: { $ne: req.params.id },
+            isArchived: false 
+        }).limit(10).sort({ createdAt: -1 });
+
+        const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
+        const data = products.map(p => ({
+            ...p._doc,
+            images: p.images.map(img => baseUrl + img)
+        }));
+
+        res.json({ success: true, data });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+};
+
+// 🌟 6. UPDATE & ARCHIVE (CRUD)
 exports.updateProduct = async (req, res) => {
     try {
         const updated = await Product.findByIdAndUpdate(req.params.id, req.body, { new: true });
-        res.status(200).json({ success: true, data: updated });
+        res.json({ success: true, data: updated });
     } catch (err) { res.status(400).json({ success: false, error: err.message }); }
 };
-
 
 exports.deleteProduct = async (req, res) => {
     try {
         await Product.findByIdAndUpdate(req.params.id, { isArchived: true });
-        res.status(200).json({ success: true, message: "Product Archived successfully" });
+        res.json({ success: true, message: "Product Archived successfully" });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
-exports.getSimilarProducts = async (req, res) => {
+// 🌟 7. RATE PRODUCT
+exports.rateProduct = async (req, res) => {
     try {
-        const currentProductId = req.params.id;
-        const { category } = req.query; 
-
+        const { rating, comment } = req.body;
+        const product = await Product.findById(req.params.id);
         
-        const products = await Product.find({ 
-            category: category, 
-            _id: { $ne: currentProductId },
-            isArchived: false 
-        })
-        .limit(10)
-        .sort({ createdAt: -1 });
+        product.ratings.push({ userId: req.user.id, rating, comment });
+        const total = product.ratings.reduce((acc, curr) => acc + curr.rating, 0);
+        product.averageRating = (total / product.ratings.length).toFixed(1);
 
-        const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
-        
-       
-        const productsWithUrls = products.map(product => ({
-            ...product._doc,
-            images: product.images.map(img => baseUrl + img)
-        }));
-
-        res.status(200).json({ success: true, data: productsWithUrls });
-    } catch (err) { 
-        res.status(500).json({ success: false, error: err.message }); 
-    }
+        await product.save();
+        res.json({ success: true, averageRating: product.averageRating });
+    } catch (err) { res.status(500).json({ error: err.message }); }
 };
