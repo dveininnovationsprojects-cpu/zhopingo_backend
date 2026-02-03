@@ -51,15 +51,13 @@ exports.createWalletTopupSession = async (req, res) => {
     }
 };
 
-// 🌟 2. VERIFY TOP-UP (பணத்தை உறுதி செய்து வாலட்டில் ஏற்ற)
+
 exports.verifyWalletTopup = async (req, res) => {
     try {
         const topupId = req.query.topup_id;
         if (!topupId) return res.status(400).send("Invalid Topup ID");
 
-        // ஐடியில் இருந்து யூசர் ஐடியைப் பிரித்தெடுத்தல்
-        const userId = topupId.split('_')[1];
-
+        // Request details from Cashfree
         const response = await axios.get(`${CF_URL}/${topupId}`, {
             headers: {
                 "x-client-id": CF_APP_ID,
@@ -70,22 +68,30 @@ exports.verifyWalletTopup = async (req, res) => {
 
         if (response.data.order_status === "PAID") {
             const amount = Number(response.data.order_amount);
-            const user = await User.findById(userId);
             
+            // 🌟 BETTER LOGIC: Get customer_id directly from Cashfree response
+            const userId = response.data.customer_details.customer_id;
+            
+            const user = await User.findById(userId);
             if (!user) return res.status(404).send("User not found");
 
-            // வாலட் பேலன்ஸ் அப்டேட்
+            // Prevent duplicate credit (Check if transaction ID already processed)
+            const alreadyProcessed = user.walletTransactions.some(t => t.reason.includes(topupId));
+            if (alreadyProcessed) {
+                return res.send(`<html><body style="text-align:center;"><h1>Already Processed ✅</h1></body></html>`);
+            }
+
+            // Update Wallet
             user.walletBalance += amount;
             user.walletTransactions.unshift({
                 amount: amount,
                 type: 'CREDIT',
-                reason: 'Wallet Recharge (Cashfree)',
+                reason: `Wallet Recharge (ID: ${topupId})`,
                 date: new Date()
             });
 
             await user.save();
 
-            // 🌟 மொபைல் ஆப்பிற்குத் திரும்பும் வசதியுடன் கூடிய HTML
             res.send(`
                 <div style="text-align:center; padding:50px; font-family:sans-serif;">
                     <h1 style="color:#0c831f;">Payment Successful! ✅</h1>
@@ -98,13 +104,13 @@ exports.verifyWalletTopup = async (req, res) => {
                 </div>
             `);
         } else {
-            res.status(400).send("<h1>Payment Pending or Failed at Gateway</h1>");
+            res.status(400).send("<h1>Payment Pending or Failed</h1>");
         }
     } catch (err) {
+        console.error("Verification Error:", err.response?.data || err.message);
         res.status(500).send("Verification Error");
     }
 };
-
 // 🌟 3. GET WALLET STATUS (பேலன்ஸ் மற்றும் டிரான்ஸாக்ஷன்கள்)
 exports.getWalletStatus = async (req, res) => {
     try {
