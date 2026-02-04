@@ -47,11 +47,14 @@ exports.createProduct = async (req, res) => {
         res.status(400).json({ success: false, error: err.message }); 
     }
 };
-// 🌟 2. GET ALL PRODUCTS (Customer View)
+// 🌟 GET ALL PRODUCTS (Customer View)
+// 🌟 2. GET ALL PRODUCTS (முழுமையான 5000+ தயாரிப்புகளை எடுக்கும்)
 exports.getAllProducts = async (req, res) => {
     try {
         const { category, subCategory, search } = req.query;
-        let query = { isArchived: false };
+        
+        // 🌟 திருத்தம்: isArchived 'true' இல்லாத அனைத்தையும் எடுக்கும் (சீட் டேட்டாவையும் சேர்த்து)
+        let query = { isArchived: { $ne: true } }; 
 
         if (category) query.category = category;
         if (subCategory) query.subCategory = subCategory;
@@ -63,13 +66,17 @@ exports.getAllProducts = async (req, res) => {
             .sort({ createdAt: -1 });
 
         const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
-        const data = products.map(p => ({
-            ...p._doc,
-            images: p.images.map(img => baseUrl + img),
-            video: p.video ? baseUrl + p.video : ""
-        }));
+        
+        const data = products.map(p => {
+            const doc = p._doc;
+            return {
+                ...doc,
+                images: doc.images ? doc.images.map(img => formatMediaUrl(img, baseUrl)) : [],
+                video: formatMediaUrl(doc.video, baseUrl)
+            };
+        });
 
-        res.json({ success: true, count: data.length, data });
+        res.json({ success: true, count: data.length, data: data });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
@@ -85,37 +92,38 @@ exports.getProductById = async (req, res) => {
         const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
         const updatedProduct = {
             ...product._doc,
-            images: product.images.map(img => baseUrl + img),
-            video: product.video ? baseUrl + product.video : ""
+            images: product.images ? product.images.map(img => formatMediaUrl(img, baseUrl)) : [],
+            video: formatMediaUrl(product.video, baseUrl)
         };
 
         res.status(200).json({ success: true, data: updatedProduct });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
-// 🌟 4. GET MY PRODUCTS (Seller View Only)
+// 🌟 4. GET MY PRODUCTS (Seller Dashboard)
 exports.getMyProducts = async (req, res) => {
     try {
-        const products = await Product.find({ seller: req.user.id, isArchived: false })
+        const products = await Product.find({ seller: req.user.id, isArchived: { $ne: true } })
             .populate('category subCategory');
         res.json({ success: true, data: products });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
-// 🌟 5. GET SIMILAR PRODUCTS
+// 🌟 5. GET SIMILAR PRODUCTS (ரேண்டம் தயாரிப்புகளுடன்)
 exports.getSimilarProducts = async (req, res) => {
     try {
         const { category } = req.query;
-        const products = await Product.find({ 
-            category: category, 
-            _id: { $ne: req.params.id },
-            isArchived: false 
-        }).limit(10).sort({ createdAt: -1 });
+        let query = { isArchived: { $ne: true }, _id: { $ne: req.params.id } };
+
+        // கேட்டகிரி இருந்தால் அதே கேட்டகிரி, இல்லையென்றால் ரேண்டம் தயாரிப்புகள்
+        if (category) query.category = category;
+
+        const products = await Product.find(query).limit(10).sort({ createdAt: -1 });
 
         const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
         const data = products.map(p => ({
             ...p._doc,
-            images: p.images.map(img => baseUrl + img)
+            images: p.images ? p.images.map(img => formatMediaUrl(img, baseUrl)) : []
         }));
 
         res.json({ success: true, data });
