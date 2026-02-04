@@ -5,7 +5,8 @@ const catalogController = require('../controllers/adminCatalogController');
 
 // --- HSN Master ---
 router.post('/hsn-master', catalogController.addHsnCode);
-router.get('/hsn-master', catalogController.getAllHsn);
+router.get('/hsn-master', catalogController.getAllHsnForAdmin);
+router.get('/hsn-master/active', catalogController.getActiveHsnOnly);
 router.put('/hsn-master/:id', catalogController.updateHsnStatus);
 router.delete('/hsn-master/:id', catalogController.deleteHsnCode);
 

@@ -11,9 +11,20 @@ exports.addHsnCode = async (req, res) => {
     } catch (err) { res.status(400).json({ error: err.message }); }
 };
 
-exports.getAllHsn = async (req, res) => {
+exports.getAllHsnForAdmin = async (req, res) => {
     try {
-       
+        // Filter ethuvum illaama fetch pannum, appo thaan neenga thirumba ON panna mudiyum
+        const list = await HsnMaster.find(); 
+        res.json({ success: true, data: list });
+    } catch (err) { 
+        res.status(500).json({ error: err.message }); 
+    }
+};
+
+// 2. Category/Sub-Category Dropdown-ku mattum (Active codes mattum kaatum)
+exports.getActiveHsnOnly = async (req, res) => {
+    try {
+        // Ippo filter use pannunga
         const list = await HsnMaster.find({ status: { $ne: false } }); 
         res.json({ success: true, data: list });
     } catch (err) { 
