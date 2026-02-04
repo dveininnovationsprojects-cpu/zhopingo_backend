@@ -13,9 +13,21 @@ exports.addHsnCode = async (req, res) => {
 
 exports.getAllHsn = async (req, res) => {
     try {
-        const list = await HsnMaster.find();
+       
+        const list = await HsnMaster.find({ status: { $ne: false } }); 
         res.json({ success: true, data: list });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) { 
+        res.status(500).json({ error: err.message }); 
+    }
+};
+
+exports.deleteHsnCode = async (req, res) => {
+    try {
+        await HsnMaster.findByIdAndDelete(req.params.id);
+        res.json({ success: true, message: "HSN Code deleted successfully" });
+    } catch (err) { 
+        res.status(400).json({ error: err.message }); 
+    }
 };
 exports.updateHsnStatus = async (req, res) => {
     try {

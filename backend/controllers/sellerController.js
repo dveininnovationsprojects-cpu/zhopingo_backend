@@ -9,9 +9,9 @@ const JWT_SECRET = process.env.JWT_SECRET || "secret123";
 /* ================= 1. REGISTER SELLER ================= */
 exports.registerSeller = async (req, res) => {
   try {
-    const { name, phone, email, password, shopName, panNumber, gstNumber, fssaiNumber } = req.body;
+    const { name, phone, email, password, shopName } = req.body;
 
-    if (!name || !phone || !password) {
+    if (!name || !phone || !password || !shopName) {
       return res.status(400).json({ success: false, message: "Required fields missing" });
     }
     
@@ -25,20 +25,21 @@ exports.registerSeller = async (req, res) => {
     const seller = await Seller.create({
       name, phone, email,
       password: hashedPassword,
-      shopName, panNumber, gstNumber, fssaiNumber,
+      shopName,
       kycStatus: "not_submitted",
       isVerified: false
     });
 
+    
     try {
-      await sendAdminNotification(seller);
+      await sendAdminNotification(seller, "Registration");
     } catch (mailErr) {
       console.error("Admin Notification Mail Failed:", mailErr.message);
     }
 
     return res.status(201).json({
       success: true,
-      message: "Seller registered successfully.",
+      message: "Seller registered successfully. Please upload KYC.",
       sellerId: seller._id
     });
   } catch (err) {
@@ -46,43 +47,69 @@ exports.registerSeller = async (req, res) => {
   }
 };
 
-/* ================= 2. UPLOAD KYC DOCUMENTS ================= */
+/* ================= 2. UPLOAD KYC DOCUMENTS (PAN & GST Required) ================= */
 exports.uploadKyc = async (req, res) => {
   try {
-    const { phone, panNumber, gstNumber, fssaiNumber } = req.body;
+    const { phone, panNumber, gstNumber, fssaiNumber, msmeNumber } = req.body;
     const seller = await Seller.findOne({ phone });
 
     if (!seller) return res.status(404).json({ success: false, message: "Seller not found" });
 
-    if (panNumber) seller.panNumber = panNumber;
-    if (gstNumber) seller.gstNumber = gstNumber;
-    if (fssaiNumber) seller.fssaiNumber = fssaiNumber;
-
-    if (req.files?.pan_doc) {
-      seller.kycDocuments.panDoc = {
-        fileName: req.files.pan_doc[0].filename,
-        fileUrl: `uploads/kyc/pan/${req.files.pan_doc[0].filename}`,
-        mimeType: req.files.pan_doc[0].mimetype
-      };
+    
+    if (!panNumber || !gstNumber) {
+      return res.status(400).json({ success: false, message: "PAN and GST numbers are mandatory" });
     }
-    // ... logic for gst_doc, fssai_doc, msme_doc follows same pattern
+
+    seller.panNumber = panNumber;
+    seller.gstNumber = gstNumber;
+    if (fssaiNumber) seller.fssaiNumber = fssaiNumber;
+    if (msmeNumber) seller.msmeNumber = msmeNumber;
+
+   
+    const docs = ["pan_doc", "gst_doc", "fssai_doc", "msme_doc"];
+    docs.forEach(doc => {
+      if (req.files && req.files[doc]) {
+        const fieldName = doc.replace('_doc', 'Doc');
+        seller.kycDocuments[fieldName] = {
+          fileName: req.files[doc][0].filename,
+          fileUrl: `uploads/kyc/${req.files[doc][0].filename}`,
+          mimeType: req.files[doc][0].mimetype
+        };
+      }
+    });
 
     seller.kycStatus = "pending";
     await seller.save();
 
-    res.json({ success: true, message: "KYC uploaded successfully" });
+    
+    await sendAdminNotification(seller, "KYC Submission");
+
+    res.json({ success: true, message: "KYC documents uploaded and sent for approval" });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 };
 
-/* ================= 3. SELLER LOGIN & DASHBOARD ================= */
+/* ================= 3. SELLER LOGIN (Only if Admin Verified) ================= */
 exports.loginSeller = async (req, res) => {
   try {
     const { phone, password } = req.body;
     const seller = await Seller.findOne({ phone });
 
-    if (!seller || !(await bcrypt.compare(password, seller.password))) {
+    if (!seller) {
+      return res.status(404).json({ success: false, message: "Seller not found" });
+    }
+
+    
+    if (!seller.isVerified) {
+      return res.status(403).json({ 
+        success: false, 
+        message: `Login denied. Account status: ${seller.kycStatus}. Wait for Admin approval.` 
+      });
+    }
+
+    const isMatch = await bcrypt.compare(password, seller.password);
+    if (!isMatch) {
       return res.status(401).json({ success: false, message: "Invalid credentials" });
     }
 
@@ -91,17 +118,23 @@ exports.loginSeller = async (req, res) => {
     res.json({
       success: true,
       token,
-      seller: { id: seller._id, name: seller.name, shopName: seller.shopName, kycStatus: seller.kycStatus, isVerified: seller.isVerified }
+      seller: { 
+        id: seller._id, 
+        name: seller.name, 
+        shopName: seller.shopName, 
+        kycStatus: seller.kycStatus 
+      }
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 };
 
-// 🌟 Added this to fix your "handler must be a function" error
+
+
 exports.getSellerDashboard = async (req, res) => {
   try {
-    const seller = await Seller.findById(req.params.id);
+    const seller = await Seller.findById(req.params.id).select("-password");
     if (!seller) return res.status(404).json({ success: false, message: "Seller not found" });
     res.json({ success: true, data: seller });
   } catch (err) {
@@ -109,12 +142,7 @@ exports.getSellerDashboard = async (req, res) => {
   }
 };
 
-/* ================= 4. ORDER MANAGEMENT (Three Button Concept) ================= */
 
-/**
- * NEW ORDERS (Placed)
- * Fetches orders that are "Placed" for this specific seller.
- */
 exports.getSellerNewOrders = async (req, res) => {
   try {
     const orders = await Order.find({ 
@@ -127,13 +155,10 @@ exports.getSellerNewOrders = async (req, res) => {
   }
 };
 
-/**
- * SHIPPED & DELIVERED ACTIONS
- * Updates the order status based on button clicked.
- */
+
 exports.updateSellerOrderStatus = async (req, res) => {
   try {
-    const { orderId, status } = req.body; // status: 'Shipped' or 'Delivered'
+    const { orderId, status } = req.body; 
     const order = await Order.findByIdAndUpdate(orderId, { status }, { new: true });
     
     if (!order) return res.status(404).json({ success: false, message: "Order not found" });
@@ -144,7 +169,7 @@ exports.updateSellerOrderStatus = async (req, res) => {
   }
 };
 
-/* ================= 5. LOGOUT ================= */
+
 exports.logoutSeller = async (req, res) => {
   res.json({ success: true, message: "Logged out successfully" });
 };

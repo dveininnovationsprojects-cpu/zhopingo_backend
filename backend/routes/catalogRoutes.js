@@ -7,6 +7,7 @@ const catalogController = require('../controllers/adminCatalogController');
 router.post('/hsn-master', catalogController.addHsnCode);
 router.get('/hsn-master', catalogController.getAllHsn);
 router.put('/hsn-master/:id', catalogController.updateHsnStatus);
+router.delete('/hsn-master/:id', catalogController.deleteHsnCode);
 
 // --- Categories ---
 router.post('/categories', upload.single('image'), catalogController.createCategory);

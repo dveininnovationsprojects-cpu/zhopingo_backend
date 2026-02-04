@@ -2,10 +2,18 @@ const express = require("express");
 const router = express.Router();
 const upload = require("../middleware/upload"); 
 const sellerCtrl = require("../controllers/sellerController");
+const { protectSeller } = require("../middleware/authMiddleware"); 
 
 
 router.post("/register", sellerCtrl.registerSeller);
+
+
 router.post("/login", sellerCtrl.loginSeller);
+
+
+router.post("/logout", sellerCtrl.logoutSeller);
+
+
 
 router.post(
   "/kyc",
@@ -19,6 +27,14 @@ router.post(
 );
 
 
+
+
 router.get("/dashboard/:id", sellerCtrl.getSellerDashboard);
- 
+
+
+router.get("/new-orders/:sellerId", sellerCtrl.getSellerNewOrders);
+
+
+router.put("/update-order-status", sellerCtrl.updateSellerOrderStatus);
+
 module.exports = router;
