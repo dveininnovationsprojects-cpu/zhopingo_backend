@@ -8,24 +8,25 @@ const seedDatabase = async () => {
         console.log("✅ Connected!");
 
         const db = mongoose.connection.db;
-        // பழைய டேட்டாவை சுத்தப்படுத்துதல்
+        // பழைய டேட்டாவை முழுமையாக நீக்குதல்
         await db.collection('categories').deleteMany({});
         await db.collection('subcategories').deleteMany({});
         await db.collection('products').deleteMany({});
         await db.collection('hsnmasters').deleteMany({});
 
-        // தயாரிப்புகளுக்கான பிரத்யேக PNG ஐகான்கள்
+        // தயாரிப்புகளுக்கான PNG ஐகான்கள்
         const productIcons = [
-            'https://cdn-icons-png.flaticon.com/512/3081/3081913.png', // Rice/Grains
-            'https://cdn-icons-png.flaticon.com/512/2674/2674486.png', // Spices
-            'https://cdn-icons-png.flaticon.com/512/3058/3058995.png', // Oils
-            'https://cdn-icons-png.flaticon.com/512/2437/2437700.png', // Milk/Dairy
-            'https://cdn-icons-png.flaticon.com/512/1514/1514922.png', // Fruits/Veg
-            'https://cdn-icons-png.flaticon.com/512/2553/2553642.png', // Snacks
-            'https://cdn-icons-png.flaticon.com/512/822/822102.png',   // Beverages
-            'https://cdn-icons-png.flaticon.com/512/2224/2224115.png'  // Personal Care
+            'https://cdn-icons-png.flaticon.com/512/3081/3081913.png', 
+            'https://cdn-icons-png.flaticon.com/512/2674/2674486.png', 
+            'https://cdn-icons-png.flaticon.com/512/3058/3058995.png', 
+            'https://cdn-icons-png.flaticon.com/512/2437/2437700.png', 
+            'https://cdn-icons-png.flaticon.com/512/1514/1514922.png', 
+            'https://cdn-icons-png.flaticon.com/512/2553/2553642.png', 
+            'https://cdn-icons-png.flaticon.com/512/822/822102.png',   
+            'https://cdn-icons-png.flaticon.com/512/2224/2224115.png'  
         ];
 
+        // 🌟 நீங்கள் குறிப்பிட்ட 12 கேட்டகிரி டேட்டா
         const rawData = [
             { name: "Daily Staples", subs: ["Rice", "Millets", "Wheat & Flours", "Pulses & Dals", "Whole Spices", "Premium Spices", "Spice Powders", "Sweeteners", "Pickles"] },
             { name: "Groceries", subs: ["Cooking Oils", "Ghee", "Nuts & Seed Oils", "Dry Fruits", "Seeds"] },
@@ -77,45 +78,44 @@ const seedDatabase = async () => {
         const subResult = await db.collection('subcategories').insertMany(subCategories);
         const subIds = Object.values(subResult.insertedIds);
 
-        // 3. 5000 தயாரிப்புகள் உருவாக்கம்
-        const products = [];
+        // 3. 5000 தயாரிப்புகள் உருவாக்கம் (isArchived: false சேர்த்துள்ளேன்)
         const sellerId = new mongoose.Types.ObjectId("65b2f1a2e4b0a1a2b3c4d5e6");
-
         console.log("🚀 Generating 5000 Products...");
+        
+        let productBatch = [];
         for (let i = 1; i <= 5000; i++) {
             const subIdx = i % subIds.length;
             const sub = subCategories[subIdx];
             
-            products.push({
+            productBatch.push({
                 name: `${sub.name} - Batch ${Math.ceil(i/100)} Item ${i}`,
-                description: `Premium quality ${sub.name} product, naturally sourced and organic.`,
+                description: `Premium quality ${sub.name} product sourced for Zhopingo customers.`,
                 price: 45 + (i % 850),
                 mrp: 90 + (i % 850),
                 hsnCode: sub.hsnCode,
                 gstPercentage: 12,
                 stock: 200,
-                images: [productIcons[i % productIcons.length]], // PNG Icons used for products
+                images: [productIcons[i % productIcons.length]], 
                 category: sub.category,
                 subCategory: subIds[subIdx],
                 weight: i % 3 === 0 ? "250g" : (i % 2 === 0 ? "500g" : "1kg"),
                 seller: sellerId,
-                offerTag: i % 8 === 0 ? "Limited Offer" : (i % 5 === 0 ? "Bestseller" : "New Arrival"),
+                offerTag: i % 8 === 0 ? "Limited Offer" : (i % 5 === 0 ? "Bestseller" : "Organic"),
+                isArchived: false, // 🌟 மிக முக்கியம்: இது இருந்தால் தான் போஸ்ட்மேனில் வரும்
                 isCancellable: true,
                 createdAt: new Date(),
                 updatedAt: new Date()
             });
 
-            // Memory குறையாமல் இருக்க 1000 பட்ச் ஆக இன்செர்ட் செய்கிறோம்
-            if (products.length === 1000) {
-                await db.collection('products').insertMany(products);
-                products.length = 0; 
+            if (productBatch.length === 1000) {
+                await db.collection('products').insertMany(productBatch);
+                productBatch = [];
                 console.log(`📦 Inserted ${i} products...`);
             }
         }
 
-        // மீதமுள்ள தயாரிப்புகளை இன்செர்ட் செய்தல்
-        if (products.length > 0) {
-            await db.collection('products').insertMany(products);
+        if (productBatch.length > 0) {
+            await db.collection('products').insertMany(productBatch);
         }
 
         console.log(`✅ SUCCESS! Seeded 12 Categories, ${subIds.length} Sub-Categories, and 5000 Products.`);
