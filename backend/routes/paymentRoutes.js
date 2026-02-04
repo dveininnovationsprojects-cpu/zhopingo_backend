@@ -5,6 +5,6 @@ const paymentCtrl = require('../controllers/paymentController');
 
 router.post('/create-session', paymentCtrl.createSession);
 
-router.post('/verify', paymentCtrl.verifyPayment);
+router.get('/verify', paymentCtrl.verifyPayment);
 
 module.exports = router;
