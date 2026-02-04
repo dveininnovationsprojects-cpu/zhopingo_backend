@@ -1,106 +1,124 @@
 const mongoose = require('mongoose');
-const path = require('path');
-require('dotenv').config({ path: path.join(__dirname, '../backend/.env') });
 
 const seedDatabase = async () => {
     try {
         console.log("⏳ Connecting to Zhopingo MongoDB...");
-        mongoose.set('bufferCommands', false);
+        const mongoURI = "mongodb+srv://zhopingo:Zhopingo28%40@cluster0.wzjuvty.mongodb.net/zhopingo?retryWrites=true&w=majority";
+        await mongoose.connect(mongoURI);
+        console.log("✅ Connected!");
 
-        const mongoURI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/zhopingo';
-        await mongoose.connect(mongoURI, { serverSelectionTimeoutMS: 5000 });
-        console.log("✅ Connected to Database!");
-
-        await new Promise(resolve => setTimeout(resolve, 2000));
-
-        // 1. நேரடி கலெக்ஷன் மூலம் சுத்தம் செய்தல்
         const db = mongoose.connection.db;
+        // பழைய டேட்டாவை சுத்தப்படுத்துதல்
         await db.collection('categories').deleteMany({});
         await db.collection('subcategories').deleteMany({});
         await db.collection('products').deleteMany({});
-        console.log("🧹 Old Data Cleared");
+        await db.collection('hsnmasters').deleteMany({});
 
-        // 2. 10 கேட்டகரிகள் (CDN Images)
-        const categoryData = [
-            { name: "Vegetables & Fruits", image: "https://images.unsplash.com/photo-1610348725531-843dff563e2c?w=400" },
-            { name: "Dairy, Bread & Eggs", image: "https://images.unsplash.com/photo-1550583724-125581f77833?w=400" },
-            { name: "Snacks & Munchies", image: "https://images.unsplash.com/photo-1599490659213-e2b9527bb087?w=400" },
-            { name: "Cold Drinks & Juices", image: "https://images.unsplash.com/photo-1622483767028-3f66f32aef97?w=400" },
-            { name: "Instant Food", image: "https://images.unsplash.com/photo-1517686469429-8bdb88b9f907?w=400" },
-            { name: "Bakery & Biscuits", image: "https://images.unsplash.com/photo-1558961363-fa8fdf82db35?w=400" },
-            { name: "Tea, Coffee & Drinks", image: "https://images.unsplash.com/photo-1544787210-22bb8306385e?w=400" },
-            { name: "Cleaning Essentials", image: "https://images.unsplash.com/photo-1584622650111-993a426fbf0a?w=400" },
-            { name: "Beauty & Personal Care", image: "https://images.unsplash.com/photo-1596462502278-27bfac4033c8?w=400" },
-            { name: "Baby Care", image: "https://images.unsplash.com/photo-1522771935876-2497116a524e?w=400" }
+        // தயாரிப்புகளுக்கான பிரத்யேக PNG ஐகான்கள்
+        const productIcons = [
+            'https://cdn-icons-png.flaticon.com/512/3081/3081913.png', // Rice/Grains
+            'https://cdn-icons-png.flaticon.com/512/2674/2674486.png', // Spices
+            'https://cdn-icons-png.flaticon.com/512/3058/3058995.png', // Oils
+            'https://cdn-icons-png.flaticon.com/512/2437/2437700.png', // Milk/Dairy
+            'https://cdn-icons-png.flaticon.com/512/1514/1514922.png', // Fruits/Veg
+            'https://cdn-icons-png.flaticon.com/512/2553/2553642.png', // Snacks
+            'https://cdn-icons-png.flaticon.com/512/822/822102.png',   // Beverages
+            'https://cdn-icons-png.flaticon.com/512/2224/2224115.png'  // Personal Care
         ];
 
-        // நேரடியாக இன்செர்ட் செய்கிறோம்
-        const insertedCats = await db.collection('categories').insertMany(
-            categoryData.map(c => ({ ...c, isActive: true, createdAt: new Date(), updatedAt: new Date() }))
-        );
-        console.log("✅ 10 Categories Inserted");
+        const rawData = [
+            { name: "Daily Staples", subs: ["Rice", "Millets", "Wheat & Flours", "Pulses & Dals", "Whole Spices", "Premium Spices", "Spice Powders", "Sweeteners", "Pickles"] },
+            { name: "Groceries", subs: ["Cooking Oils", "Ghee", "Nuts & Seed Oils", "Dry Fruits", "Seeds"] },
+            { name: "Fresh Produce", subs: ["Vegetables", "Fruits", "Exotic Vegetables", "Herbs & Leafies"] },
+            { name: "Dairy & Eggs", subs: ["Milk", "Paneer & Cheese", "Butter & Curd", "Country Eggs"] },
+            { name: "Beverages", subs: ["Tea & Coffee", "Health Drinks", "Fresh Juices", "Fermented Drinks"] },
+            { name: "Snacks", subs: ["Ready-to-Cook", "Millet Snacks", "Organic Biscuits", "Chips & Foxnuts"] },
+            { name: "Nutrition", subs: ["Herbal Powders", "Superfoods", "Nut Mixes"] },
+            { name: "Personal Care", subs: ["Body & Hair Care", "Oral Care", "Essential Oils"] },
+            { name: "Home Care", subs: ["Bamboo Products", "Neem Products", "Natural Scrubbers"] },
+            { name: "Little Care", subs: ["Eco Pads", "Cloth Diapers", "Organic Baby Soap"] },
+            { name: "Organic Specials", subs: ["Organic Chocolate", "Peanut Butter", "Gourmet Sauces", "Fermented Foods"] },
+            { name: "Specialty", subs: ["Amla Specials", "Aloe Vera Products", "Cold-Pressed Range"] }
+        ];
 
-        // 3. 27 சப்-கேட்டகரிகள் (HSN Mapping)
-        const subCatList = [];
-        const types = ["Premium", "Organic", "Fresh"];
-        const catIds = Object.values(insertedCats.insertedIds);
+        // 1. HSN Master & Categories உருவாக்கம்
+        const categories = [];
+        const hsns = [];
+        for (let i = 0; i < rawData.length; i++) {
+            const hsnCode = `HSN${2000 + i}`;
+            hsns.push({ hsnCode, gstRate: 12, description: `${rawData[i].name} HSN`, status: true });
+            categories.push({
+                name: rawData[i].name,
+                image: productIcons[i % productIcons.length],
+                hsnCode: hsnCode,
+                gstRate: 12,
+                isActive: true,
+                createdAt: new Date()
+            });
+        }
+        await db.collection('hsnmasters').insertMany(hsns);
+        const catResult = await db.collection('categories').insertMany(categories);
+        const catIds = Object.values(catResult.insertedIds);
 
-        categoryData.forEach((cat, idx) => {
-            for (let i = 0; i < 3; i++) {
-                if(subCatList.length < 27) {
-                    subCatList.push({
-                        name: `${types[i]} ${cat.name}`,
-                        category: catIds[idx],
-                        image: cat.image,
-                        hsnCode: `610${idx}${i}`,
-                        description: `Quality selection from ${cat.name}`,
-                        createdAt: new Date(),
-                        updatedAt: new Date()
-                    });
-                }
-            }
+        // 2. Sub-Categories உருவாக்கம்
+        const subCategories = [];
+        rawData.forEach((cat, idx) => {
+            cat.subs.forEach(subName => {
+                subCategories.push({
+                    name: subName,
+                    category: catIds[idx],
+                    image: productIcons[idx % productIcons.length],
+                    hsnCode: categories[idx].hsnCode,
+                    gstRate: 12,
+                    createdAt: new Date()
+                });
+            });
         });
-        const insertedSubs = await db.collection('subcategories').insertMany(subCatList);
-        console.log("✅ 27 Sub-Categories Created");
+        const subResult = await db.collection('subcategories').insertMany(subCategories);
+        const subIds = Object.values(subResult.insertedIds);
 
-        // 4. 3100 தயாரிப்புகள் (ObjectId Mapping)
-        const subCatEntries = Object.values(insertedSubs.insertedIds);
-        const productList = [];
-        const sellerId = new mongoose.Types.ObjectId("65b2f1a2e4b0a1a2b3c4d5e6"); 
+        // 3. 5000 தயாரிப்புகள் உருவாக்கம்
+        const products = [];
+        const sellerId = new mongoose.Types.ObjectId("65b2f1a2e4b0a1a2b3c4d5e6");
 
-        for (let i = 1; i <= 3100; i++) {
-            const subIndex = i % subCatEntries.length;
-            const sub = subCatList[subIndex];
-            productList.push({
-                name: `${sub.name} Item ${i}`,
-                description: "Fresh quality product from Zhopingo store.",
-                price: 40 + (i % 450),
-                mrp: 80 + (i % 450),
+        console.log("🚀 Generating 5000 Products...");
+        for (let i = 1; i <= 5000; i++) {
+            const subIdx = i % subIds.length;
+            const sub = subCategories[subIdx];
+            
+            products.push({
+                name: `${sub.name} - Batch ${Math.ceil(i/100)} Item ${i}`,
+                description: `Premium quality ${sub.name} product, naturally sourced and organic.`,
+                price: 45 + (i % 850),
+                mrp: 90 + (i % 850),
                 hsnCode: sub.hsnCode,
                 gstPercentage: 12,
-                stock: 100,
-                images: [
-                    sub.image,
-                    "https://images.unsplash.com/photo-1542838132-92c53300491e?w=400",
-                    "https://images.unsplash.com/photo-1583121274602-3e2820c69888?w=400"
-                ],
-                video: "https://www.w3schools.com/html/mov_bbb.mp4",
+                stock: 200,
+                images: [productIcons[i % productIcons.length]], // PNG Icons used for products
                 category: sub.category,
-                subCategory: subCatEntries[subIndex],
-                weight: i % 2 === 0 ? "500g" : "1kg",
+                subCategory: subIds[subIdx],
+                weight: i % 3 === 0 ? "250g" : (i % 2 === 0 ? "500g" : "1kg"),
                 seller: sellerId,
-                offerTag: i % 10 === 0 ? "Flat ₹50 OFF" : (i % 7 === 0 ? "33% OFF" : "BEST DEAL"),
+                offerTag: i % 8 === 0 ? "Limited Offer" : (i % 5 === 0 ? "Bestseller" : "New Arrival"),
                 isCancellable: true,
-                isArchived: false,
                 createdAt: new Date(),
                 updatedAt: new Date()
             });
+
+            // Memory குறையாமல் இருக்க 1000 பட்ச் ஆக இன்செர்ட் செய்கிறோம்
+            if (products.length === 1000) {
+                await db.collection('products').insertMany(products);
+                products.length = 0; 
+                console.log(`📦 Inserted ${i} products...`);
+            }
         }
 
-        console.log("🚀 Bulk Inserting 3100 Products...");
-        await db.collection('products').insertMany(productList);
-        
-        console.log(`✅ SUCCESS! Seeded 10 Categories, 27 Sub-Categories, and 3100 Products.`);
+        // மீதமுள்ள தயாரிப்புகளை இன்செர்ட் செய்தல்
+        if (products.length > 0) {
+            await db.collection('products').insertMany(products);
+        }
+
+        console.log(`✅ SUCCESS! Seeded 12 Categories, ${subIds.length} Sub-Categories, and 5000 Products.`);
         process.exit(0);
     } catch (err) {
         console.error("❌ SEEDING ERROR:", err.message);
