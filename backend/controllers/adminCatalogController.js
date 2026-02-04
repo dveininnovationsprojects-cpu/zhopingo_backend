@@ -17,6 +17,17 @@ exports.getAllHsn = async (req, res) => {
         res.json({ success: true, data: list });
     } catch (err) { res.status(500).json({ error: err.message }); }
 };
+exports.updateHsnStatus = async (req, res) => {
+    try {
+        const { status } = req.body;
+        const hsn = await HsnMaster.findByIdAndUpdate(req.params.id, { status }, { new: true });
+        res.json({ success: true, data: hsn });
+    } catch (err) { 
+        res.status(400).json({ error: err.message }); 
+    }
+};
+
+
 
 // ================= 🌟 CATEGORY FEATURES =================
 exports.createCategory = async (req, res) => {
