@@ -78,9 +78,11 @@ const seedDatabase = async () => {
         const subResult = await db.collection('subcategories').insertMany(subCategories);
         const subIds = Object.values(subResult.insertedIds);
 
-        // 3. 5000 தயாரிப்புகள் உருவாக்கம் (isArchived: false சேர்த்துள்ளேன்)
-        const sellerId = new mongoose.Types.ObjectId("65b2f1a2e4b0a1a2b3c4d5e6");
-        console.log("🚀 Generating 5000 Products...");
+        // 3. 5000 தயாரிப்புகள் உருவாக்கம்
+        // 🌟 உங்கள் நிஜமான Seller ID இதோ
+        const sellerId = new mongoose.Types.ObjectId("6980c920002f5adfa6b64bdc"); 
+
+        console.log("🚀 Generating 5000 Products for Seller: 6980c920002f5adfa6b64bdc...");
         
         let productBatch = [];
         for (let i = 1; i <= 5000; i++) {
@@ -99,9 +101,9 @@ const seedDatabase = async () => {
                 category: sub.category,
                 subCategory: subIds[subIdx],
                 weight: i % 3 === 0 ? "250g" : (i % 2 === 0 ? "500g" : "1kg"),
-                seller: sellerId,
+                seller: sellerId, // 🌟 நிஜ செல்லர் ஐடி மேப் செய்யப்படுகிறது
                 offerTag: i % 8 === 0 ? "Limited Offer" : (i % 5 === 0 ? "Bestseller" : "Organic"),
-                isArchived: false, // 🌟 மிக முக்கியம்: இது இருந்தால் தான் போஸ்ட்மேனில் வரும்
+                isArchived: false, // 🌟 போஸ்ட்மேனில் வர இது அவசியம்
                 isCancellable: true,
                 createdAt: new Date(),
                 updatedAt: new Date()
@@ -118,7 +120,7 @@ const seedDatabase = async () => {
             await db.collection('products').insertMany(productBatch);
         }
 
-        console.log(`✅ SUCCESS! Seeded 12 Categories, ${subIds.length} Sub-Categories, and 5000 Products.`);
+        console.log(`✅ SUCCESS! Seeded 12 Categories, ${subIds.length} Sub-Categories, and 5000 Products for your real Seller ID.`);
         process.exit(0);
     } catch (err) {
         console.error("❌ SEEDING ERROR:", err.message);
