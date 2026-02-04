@@ -7,15 +7,11 @@ exports.createOrder = async (req, res) => {
     try {
         const { items, customerId, shippingAddress, paymentMethod } = req.body;
 
-        // 🌟 SAFETY CHECK: Ensure items exist
-        if (!items || items.length === 0) {
-            return res.status(400).json({ success: false, message: "No items in cart." });
-        }
+        // 🌟 1. Safety Checks
+        if (!items || items.length === 0) return res.status(400).json({ success: false, message: "Cart is empty" });
+        if (!shippingAddress?.pincode) return res.status(400).json({ success: false, message: "Pincode required" });
 
-        if (!shippingAddress?.pincode) {
-            return res.status(400).json({ success: false, message: "Pincode is required." });
-        }
-
+        // 🌟 2. Delivery Charge Calculation
         const deliveryConfig = await DeliveryCharge.findOne({ pincode: shippingAddress.pincode });
         let baseDeliveryCharge = deliveryConfig ? deliveryConfig.charge : 50; 
 
@@ -24,13 +20,12 @@ exports.createOrder = async (req, res) => {
         let sellerWiseSplit = {};
 
         for (let item of items) {
-            // 🌟 FIX: Safety check for sellerId
+            // 🌟 3. Seller Check (Prevent 500 Error)
             if (!item.sellerId) {
-                return res.status(400).json({ success: false, message: `Product ${item.name} is missing seller info.` });
+                return res.status(400).json({ success: false, message: `Seller info missing for ${item.name}` });
             }
 
             const sellerId = item.sellerId.toString();
-            
             if (!sellerWiseSplit[sellerId]) {
                 const seller = await Seller.findById(sellerId);
                 sellerWiseSplit[sellerId] = {
@@ -42,47 +37,32 @@ exports.createOrder = async (req, res) => {
                 };
             }
 
-            if (item.isFreeDeliveryBySeller) {
-                sellerWiseSplit[sellerId].deliveryChargeApplied = 0;
-            }
+            if (item.isFreeDeliveryBySeller) sellerWiseSplit[sellerId].deliveryChargeApplied = 0;
 
             sellerWiseSplit[sellerId].items.push(item);
-            sellerWiseSplit[sellerId].sellerSubtotal += (item.price * item.quantity);
-            totalProductAmount += (item.price * item.quantity);
+            const itemCost = Number(item.price) * Number(item.quantity);
+            sellerWiseSplit[sellerId].sellerSubtotal += itemCost;
+            totalProductAmount += itemCost;
         }
 
-        Object.values(sellerWiseSplit).forEach(split => {
-            finalDeliveryCharge += split.deliveryChargeApplied;
-        });
+        Object.values(sellerWiseSplit).forEach(split => { finalDeliveryCharge += split.deliveryChargeApplied; });
 
-        let finalOrderAmount = totalProductAmount + finalDeliveryCharge;
-
-        // 🌟 WALLET CHECK
-        if (paymentMethod === 'WALLET') {
-            const user = await User.findById(customerId);
-            if (!user || user.walletBalance < finalOrderAmount) {
-                return res.status(400).json({ success: false, message: "Insufficient Wallet Balance" });
-            }
-            // Note: Wallet deduction is usually handled in the Payment Session 
-            // to avoid "Double Charging" if createOrder succeeds but payment fails.
-        }
-
+        // 🌟 4. Final Order Object (No Wallet Debit here to avoid Double Debit)
         const newOrder = new Order({
             customerId, 
             items, 
             sellerSplitData: Object.values(sellerWiseSplit), 
-            totalAmount: finalOrderAmount, 
+            totalAmount: totalProductAmount + finalDeliveryCharge, 
             deliveryChargeApplied: finalDeliveryCharge,
             paymentMethod, 
             shippingAddress, 
-            status: 'Pending' // Always start as Pending until Payment is confirmed
+            status: 'Pending' 
         });
 
         await newOrder.save();
         res.status(201).json({ success: true, order: newOrder });
 
     } catch (err) { 
-        console.error("Order Creation Error:", err); //  Log this to your terminal!
         res.status(500).json({ success: false, error: err.message }); 
     }
 };

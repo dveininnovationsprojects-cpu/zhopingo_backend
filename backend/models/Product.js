@@ -32,10 +32,10 @@ const productSchema = new mongoose.Schema({
 
   stock: { type: Number, required: true, default: 0 },
   seller: { type: mongoose.Schema.Types.ObjectId, ref: 'Seller', required: true, index: true },
-  isFreeDelivery: { type: Boolean, default: false }, // Seller setting
+  isFreeDelivery: { type: Boolean, default: false }, 
   
 
-  fssaiLicense: { type: String }, // Shown if category is Food
+  fssaiLicense: { type: String }, 
   isReturnable: { type: Boolean, default: false },
   returnWindow: { type: Number, default: 0 }, 
   isCancellable: { type: Boolean, default: true },

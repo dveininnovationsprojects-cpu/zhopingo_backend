@@ -10,17 +10,18 @@ const CF_URL = process.env.CF_URL;
 exports.createSession = async (req, res) => {
     try {
         const { orderId, amount, customerId, customerPhone, customerName, paymentMethod } = req.body;
+        const finalAmount = Number(amount);
 
-        // --- 🌟 WALLET PAYMENT LOGIC ---
+        // 🌟 1. Wallet Payment (Single Debit Logic)
         if (paymentMethod === 'WALLET') {
             const user = await User.findById(customerId);
-            if (!user || user.walletBalance < amount) {
+            if (!user || user.walletBalance < finalAmount) {
                 return res.status(400).json({ success: false, error: "Insufficient Wallet Balance" });
             }
 
-            user.walletBalance -= amount;
+            user.walletBalance -= finalAmount;
             user.walletTransactions.unshift({
-                amount,
+                amount: finalAmount,
                 type: 'DEBIT',
                 reason: `Payment for Order: ${orderId}`,
                 date: new Date()
@@ -28,53 +29,38 @@ exports.createSession = async (req, res) => {
             await user.save();
 
             const order = await Order.findByIdAndUpdate(orderId, { status: 'Placed' }, { new: true });
-            await Payment.create({
-                orderId,
-                transactionId: `WAL-${Date.now()}`,
-                amount,
-                status: 'Success'
-            });
+            await Payment.create({ orderId, transactionId: `WAL-${Date.now()}`, amount: finalAmount, status: 'Success' });
 
             return res.json({ success: true, message: "Paid via Wallet successfully", order });
         }
 
-        // --- 🌟 CASHFREE ONLINE PAYMENT LOGIC ---
-        // பேஸ் யூஆர்எல் பயன்படுத்தி ரிட்டர்ன் யூஆர்எல் அமைத்தல்
+        // 🌟 2. Online Payment (Fixing Order ID Format)
+        const cfOrderId = `ORD_${Date.now()}`; 
         const serverURL = "http://54.157.210.26"; 
-        const returnURL = `${serverURL}/api/v1/payments/verify?order_id={order_id}`;
+        const returnURL = `${serverURL}/api/v1/payments/verify?order_id={order_id}&internal_id=${orderId}`;
 
-        const response = await axios.post(CF_URL,
-            {
-                order_id: orderId,
-                order_amount: amount,
-                order_currency: "INR",
-                customer_details: {
-                    customer_id: customerId,
-                    customer_phone: customerPhone,
-                    customer_name: customerName
-                },
-                order_meta: {
-                    return_url: returnURL 
-                }
+        const response = await axios.post(process.env.CF_URL, {
+            order_id: cfOrderId,
+            order_amount: finalAmount,
+            order_currency: "INR",
+            customer_details: {
+                customer_id: customerId.toString(),
+                customer_phone: customerPhone,
+                customer_name: customerName || "Customer"
             },
-            {
-                headers: {
-                    "x-client-id": CF_APP_ID,
-                    "x-client-secret": CF_SECRET,
-                    "x-api-version": "2023-08-01"
-                }
+            order_meta: { return_url: returnURL }
+        }, {
+            headers: {
+                "x-client-id": process.env.CF_APP_ID,
+                "x-client-secret": process.env.CF_SECRET,
+                "x-api-version": "2023-08-01"
             }
-        );
-
-        res.json({
-            success: true,
-            order_id: response.data.order_id,
-            payment_session_id: response.data.payment_session_id,
-            payment_url: response.data.payment_link || response.data.order_pay_url
         });
 
+        res.json({ success: true, order_id: cfOrderId, payment_url: response.data.payment_link });
+
     } catch (err) {
-        res.status(500).json({ success: false, error: err.response?.data?.message || err.message });
+        res.status(500).json({ success: false, error: "Payment Gateway Error" });
     }
 };
 
