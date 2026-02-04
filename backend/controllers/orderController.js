@@ -7,47 +7,54 @@ exports.createOrder = async (req, res) => {
     try {
         const { items, customerId, shippingAddress, paymentMethod } = req.body;
 
-        // 🌟 1. Safety Checks
+        // 🌟 1. வாலிடியேஷன் (Validation)
         if (!items || items.length === 0) return res.status(400).json({ success: false, message: "Cart is empty" });
         if (!shippingAddress?.pincode) return res.status(400).json({ success: false, message: "Pincode required" });
+        if (!customerId) return res.status(400).json({ success: false, message: "Customer ID is required" });
 
-        // 🌟 2. Delivery Charge Calculation
+        // 🌟 2. டெலிவரி சார்ஜ் கணக்கீடு
         const deliveryConfig = await DeliveryCharge.findOne({ pincode: shippingAddress.pincode });
-        let baseDeliveryCharge = deliveryConfig ? deliveryConfig.charge : 50; 
+        let baseDeliveryCharge = deliveryConfig ? deliveryConfig.charge : 40; 
 
         let totalProductAmount = 0;
         let finalDeliveryCharge = 0;
         let sellerWiseSplit = {};
 
         for (let item of items) {
-            // 🌟 3. Seller Check (Prevent 500 Error)
-            if (!item.sellerId) {
+            // 🌟 3. செல்லர் ஐடி செக் (id அல்லது seller இரண்டையும் பார்த்தல்)
+            const actualSellerId = item.sellerId || item.seller;
+            
+            if (!actualSellerId) {
                 return res.status(400).json({ success: false, message: `Seller info missing for ${item.name}` });
             }
 
-            const sellerId = item.sellerId.toString();
-            if (!sellerWiseSplit[sellerId]) {
-                const seller = await Seller.findById(sellerId);
-                sellerWiseSplit[sellerId] = {
-                    sellerId: sellerId,
-                    shopName: seller?.shopName || "Unknown Seller",
+            const sellerIdStr = actualSellerId.toString();
+            
+            if (!sellerWiseSplit[sellerIdStr]) {
+                const seller = await Seller.findById(sellerIdStr);
+                sellerWiseSplit[sellerIdStr] = {
+                    sellerId: sellerIdStr,
+                    shopName: seller?.shopName || "Zhopingo Store",
                     items: [],
                     sellerSubtotal: 0,
                     deliveryChargeApplied: baseDeliveryCharge 
                 };
             }
 
-            if (item.isFreeDeliveryBySeller) sellerWiseSplit[sellerId].deliveryChargeApplied = 0;
+            if (item.isFreeDeliveryBySeller) sellerWiseSplit[sellerIdStr].deliveryChargeApplied = 0;
 
-            sellerWiseSplit[sellerId].items.push(item);
+            sellerWiseSplit[sellerIdStr].items.push(item);
             const itemCost = Number(item.price) * Number(item.quantity);
-            sellerWiseSplit[sellerId].sellerSubtotal += itemCost;
+            sellerWiseSplit[sellerIdStr].sellerSubtotal += itemCost;
             totalProductAmount += itemCost;
         }
 
-        Object.values(sellerWiseSplit).forEach(split => { finalDeliveryCharge += split.deliveryChargeApplied; });
+        // மொத்த டெலிவரி சார்ஜைக் கணக்கிடுதல்
+        Object.values(sellerWiseSplit).forEach(split => { 
+            finalDeliveryCharge += split.deliveryChargeApplied; 
+        });
 
-        // 🌟 4. Final Order Object (No Wallet Debit here to avoid Double Debit)
+        // 🌟 4. ஆர்டரைச் சேமித்தல்
         const newOrder = new Order({
             customerId, 
             items, 
@@ -56,17 +63,17 @@ exports.createOrder = async (req, res) => {
             deliveryChargeApplied: finalDeliveryCharge,
             paymentMethod, 
             shippingAddress, 
-            status: 'Pending' 
+            status: 'Placed' 
         });
 
         await newOrder.save();
         res.status(201).json({ success: true, order: newOrder });
 
     } catch (err) { 
+        console.error("Order Creation Error:", err);
         res.status(500).json({ success: false, error: err.message }); 
     }
 };
-
 exports.updateOrderStatus = async (req, res) => {
     try {
         const { status } = req.body;
