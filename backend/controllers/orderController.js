@@ -3,16 +3,18 @@ const User = require('../models/User');
 const DeliveryCharge = require('../models/DeliveryCharge');
 const Payout = require('../models/Payout');
 const Seller = require("../models/Seller");
+
+// 🌟 1. CREATE ORDER (With Fixed Multi-Seller Logic)
 exports.createOrder = async (req, res) => {
     try {
         const { items, customerId, shippingAddress, paymentMethod } = req.body;
 
-        // 🌟 1. வாலிடியேஷன் (Validation)
+        // வாலிடியேஷன்
         if (!items || items.length === 0) return res.status(400).json({ success: false, message: "Cart is empty" });
         if (!shippingAddress?.pincode) return res.status(400).json({ success: false, message: "Pincode required" });
         if (!customerId) return res.status(400).json({ success: false, message: "Customer ID is required" });
 
-        // 🌟 2. டெலிவரி சார்ஜ் கணக்கீடு
+        // டெலிவரி சார்ஜ் அடிப்படை விலை
         const deliveryConfig = await DeliveryCharge.findOne({ pincode: shippingAddress.pincode });
         let baseDeliveryCharge = deliveryConfig ? deliveryConfig.charge : 40; 
 
@@ -21,8 +23,8 @@ exports.createOrder = async (req, res) => {
         let sellerWiseSplit = {};
 
         for (let item of items) {
-            // 🌟 3. செல்லர் ஐடி செக் (id அல்லது seller இரண்டையும் பார்த்தல்)
-            const actualSellerId = item.sellerId || item.seller;
+            // செல்லர் ஐடியை பல வழிகளில் தேடுதல்
+            const actualSellerId = item.sellerId || item.seller || item._doc?.seller;
             
             if (!actualSellerId) {
                 return res.status(400).json({ success: false, message: `Seller info missing for ${item.name}` });
@@ -30,6 +32,7 @@ exports.createOrder = async (req, res) => {
 
             const sellerIdStr = actualSellerId.toString();
             
+            // 🌟 திருத்தம்: செல்லர் ஏற்கனவே லிஸ்டில் இல்லையென்றால் மட்டும் டெலிவரி சார்ஜ் கூட்டப்படும்
             if (!sellerWiseSplit[sellerIdStr]) {
                 const seller = await Seller.findById(sellerIdStr);
                 sellerWiseSplit[sellerIdStr] = {
@@ -37,11 +40,16 @@ exports.createOrder = async (req, res) => {
                     shopName: seller?.shopName || "Zhopingo Store",
                     items: [],
                     sellerSubtotal: 0,
-                    deliveryChargeApplied: baseDeliveryCharge 
+                    deliveryChargeApplied: baseDeliveryCharge // ஒரு செல்லருக்கு ஒரு முறை மட்டுமே
                 };
+                finalDeliveryCharge += baseDeliveryCharge;
             }
 
-            if (item.isFreeDeliveryBySeller) sellerWiseSplit[sellerIdStr].deliveryChargeApplied = 0;
+            // இலவச டெலிவரி செக்
+            if (item.isFreeDeliveryBySeller) {
+                finalDeliveryCharge -= sellerWiseSplit[sellerIdStr].deliveryChargeApplied;
+                sellerWiseSplit[sellerIdStr].deliveryChargeApplied = 0;
+            }
 
             sellerWiseSplit[sellerIdStr].items.push(item);
             const itemCost = Number(item.price) * Number(item.quantity);
@@ -49,12 +57,6 @@ exports.createOrder = async (req, res) => {
             totalProductAmount += itemCost;
         }
 
-        // மொத்த டெலிவரி சார்ஜைக் கணக்கிடுதல்
-        Object.values(sellerWiseSplit).forEach(split => { 
-            finalDeliveryCharge += split.deliveryChargeApplied; 
-        });
-
-        // 🌟 4. ஆர்டரைச் சேமித்தல்
         const newOrder = new Order({
             customerId, 
             items, 
@@ -74,6 +76,8 @@ exports.createOrder = async (req, res) => {
         res.status(500).json({ success: false, error: err.message }); 
     }
 };
+
+// 🌟 2. UPDATE STATUS & PAYOUT GENERATION
 exports.updateOrderStatus = async (req, res) => {
     try {
         const { status } = req.body;
@@ -83,7 +87,6 @@ exports.updateOrderStatus = async (req, res) => {
 
         if (status === 'Delivered') {
             let adminCommPercent = 10; 
-            
             
             for (let split of order.sellerSplitData) {
                 let commission = (split.sellerSubtotal * adminCommPercent) / 100;
@@ -106,18 +109,22 @@ exports.updateOrderStatus = async (req, res) => {
     }
 };
 
-// 3. CANCEL ORDER & REFUND (Wallet-க்கு ரீஃபண்ட் செய்தல்)
+// 🌟 3. CANCEL ORDER & WALLET REFUND
 exports.cancelOrder = async (req, res) => {
     try {
         const order = await Order.findById(req.params.orderId);
         if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
+        // COD தவிர மற்ற पेमेंट முறைகளுக்கு ரீஃபண்ட்
         if (order.paymentMethod !== 'COD' && order.status !== 'Cancelled') {
             const user = await User.findById(order.customerId);
             if (user) {
                 user.walletBalance += order.totalAmount;
                 user.walletTransactions.unshift({ 
-                    amount: order.totalAmount, type: 'CREDIT', reason: `Refund for Order #${order._id}`, date: new Date() 
+                    amount: order.totalAmount, 
+                    type: 'CREDIT', 
+                    reason: `Refund for Order #${order._id}`, 
+                    date: new Date() 
                 });
                 await user.save();
             }
@@ -131,7 +138,7 @@ exports.cancelOrder = async (req, res) => {
     }
 };
 
-// 4. ADMIN & USER APIs
+// 🌟 4. GET APIS (Admin, User & Seller)
 exports.getOrders = async (req, res) => {
     try {
         const orders = await Order.find().populate('customerId', 'name phone').sort({ createdAt: -1 });
@@ -146,18 +153,13 @@ exports.getMyOrders = async (req, res) => {
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
-
 exports.getSellerOrders = async (req, res) => {
     try {
         const { sellerId } = req.params;
-      
         const orders = await Order.find({ 
             "sellerSplitData.sellerId": sellerId,
             status: { $ne: 'Pending' }
         }).sort({ createdAt: -1 });
-
         res.json({ success: true, data: orders });
-    } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
-    }
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
