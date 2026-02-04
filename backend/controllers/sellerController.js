@@ -59,8 +59,8 @@ exports.uploadKyc = async (req, res) => {
     if (!seller) return res.status(404).json({ success: false, message: "Seller with this email not found" });
 
     // 🌟 PAN மற்றும் GST ஆவணங்கள் + எண்கள் கட்டாயம்
-    if (!panNumber || !gstNumber || !req.files?.pan_doc || !req.files?.gst_doc) {
-      return res.status(400).json({ success: false, message: "PAN and GST documents/numbers are required" });
+    if (!panNumber || !gstNumber || !req.files?.pan_doc || !req.files?.gst_doc || !req.files?.msme_doc) {
+      return res.status(400).json({ success: false, message: "PAN, GST and MSME documents are required" });
     }
 
     seller.panNumber = panNumber;
@@ -79,6 +79,13 @@ exports.uploadKyc = async (req, res) => {
       seller.kycDocuments.gstDoc = {
         fileName: req.files.gst_doc[0].filename,
         fileUrl: `uploads/kyc/${req.files.gst_doc[0].filename}`
+      };
+    }
+   
+    if (req.files.msme_doc) {
+      seller.kycDocuments.msmeDoc = {
+        fileName: req.files.msme_doc[0].filename,
+        fileUrl: `uploads/kyc/${req.files.msme_doc[0].filename}`
       };
     }
 
