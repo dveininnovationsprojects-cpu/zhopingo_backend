@@ -251,17 +251,18 @@
 //     status: order.status
 //   });
 // };
+
 const axios = require("axios");
-const Payment = require("../models/Payment");
 const Order = require("../models/Order");
+const Payment = require("../models/Payment");
 const User = require("../models/User");
 
+const CF_BASE_URL = "https://sandbox.cashfree.com/pg";
 const CF_APP_ID = process.env.CF_APP_ID;
 const CF_SECRET = process.env.CF_SECRET;
-const CF_URL = "https://sandbox.cashfree.com/pg/orders";
 
 /* =====================================================
-   1️⃣ CREATE PAYMENT SESSION
+   CREATE PAYMENT SESSION
 ===================================================== */
 exports.createSession = async (req, res) => {
   try {
@@ -276,67 +277,40 @@ exports.createSession = async (req, res) => {
 
     const finalAmount = Math.round(Number(amount));
 
-    /* ---------- WALLET PAYMENT ---------- */
+    /* ---------- WALLET ---------- */
     if (paymentMethod === "WALLET") {
       const user = await User.findById(customerId);
-
       if (!user || user.walletBalance < finalAmount) {
-        return res.status(400).json({
-          success: false,
-          error: "Insufficient Wallet Balance"
-        });
+        return res.status(400).json({ success: false });
       }
 
       user.walletBalance -= finalAmount;
-      user.walletTransactions.unshift({
-        amount: finalAmount,
-        type: "DEBIT",
-        reason: `Paid for Order #${orderId}`,
-        date: new Date()
-      });
       await user.save();
 
       await Order.findByIdAndUpdate(orderId, { status: "Placed" });
 
       await Payment.create({
         orderId,
-        transactionId: `WAL-${Date.now()}`,
         amount: finalAmount,
-        status: "Success",
-        method: "WALLET"
+        method: "WALLET",
+        status: "SUCCESS"
       });
 
       return res.json({ success: true });
     }
 
-    /* ---------- ONLINE PAYMENT (CASHFREE) ---------- */
-    if (!CF_APP_ID || !CF_SECRET) {
-      return res.status(500).json({
-        success: false,
-        error: "Cashfree not configured"
-      });
-    }
-
-    const cfOrderId = `ORD_${orderId}_${Date.now()}`;
-
-    // 🔴 IMPORTANT: save cashfree order id
-    await Order.findByIdAndUpdate(orderId, {
-      cashfreeOrderId: cfOrderId
-    });
-
-    const response = await axios.post(
-      CF_URL,
+    /* ---------- ONLINE (CASHFREE) ---------- */
+    // 1️⃣ CREATE ORDER
+    const orderRes = await axios.post(
+      `${CF_BASE_URL}/orders`,
       {
-        order_id: cfOrderId,
+        order_id: `ORD_${orderId}_${Date.now()}`,
         order_amount: finalAmount,
         order_currency: "INR",
         customer_details: {
-          customer_id: customerId.toString(),
+          customer_id: customerId,
           customer_phone: customerPhone,
-          customer_name: customerName || "Zhopingo User"
-        },
-        order_meta: {
-          notify_url: "http://54.157.210.26/api/v1/payments/webhook"
+          customer_name: customerName
         }
       },
       {
@@ -349,21 +323,36 @@ exports.createSession = async (req, res) => {
       }
     );
 
-    if (!response?.data?.payment_link) {
-      return res.status(500).json({
-        success: false,
-        error: "Failed to create payment link"
-      });
+    const orderToken = orderRes.data.order_token;
+    if (!orderToken) {
+      return res.status(500).json({ success: false });
     }
+
+    // 2️⃣ CREATE PAYMENT LINK
+    const linkRes = await axios.post(
+      `${CF_BASE_URL}/links`,
+      {
+        order_token: orderToken,
+        link_purpose: "Zhopingo Order Payment"
+      },
+      {
+        headers: {
+          "x-client-id": CF_APP_ID,
+          "x-client-secret": CF_SECRET,
+          "x-api-version": "2023-08-01",
+          "Content-Type": "application/json"
+        }
+      }
+    );
 
     return res.json({
       success: true,
-      payment_url: response.data.payment_link
+      payment_url: linkRes.data.link_url
     });
 
   } catch (err) {
-    console.error("PAYMENT ERROR:", err.response?.data || err.message);
-    return res.status(500).json({
+    console.error("CASHFREE ERROR:", err.response?.data || err.message);
+    res.status(500).json({
       success: false,
       error: "Payment Gateway Error"
     });
@@ -371,46 +360,15 @@ exports.createSession = async (req, res) => {
 };
 
 /* =====================================================
-   2️⃣ PAYMENT STATUS (APP POLLING)
+   PAYMENT STATUS (APP POLLING)
 ===================================================== */
 exports.getPaymentStatus = async (req, res) => {
-  try {
-    const order = await Order.findById(req.params.orderId);
+  const order = await Order.findById(req.params.orderId);
+  if (!order) return res.status(404).json({ success: false });
 
-    if (!order) {
-      return res.status(404).json({ success: false });
-    }
-
-    return res.json({
-      success: true,
-      status: order.status
-    });
-  } catch (err) {
-    return res.status(500).json({ success: false });
-  }
+  res.json({
+    success: true,
+    status: order.status
+  });
 };
 
-/* =====================================================
-   3️⃣ CASHFREE WEBHOOK (FINAL)
-===================================================== */
-exports.cashfreeWebhook = async (req, res) => {
-  try {
-    const { order_id, order_status } = req.body?.data || {};
-
-    if (!order_id) {
-      return res.status(400).send("Invalid webhook");
-    }
-
-    if (order_status === "PAID") {
-      await Order.findOneAndUpdate(
-        { cashfreeOrderId: order_id },
-        { status: "Placed" }
-      );
-    }
-
-    return res.status(200).send("OK");
-  } catch (err) {
-    console.error("WEBHOOK ERROR:", err.message);
-    return res.status(500).send("Webhook Error");
-  }
-};
