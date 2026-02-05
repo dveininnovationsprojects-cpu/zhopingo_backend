@@ -555,21 +555,23 @@ exports.createSession = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
-
-/* =====================================================
-   VERIFY PAYMENT STATUS (AFTER PAYMENT)
-===================================================== */
 exports.verifyPayment = async (req, res) => {
   try {
-    const { orderId } = req.params;
+    const cfOrderId = req.params.orderId;
 
-    const payment = await Payment.findOne({ orderId });
+    const payment = await Payment.findOne({
+      transactionId: cfOrderId
+    });
+
     if (!payment) {
-      return res.status(404).json({ success: false, message: "Payment not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Payment not found"
+      });
     }
 
     const response = await axios.get(
-      `${CF_BASE_URL}/orders/${payment.transactionId}`,
+      `${CF_BASE_URL}/orders/${cfOrderId}`,
       {
         headers: {
           "x-client-id": CF_APP_ID,
@@ -579,32 +581,41 @@ exports.verifyPayment = async (req, res) => {
       }
     );
 
-    const orderStatus = response.data.order_status;
-
-    if (orderStatus === "PAID") {
+    if (response.data.order_status === "PAID") {
       payment.status = "SUCCESS";
       payment.rawResponse = response.data;
       await payment.save();
 
-      await Order.findByIdAndUpdate(orderId, { status: "Placed" });
+      await Order.findByIdAndUpdate(payment.orderId, {
+        status: "Placed"
+      });
 
       return res.json({
         success: true,
-        status: "Placed"
+        message: "Payment successful, Order Placed"
       });
     }
 
-    if (orderStatus === "FAILED") {
+    if (response.data.order_status === "FAILED") {
       payment.status = "FAILED";
       await payment.save();
 
-      return res.json({ success: false, status: "Failed" });
+      return res.json({
+        success: false,
+        message: "Payment failed"
+      });
     }
 
-    res.json({ success: true, status: "Pending" });
+    return res.json({
+      success: true,
+      message: "Payment pending"
+    });
 
   } catch (err) {
-    console.error("VERIFY ERROR:", err.response?.data || err.message);
-    res.status(500).json({ success: false, error: err.message });
+    console.error("VERIFY ERROR:", err.message);
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
   }
 };
