@@ -12,6 +12,40 @@ router.get('/similar/:id', productCtrl.getSimilarProducts);
 // Protected Routes (Seller Dashboard)
 router.get('/my-products', protect, productCtrl.getMyProducts);
 router.post('/add', protect, upload.fields([
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    
     { name: 'images', maxCount: 5 },
     { name: 'video', maxCount: 1 }
 ]), productCtrl.createProduct);
