@@ -251,19 +251,16 @@
 //     status: order.status
 //   });
 // };
-
 const axios = require("axios");
-const Order = require("../models/Order");
 const Payment = require("../models/Payment");
+const Order = require("../models/Order");
 const User = require("../models/User");
 
-const CF_BASE_URL = "https://sandbox.cashfree.com/pg";
 const CF_APP_ID = process.env.CF_APP_ID;
 const CF_SECRET = process.env.CF_SECRET;
+const CF_URL = "https://sandbox.cashfree.com/pg/orders";
 
-/* =====================================================
-   CREATE PAYMENT SESSION
-===================================================== */
+/* ================= CREATE PAYMENT SESSION ================= */
 exports.createSession = async (req, res) => {
   try {
     const {
@@ -280,6 +277,7 @@ exports.createSession = async (req, res) => {
     /* ---------- WALLET ---------- */
     if (paymentMethod === "WALLET") {
       const user = await User.findById(customerId);
+
       if (!user || user.walletBalance < finalAmount) {
         return res.status(400).json({ success: false });
       }
@@ -300,40 +298,23 @@ exports.createSession = async (req, res) => {
     }
 
     /* ---------- ONLINE (CASHFREE) ---------- */
-    // 1️⃣ CREATE ORDER
-    const orderRes = await axios.post(
-      `${CF_BASE_URL}/orders`,
+    const cfOrderId = `ORD_${orderId}_${Date.now()}`;
+
+    const response = await axios.post(
+      CF_URL,
       {
-        order_id: `ORD_${orderId}_${Date.now()}`,
+        order_id: cfOrderId,
         order_amount: finalAmount,
         order_currency: "INR",
         customer_details: {
           customer_id: customerId,
           customer_phone: customerPhone,
-          customer_name: customerName
+          customer_name: customerName || "Zhopingo User"
+        },
+        order_meta: {
+          // ✅ THIS IS THE FIX
+          return_url: "http://54.157.210.26/payment-success"
         }
-      },
-      {
-        headers: {
-          "x-client-id": CF_APP_ID,
-          "x-client-secret": CF_SECRET,
-          "x-api-version": "2023-08-01",
-          "Content-Type": "application/json"
-        }
-      }
-    );
-
-    const orderToken = orderRes.data.order_token;
-    if (!orderToken) {
-      return res.status(500).json({ success: false });
-    }
-
-    // 2️⃣ CREATE PAYMENT LINK
-    const linkRes = await axios.post(
-      `${CF_BASE_URL}/links`,
-      {
-        order_token: orderToken,
-        link_purpose: "Zhopingo Order Payment"
       },
       {
         headers: {
@@ -347,28 +328,19 @@ exports.createSession = async (req, res) => {
 
     return res.json({
       success: true,
-      payment_url: linkRes.data.link_url
+      payment_url: response.data.payment_link
     });
 
   } catch (err) {
     console.error("CASHFREE ERROR:", err.response?.data || err.message);
-    res.status(500).json({
-      success: false,
-      error: "Payment Gateway Error"
-    });
+    return res.status(500).json({ success: false });
   }
 };
 
-/* =====================================================
-   PAYMENT STATUS (APP POLLING)
-===================================================== */
+/* ================= PAYMENT STATUS ================= */
 exports.getPaymentStatus = async (req, res) => {
   const order = await Order.findById(req.params.orderId);
   if (!order) return res.status(404).json({ success: false });
 
-  res.json({
-    success: true,
-    status: order.status
-  });
+  res.json({ success: true, status: order.status });
 };
-
