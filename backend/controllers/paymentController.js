@@ -252,68 +252,36 @@
 //   });
 // };const axios = require("axios");
 
-
+const axios = require("axios");
 const Order = require("../models/Order");
-const User = require("../models/User");
 const Payment = require("../models/Payment");
 
 const CF_APP_ID = process.env.CF_APP_ID;
 const CF_SECRET = process.env.CF_SECRET;
-const CF_BASE_URL = process.env.CF_BASE_URL;
+const CF_BASE_URL = "https://sandbox.cashfree.com/pg";
 
-/* =====================================================
-   CREATE PAYMENT SESSION
-===================================================== */
 exports.createSession = async (req, res) => {
   try {
-    const {
-      orderId,
-      amount,
-      customerId,
-      customerPhone,
-      customerName,
-      paymentMethod
-    } = req.body;
+    const { orderId, amount, customerId, customerPhone, customerName } = req.body;
 
-    const finalAmount = Math.round(Number(amount));
+    const order = await Order.findById(orderId);
+    if (!order) return res.status(404).json({ success: false });
 
-    /* ---------- WALLET ---------- */
-    if (paymentMethod === "WALLET") {
-      const user = await User.findById(customerId);
+    const cfOrderId = `CF_${orderId}_${Date.now()}`;
 
-      if (!user || user.walletBalance < finalAmount) {
-        return res.status(400).json({
-          success: false,
-          message: "Insufficient wallet balance"
-        });
-      }
-
-      user.walletBalance -= finalAmount;
-      await user.save();
-
-      await Order.findByIdAndUpdate(orderId, { status: "Placed" });
-
-      await Payment.create({
-        orderId,
-        amount: finalAmount,
-        method: "WALLET",
-        status: "SUCCESS"
-      });
-
-      return res.json({ success: true });
-    }
-
-    /* ---------- ONLINE (CASHFREE) ---------- */
     const response = await axios.post(
       `${CF_BASE_URL}/orders`,
       {
-        order_id: `CF_${orderId}_${Date.now()}`,
-        order_amount: finalAmount,
+        order_id: cfOrderId,
+        order_amount: amount,
         order_currency: "INR",
         customer_details: {
           customer_id: customerId,
           customer_phone: customerPhone,
           customer_name: customerName || "Customer"
+        },
+        order_meta: {
+          return_url: "https://example.com/payment-success"
         }
       },
       {
@@ -326,7 +294,15 @@ exports.createSession = async (req, res) => {
       }
     );
 
-    return res.json({
+    await Payment.create({
+      orderId,
+      cfOrderId,
+      amount,
+      method: "ONLINE",
+      status: "PENDING"
+    });
+
+    res.json({
       success: true,
       payment_url: response.data.payment_link
     });
@@ -337,15 +313,13 @@ exports.createSession = async (req, res) => {
   }
 };
 
-/* =====================================================
-   CHECK PAYMENT STATUS (POLLING)
-===================================================== */
 exports.checkPaymentStatus = async (req, res) => {
   try {
-    const { orderId, cfOrderId } = req.query;
+    const payment = await Payment.findOne({ orderId: req.params.orderId });
+    if (!payment) return res.json({ success: false });
 
     const response = await axios.get(
-      `${CF_BASE_URL}/orders/${cfOrderId}`,
+      `${CF_BASE_URL}/orders/${payment.cfOrderId}`,
       {
         headers: {
           "x-client-id": CF_APP_ID,
@@ -356,14 +330,10 @@ exports.checkPaymentStatus = async (req, res) => {
     );
 
     if (response.data.order_status === "PAID") {
-      await Order.findByIdAndUpdate(orderId, { status: "Placed" });
+      payment.status = "SUCCESS";
+      await payment.save();
 
-      await Payment.create({
-        orderId,
-        amount: response.data.order_amount,
-        method: "ONLINE",
-        status: "SUCCESS"
-      });
+      await Order.findByIdAndUpdate(payment.orderId, { status: "Placed" });
 
       return res.json({ success: true, status: "Placed" });
     }

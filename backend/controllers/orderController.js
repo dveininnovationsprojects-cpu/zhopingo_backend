@@ -413,24 +413,18 @@ exports.getMyOrders = async (req, res) => {
   res.json({ success: true, data: orders });
 };
 
-exports.getMyOrders = async (req, res) => {
+exports.getSellerOrders = async (req, res) => {
   try {
-    const orders = await Order.find({
-      customerId: req.params.userId,
-      status: { $ne: 'Pending' } // ❗ pending hide
-    })
-    .sort({ createdAt: -1 })
-    .lean();
+    const { sellerId } = req.params;
 
-    res.json({
-      success: true,
-      data: orders
-    });
+    const orders = await Order.find({
+      "sellerSplitData.sellerId": sellerId,
+      status: { $ne: 'Pending' }
+    }).sort({ createdAt: -1 });
+
+    res.json({ success: true, data: orders });
+
   } catch (err) {
-    res.status(500).json({
-      success: false,
-      error: err.message
-    });
+    res.status(500).json({ success: false, error: err.message });
   }
 };
-
