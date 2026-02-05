@@ -252,13 +252,138 @@
 //   });
 // };const axios = require("axios");
 
+// const axios = require("axios");
+// const Order = require("../models/Order");
+// const Payment = require("../models/Payment");
+
+// const CF_APP_ID = process.env.CF_APP_ID;
+// const CF_SECRET = process.env.CF_SECRET;
+// const CF_BASE_URL = "https://sandbox.cashfree.com/pg";
+
+// exports.createSession = async (req, res) => {
+//   try {
+//     const {
+//       orderId,
+//       amount,
+//       customerId,
+//       customerPhone,
+//       customerName,
+//       paymentMethod
+//     } = req.body;
+
+//     const finalAmount = Math.round(Number(amount));
+
+//     /* ---------- WALLET ---------- */
+//     if (paymentMethod === "WALLET") {
+//       const user = await User.findById(customerId);
+
+//       if (!user || user.walletBalance < finalAmount) {
+//         return res.status(400).json({
+//           success: false,
+//           message: "Insufficient wallet balance"
+//         });
+//       }
+
+//       user.walletBalance -= finalAmount;
+//       await user.save();
+
+//       await Order.findByIdAndUpdate(orderId, { status: "Placed" });
+
+//       await Payment.create({
+//         orderId,
+//         amount: finalAmount,
+//         method: "WALLET",
+//         status: "SUCCESS"
+//       });
+
+//       return res.json({ success: true });
+//     }
+
+//     /* ---------- ONLINE (CASHFREE) ---------- */
+
+//     // 🔥 FIXED VALUES
+//     const cfOrderId = `CF${Date.now()}`; // < 32 chars
+//     const cleanPhone = customerPhone.replace(/\D/g, "").slice(-10);
+
+//     const response = await axios.post(
+//   `${CF_BASE_URL}/orders`,
+//   {
+//     order_id: cfOrderId,
+//     order_amount: finalAmount,
+//     order_currency: "INR",
+//     customer_details: {
+//       customer_id: customerId,
+//       customer_phone: cleanPhone,
+//       customer_name: customerName || "Customer"
+//     }
+//   },
+//   {
+//     headers: {
+//       "x-client-id": CF_APP_ID,
+//       "x-client-secret": CF_SECRET,
+//       "x-api-version": "2023-08-01",
+//       "Content-Type": "application/json"
+//     }
+//   }
+// );
+
+
+//     return res.json({
+//       success: true,
+//       payment_url: response.data.payment_link,
+//       cfOrderId
+//     });
+
+//   } catch (err) {
+//     console.error("PAYMENT ERROR:", err.response?.data || err.message);
+//     res.status(500).json({
+//       success: false,
+//       error: err.response?.data || err.message
+//     });
+//   }
+// };
+
+// exports.checkPaymentStatus = async (req, res) => {
+//   try {
+//     const payment = await Payment.findOne({ orderId: req.params.orderId });
+//     if (!payment) return res.json({ success: false });
+
+//     const response = await axios.get(
+//       `${CF_BASE_URL}/orders/${payment.cfOrderId}`,
+//       {
+//         headers: {
+//           "x-client-id": CF_APP_ID,
+//           "x-client-secret": CF_SECRET,
+//           "x-api-version": "2023-08-01"
+//         }
+//       }
+//     );
+
+//     if (response.data.order_status === "PAID") {
+//       payment.status = "SUCCESS";
+//       await payment.save();
+
+//       await Order.findByIdAndUpdate(payment.orderId, { status: "Placed" });
+
+//       return res.json({ success: true, status: "Placed" });
+//     }
+
+//     return res.json({ success: true, status: "Pending" });
+
+//   } catch (err) {
+//     res.status(500).json({ success: false });
+//   }
+// };
+
+
 const axios = require("axios");
 const Order = require("../models/Order");
 const Payment = require("../models/Payment");
+const User = require("../models/User");
 
+const CF_BASE_URL = "https://sandbox.cashfree.com/pg";
 const CF_APP_ID = process.env.CF_APP_ID;
 const CF_SECRET = process.env.CF_SECRET;
-const CF_BASE_URL = "https://sandbox.cashfree.com/pg";
 
 exports.createSession = async (req, res) => {
   try {
@@ -273,16 +398,11 @@ exports.createSession = async (req, res) => {
 
     const finalAmount = Math.round(Number(amount));
 
-    /* ---------- WALLET ---------- */
+    // 🔹 WALLET
     if (paymentMethod === "WALLET") {
       const user = await User.findById(customerId);
-
-      if (!user || user.walletBalance < finalAmount) {
-        return res.status(400).json({
-          success: false,
-          message: "Insufficient wallet balance"
-        });
-      }
+      if (!user || user.walletBalance < finalAmount)
+        return res.status(400).json({ success: false });
 
       user.walletBalance -= finalAmount;
       await user.save();
@@ -299,47 +419,44 @@ exports.createSession = async (req, res) => {
       return res.json({ success: true });
     }
 
-    /* ---------- ONLINE (CASHFREE) ---------- */
-
-    // 🔥 FIXED VALUES
-    const cfOrderId = `CF${Date.now()}`; // < 32 chars
+    // 🔹 ONLINE (CASHFREE)
+    const cfOrderId = `CF${Date.now()}`;
     const cleanPhone = customerPhone.replace(/\D/g, "").slice(-10);
 
-    const response = await axios.post(
-  `${CF_BASE_URL}/orders`,
-  {
-    order_id: cfOrderId,
-    order_amount: finalAmount,
-    order_currency: "INR",
-    customer_details: {
-      customer_id: customerId,
-      customer_phone: cleanPhone,
-      customer_name: customerName || "Customer"
-    }
-  },
-  {
-    headers: {
-      "x-client-id": CF_APP_ID,
-      "x-client-secret": CF_SECRET,
-      "x-api-version": "2023-08-01",
-      "Content-Type": "application/json"
-    }
-  }
-);
+    await axios.post(
+      `${CF_BASE_URL}/orders`,
+      {
+        order_id: cfOrderId,
+        order_amount: finalAmount,
+        order_currency: "INR",
+        customer_details: {
+          customer_id: customerId,
+          customer_phone: cleanPhone,
+          customer_name: customerName || "Customer"
+        }
+      },
+      {
+        headers: {
+          "x-client-id": CF_APP_ID,
+          "x-client-secret": CF_SECRET,
+          "x-api-version": "2023-08-01",
+          "Content-Type": "application/json"
+        }
+      }
+    );
 
-
-    return res.json({
-      success: true,
-      payment_url: response.data.payment_link,
-      cfOrderId
+    // 🔥 THIS WAS YOUR BIGGEST BUG (NOW FIXED)
+    await Payment.create({
+      orderId,
+      cfOrderId,
+      amount: finalAmount,
+      method: "ONLINE",
+      status: "PENDING"
     });
 
+    res.json({ success: true, cfOrderId });
   } catch (err) {
-    console.error("PAYMENT ERROR:", err.response?.data || err.message);
-    res.status(500).json({
-      success: false,
-      error: err.response?.data || err.message
-    });
+    res.status(500).json({ success: false, error: err.message });
   }
 };
 
@@ -368,9 +485,8 @@ exports.checkPaymentStatus = async (req, res) => {
       return res.json({ success: true, status: "Placed" });
     }
 
-    return res.json({ success: true, status: "Pending" });
-
-  } catch (err) {
+    res.json({ success: true, status: "Pending" });
+  } catch {
     res.status(500).json({ success: false });
   }
 };
