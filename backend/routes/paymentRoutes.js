@@ -1,10 +1,10 @@
-const router = require("express").Router();
-const {
-  createSession,
-  checkPaymentStatus
-} = require("../controllers/paymentController");
+const express = require("express");
+const router = express.Router();
 
-router.post("/create-session", createSession);
-router.get("/status/:orderId", checkPaymentStatus);
+const paymentController = require("../controllers/paymentController");
+
+// 🔥 IMPORTANT: controller object-la iruka function names
+router.post("/create-session", paymentController.createSession);
+router.get("/verify/:orderId", paymentController.verifyPayment);
 
 module.exports = router;
