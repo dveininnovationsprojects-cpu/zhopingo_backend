@@ -48,12 +48,11 @@ exports.createProduct = async (req, res) => {
     }
 };
 // 🌟 GET ALL PRODUCTS (Customer View)
-// 🌟 2. GET ALL PRODUCTS (முழுமையான 5000+ தயாரிப்புகளை எடுக்கும்)
 exports.getAllProducts = async (req, res) => {
     try {
         const { category, subCategory, search } = req.query;
         
-        // 🌟 திருத்தம்: isArchived 'true' இல்லாத அனைத்தையும் எடுக்கும் (சீட் டேட்டாவையும் சேர்த்து)
+        // 🌟 திருத்தம் 1: isArchived ஃபீல்டு இல்லாத டாக்குமெண்ட்களையும் எடுக்கும்படி மாற்றுதல்
         let query = { isArchived: { $ne: true } }; 
 
         if (category) query.category = category;
@@ -71,13 +70,25 @@ exports.getAllProducts = async (req, res) => {
             const doc = p._doc;
             return {
                 ...doc,
-                images: doc.images ? doc.images.map(img => formatMediaUrl(img, baseUrl)) : [],
-                video: formatMediaUrl(doc.video, baseUrl)
+                // 🌟 திருத்தம் 2: மேனுவல் அப்லோடு மற்றும் CDN இமேஜ் இரண்டையும் ஆதரித்தல்
+                images: doc.images ? doc.images.map(img => 
+                    (img && (img.startsWith('http') || img.startsWith('https'))) ? img : baseUrl + img
+                ) : [],
+                video: doc.video ? 
+                    ((doc.video.startsWith('http') || doc.video.startsWith('https')) ? doc.video : baseUrl + doc.video) 
+                    : ""
             };
         });
 
-        res.json({ success: true, count: data.length, data: data });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+        // 🌟 count சரியாக வருகிறதா எனப் பார்க்க
+        res.json({ 
+            success: true, 
+            count: data.length, 
+            data: data 
+        });
+    } catch (err) { 
+        res.status(500).json({ success: false, error: err.message }); 
+    }
 };
 
 // 🌟 3. GET PRODUCT BY ID (Detailed View)
@@ -92,38 +103,37 @@ exports.getProductById = async (req, res) => {
         const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
         const updatedProduct = {
             ...product._doc,
-            images: product.images ? product.images.map(img => formatMediaUrl(img, baseUrl)) : [],
-            video: formatMediaUrl(product.video, baseUrl)
+            images: product.images.map(img => baseUrl + img),
+            video: product.video ? baseUrl + product.video : ""
         };
 
         res.status(200).json({ success: true, data: updatedProduct });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
-// 🌟 4. GET MY PRODUCTS (Seller Dashboard)
+// 🌟 4. GET MY PRODUCTS (Seller View Only)
 exports.getMyProducts = async (req, res) => {
     try {
-        const products = await Product.find({ seller: req.user.id, isArchived: { $ne: true } })
+        const products = await Product.find({ seller: req.user.id, isArchived: false })
             .populate('category subCategory');
         res.json({ success: true, data: products });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
-// 🌟 5. GET SIMILAR PRODUCTS (ரேண்டம் தயாரிப்புகளுடன்)
+// 🌟 5. GET SIMILAR PRODUCTS
 exports.getSimilarProducts = async (req, res) => {
     try {
         const { category } = req.query;
-        let query = { isArchived: { $ne: true }, _id: { $ne: req.params.id } };
-
-        // கேட்டகிரி இருந்தால் அதே கேட்டகிரி, இல்லையென்றால் ரேண்டம் தயாரிப்புகள்
-        if (category) query.category = category;
-
-        const products = await Product.find(query).limit(10).sort({ createdAt: -1 });
+        const products = await Product.find({ 
+            category: category, 
+            _id: { $ne: req.params.id },
+            isArchived: false 
+        }).limit(10).sort({ createdAt: -1 });
 
         const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
         const data = products.map(p => ({
             ...p._doc,
-            images: p.images ? p.images.map(img => formatMediaUrl(img, baseUrl)) : []
+            images: p.images.map(img => baseUrl + img)
         }));
 
         res.json({ success: true, data });
