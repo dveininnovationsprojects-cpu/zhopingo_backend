@@ -405,16 +405,12 @@ exports.getOrders = async (req, res) => {
 };
 
 exports.getMyOrders = async (req, res) => {
-  try {
-    const orders = await Order.find({
-      customerId: req.params.userId
-    }).sort({ createdAt: -1 });
+  const orders = await Order.find({
+    customerId: req.params.userId,
+    status: { $ne: "Pending" }   // 🔥 IMPORTANT
+  }).sort({ createdAt: -1 });
 
-    res.json({ success: true, data: orders });
-
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
+  res.json({ success: true, data: orders });
 };
 
 exports.getMyOrders = async (req, res) => {

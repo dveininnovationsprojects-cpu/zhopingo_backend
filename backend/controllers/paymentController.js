@@ -250,17 +250,20 @@
 //     success: true,
 //     status: order.status
 //   });
-// };
-const axios = require("axios");
-const Payment = require("../models/Payment");
+// };const axios = require("axios");
+
+
 const Order = require("../models/Order");
 const User = require("../models/User");
+const Payment = require("../models/Payment");
 
 const CF_APP_ID = process.env.CF_APP_ID;
 const CF_SECRET = process.env.CF_SECRET;
-const CF_URL = "https://sandbox.cashfree.com/pg/orders";
+const CF_BASE_URL = process.env.CF_BASE_URL;
 
-/* ================= CREATE PAYMENT SESSION ================= */
+/* =====================================================
+   CREATE PAYMENT SESSION
+===================================================== */
 exports.createSession = async (req, res) => {
   try {
     const {
@@ -279,7 +282,10 @@ exports.createSession = async (req, res) => {
       const user = await User.findById(customerId);
 
       if (!user || user.walletBalance < finalAmount) {
-        return res.status(400).json({ success: false });
+        return res.status(400).json({
+          success: false,
+          message: "Insufficient wallet balance"
+        });
       }
 
       user.walletBalance -= finalAmount;
@@ -298,22 +304,16 @@ exports.createSession = async (req, res) => {
     }
 
     /* ---------- ONLINE (CASHFREE) ---------- */
-    const cfOrderId = `ORD_${orderId}_${Date.now()}`;
-
     const response = await axios.post(
-      CF_URL,
+      `${CF_BASE_URL}/orders`,
       {
-        order_id: cfOrderId,
+        order_id: `CF_${orderId}_${Date.now()}`,
         order_amount: finalAmount,
         order_currency: "INR",
         customer_details: {
           customer_id: customerId,
           customer_phone: customerPhone,
-          customer_name: customerName || "Zhopingo User"
-        },
-        order_meta: {
-          // ✅ THIS IS THE FIX
-          return_url: "http://54.157.210.26/payment-success"
+          customer_name: customerName || "Customer"
         }
       },
       {
@@ -332,15 +332,45 @@ exports.createSession = async (req, res) => {
     });
 
   } catch (err) {
-    console.error("CASHFREE ERROR:", err.response?.data || err.message);
-    return res.status(500).json({ success: false });
+    console.error("PAYMENT ERROR:", err.response?.data || err.message);
+    res.status(500).json({ success: false });
   }
 };
 
-/* ================= PAYMENT STATUS ================= */
-exports.getPaymentStatus = async (req, res) => {
-  const order = await Order.findById(req.params.orderId);
-  if (!order) return res.status(404).json({ success: false });
+/* =====================================================
+   CHECK PAYMENT STATUS (POLLING)
+===================================================== */
+exports.checkPaymentStatus = async (req, res) => {
+  try {
+    const { orderId, cfOrderId } = req.query;
 
-  res.json({ success: true, status: order.status });
+    const response = await axios.get(
+      `${CF_BASE_URL}/orders/${cfOrderId}`,
+      {
+        headers: {
+          "x-client-id": CF_APP_ID,
+          "x-client-secret": CF_SECRET,
+          "x-api-version": "2023-08-01"
+        }
+      }
+    );
+
+    if (response.data.order_status === "PAID") {
+      await Order.findByIdAndUpdate(orderId, { status: "Placed" });
+
+      await Payment.create({
+        orderId,
+        amount: response.data.order_amount,
+        method: "ONLINE",
+        status: "SUCCESS"
+      });
+
+      return res.json({ success: true, status: "Placed" });
+    }
+
+    return res.json({ success: true, status: "Pending" });
+
+  } catch (err) {
+    res.status(500).json({ success: false });
+  }
 };
