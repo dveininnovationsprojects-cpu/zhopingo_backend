@@ -251,7 +251,6 @@
 //     status: order.status
 //   });
 // };
-
 const axios = require("axios");
 const Payment = require("../models/Payment");
 const Order = require("../models/Order");
@@ -320,6 +319,11 @@ exports.createSession = async (req, res) => {
 
     const cfOrderId = `ORD_${orderId}_${Date.now()}`;
 
+    // 🔴 IMPORTANT: save cashfree order id
+    await Order.findByIdAndUpdate(orderId, {
+      cashfreeOrderId: cfOrderId
+    });
+
     const response = await axios.post(
       CF_URL,
       {
@@ -330,8 +334,10 @@ exports.createSession = async (req, res) => {
           customer_id: customerId.toString(),
           customer_phone: customerPhone,
           customer_name: customerName || "Zhopingo User"
+        },
+        order_meta: {
+          notify_url: "http://54.157.210.26/api/v1/payments/webhook"
         }
-        // ❌ NO return_url (HTTP problem avoided)
       },
       {
         headers: {
@@ -365,7 +371,7 @@ exports.createSession = async (req, res) => {
 };
 
 /* =====================================================
-   2️⃣ CHECK PAYMENT STATUS (APP POLLING)
+   2️⃣ PAYMENT STATUS (APP POLLING)
 ===================================================== */
 exports.getPaymentStatus = async (req, res) => {
   try {
@@ -381,5 +387,30 @@ exports.getPaymentStatus = async (req, res) => {
     });
   } catch (err) {
     return res.status(500).json({ success: false });
+  }
+};
+
+/* =====================================================
+   3️⃣ CASHFREE WEBHOOK (FINAL)
+===================================================== */
+exports.cashfreeWebhook = async (req, res) => {
+  try {
+    const { order_id, order_status } = req.body?.data || {};
+
+    if (!order_id) {
+      return res.status(400).send("Invalid webhook");
+    }
+
+    if (order_status === "PAID") {
+      await Order.findOneAndUpdate(
+        { cashfreeOrderId: order_id },
+        { status: "Placed" }
+      );
+    }
+
+    return res.status(200).send("OK");
+  } catch (err) {
+    console.error("WEBHOOK ERROR:", err.message);
+    return res.status(500).send("Webhook Error");
   }
 };

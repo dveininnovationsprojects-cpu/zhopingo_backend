@@ -1,8 +1,16 @@
 const express = require("express");
 const router = express.Router();
-const paymentCtrl = require("../controllers/paymentController");
 
-router.post("/create-session", paymentCtrl.createSession);
-router.get("/status/:orderId", paymentCtrl.getPaymentStatus);
+const {
+  createSession,
+  getPaymentStatus,
+  cashfreeWebhook
+} = require("../controllers/paymentController");
+
+router.post("/create-session", createSession);
+router.get("/status/:orderId", getPaymentStatus);
+
+// 🔥 CASHFREE WEBHOOK
+router.post("/webhook", cashfreeWebhook);
 
 module.exports = router;
