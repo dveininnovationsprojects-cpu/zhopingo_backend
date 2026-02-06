@@ -270,14 +270,30 @@ exports.getProductById = async (req, res) => {
 
 exports.getMyProducts = async (req, res) => {
     try {
-        
+        // 1. செல்லர் ஐடியை வைத்து தயாரிப்புகளை எடுத்தல்
         const products = await Product.find({ 
             seller: req.user.id, 
             isArchived: { $ne: true } 
         }).populate('category subCategory');
 
-       
-        const data = products.map(p => formatProductMedia(p, req));
+        // 2. பேஸ் URL (Base URL) உருவாக்குதல்
+        const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
+
+        // 3. ஒவ்வொரு தயாரிப்பிற்கும் இமேஜ் மற்றும் வீடியோ URL-ஐ மேனுவலாக இணைத்தல்
+        const data = products.map(p => {
+            const doc = p._doc; // மங்கூஸ் டாக்குமெண்டில் இருந்து டேட்டாவை எடுத்தல்
+            return {
+                ...doc,
+                // இமேஜ்களை URL உடன் இணைத்தல்
+                images: doc.images ? doc.images.map(img => 
+                    (img && (img.startsWith('http') || img.startsWith('https'))) ? img : baseUrl + img
+                ) : [],
+                // வீடியோவை URL உடன் இணைத்தல்
+                video: doc.video ? 
+                    ((doc.video.startsWith('http') || doc.video.startsWith('https')) ? doc.video : baseUrl + doc.video) 
+                    : ""
+            };
+        });
 
         res.json({ 
             success: true, 
