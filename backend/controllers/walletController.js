@@ -157,3 +157,100 @@ exports.adminUpdateWallet = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
+
+
+// const axios = require("axios");
+// const Order = require("../models/Order");
+// const Payment = require("../models/Payment");
+
+// const CF_BASE_URL = "https://sandbox.cashfree.com/pg"; // Live-க்கு மாறும்போது இதை மாற்றவும்
+// const CF_APP_ID = process.env.CF_APP_ID;
+// const CF_SECRET = process.env.CF_SECRET;
+
+// /* =====================================================
+//     1. CREATE SESSION (பாதுகாப்பான முறை)
+// ===================================================== */
+// exports.createSession = async (req, res) => {
+//   try {
+//     const { orderId, amount, customerId, customerPhone, customerName } = req.body;
+
+//     const order = await Order.findById(orderId);
+//     if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+
+//     const cfOrderId = `CF_${orderId}_${Date.now()}`;
+
+//     const response = await axios.post(`${CF_BASE_URL}/orders`,
+//       {
+//         order_id: cfOrderId,
+//         order_amount: amount,
+//         order_currency: "INR",
+//         customer_details: {
+//           customer_id: customerId.toString(),
+//           customer_phone: customerPhone,
+//           customer_name: customerName || "Customer"
+//         }
+//       },
+//       {
+//         headers: {
+//           "x-client-id": CF_APP_ID,
+//           "x-client-secret": CF_SECRET,
+//           "x-api-version": "2023-08-01",
+//           "Content-Type": "application/json"
+//         }
+//       }
+//     );
+
+//     // 🌟 1. இங்கே 'PENDING' என்று மட்டுமே சேமிக்கிறோம் (டூப்ளிகேட் தவிர்க்க)
+//     await Payment.create({
+//       orderId,
+//       transactionId: cfOrderId,
+//       amount,
+//       status: "PENDING", 
+//     });
+
+//     // 🌟 2. உங்கள் ஆப்பிற்குத் தேவையான 'payment_session_id' இதோ!
+//     res.json({
+//       success: true,
+//       cfOrderId,
+//       paymentSessionId: response.data.payment_session_id
+//     });
+
+//   } catch (err) {
+//     res.status(500).json({ success: false, error: err.message });
+//   }
+// };
+
+// /* =====================================================
+//     2. VERIFY PAYMENT (நிஜமான பேமெண்ட் உறுதி செய்தல்)
+// ===================================================== */
+// exports.verifyPayment = async (req, res) => {
+//   try {
+//     const { orderId } = req.params; 
+    
+//     // பேமெண்ட் விபரத்தை எடுத்தல்
+//     const payment = await Payment.findOne({ orderId: orderId }).sort({ createdAt: -1 });
+//     if (!payment) return res.json({ success: true, status: "Pending" });
+
+//     // 🌟 3. கேஷ்ஃப்ரீ சர்வரில் செக் செய்தல்
+//     const response = await axios.get(`${CF_BASE_URL}/orders/${payment.transactionId}`, {
+//       headers: { 
+//           "x-client-id": CF_APP_ID, 
+//           "x-client-secret": CF_SECRET, 
+//           "x-api-version": "2023-08-01" 
+//       }
+//     });
+
+//     // 🌟 4. நிஜமாகவே PAID ஆனால் மட்டுமே 'Placed' என மாற்றவும்
+//     if (response.data.order_status === "PAID" || response.data.order_status === "ACTIVE") {
+//       await Order.findByIdAndUpdate(orderId, { status: "Placed" });
+//       payment.status = "SUCCESS";
+//       await payment.save();
+
+//       return res.json({ success: true, status: "Placed" });
+//     }
+
+//     res.json({ success: true, status: "Pending" });
+//   } catch (err) {
+//     res.status(500).json({ success: false, error: err.message });
+//   }
+// };

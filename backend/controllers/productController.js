@@ -267,13 +267,23 @@ exports.getProductById = async (req, res) => {
     }
 };
 
-// --- 🌟 4. GET MY PRODUCTS (Seller View) ---
+
 exports.getMyProducts = async (req, res) => {
     try {
-        const products = await Product.find({ seller: req.user.id, isArchived: false })
-            .populate('category subCategory');
+        
+        const products = await Product.find({ 
+            seller: req.user.id, 
+            isArchived: { $ne: true } 
+        }).populate('category subCategory');
+
+       
         const data = products.map(p => formatProductMedia(p, req));
-        res.json({ success: true, data });
+
+        res.json({ 
+            success: true, 
+            count: data.length,
+            data: data 
+        });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
