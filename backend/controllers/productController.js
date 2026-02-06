@@ -289,7 +289,37 @@ exports.updateProduct = async (req, res) => {
 
 exports.deleteProduct = async (req, res) => {
     try {
-        await Product.findByIdAndUpdate(req.params.id, { isArchived: true });
-        res.json({ success: true, message: "Product Archived successfully" });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+        // 1. முதலில் அந்த தயாரிப்பைக் கண்டறியவும்
+        const product = await Product.findById(req.params.id);
+        
+        if (!product) {
+            return res.status(404).json({ success: false, message: "Product not found" });
+        }
+
+        // 2. இமேஜ்களை சர்வரில் இருந்து நீக்குதல்
+        if (product.images && product.images.length > 0) {
+            product.images.forEach(imgName => {
+                // உங்கள் multerConfig படி பாத்: public/uploads/
+                const imagePath = path.join(__dirname, '../public/uploads/', imgName);
+                if (fs.existsSync(imagePath)) {
+                    fs.unlinkSync(imagePath); // ஃபைலை டெலீட் செய்யும்
+                }
+            });
+        }
+
+        // 3. வீடியோவை சர்வரில் இருந்து நீக்குதல்
+        if (product.video) {
+            const videoPath = path.join(__dirname, '../public/uploads/', product.video);
+            if (fs.existsSync(videoPath)) {
+                fs.unlinkSync(videoPath); // வீடியோவை டெலீட் செய்யும்
+            }
+        }
+
+        // 4. இப்போது டேட்டாபேஸில் இருந்து நீக்கவும் (முழுமையாக நீக்க Delete பயன்படுத்தவும்)
+        await Product.findByIdAndDelete(req.params.id);
+
+        res.json({ success: true, message: "Product and its media files deleted successfully!" });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
 };
