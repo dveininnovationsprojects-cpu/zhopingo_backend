@@ -2,161 +2,84 @@ const axios = require("axios");
 const Order = require("../models/Order");
 const Payment = require("../models/Payment");
 
-const CF_BASE_URL = "https://sandbox.cashfree.com/pg";
-const CF_APP_ID = process.env.CF_APP_ID;
-const CF_SECRET = process.env.CF_SECRET;
-const CF_API_VERSION = "2023-08-01";
+const CF_BASE = "https://sandbox.cashfree.com/pg";
+const CF_VERSION = "2023-08-01";
 
-/* =====================================================
-   1️⃣ CREATE PAYMENT SESSION (NO SUCCESS HERE ❌)
-===================================================== */
-exports.createSession = async (req, res) => {
+/* ================= CREATE PAYMENT SESSION ================= */
+exports.createPaymentSession = async (req, res) => {
   try {
-    const {
-      orderId,
-      amount,
-      customerId,
-      customerPhone,
-      customerName
-    } = req.body;
-
-    if (!CF_APP_ID || !CF_SECRET) {
-      return res.status(500).json({
-        success: false,
-        message: "Cashfree keys missing"
-      });
-    }
+    const { orderId, amount, customer } = req.body;
 
     const order = await Order.findById(orderId);
     if (!order) {
-      return res.status(404).json({
-        success: false,
-        message: "Order not found"
-      });
+      return res.status(404).json({ message: "Order not found" });
     }
 
-    // 🔹 Cashfree order id (must be UNIQUE)
     const cfOrderId = `CF_${orderId}_${Date.now()}`;
 
-    // 🔹 Create Cashfree Order
     const response = await axios.post(
-      `${CF_BASE_URL}/orders`,
+      `${CF_BASE}/orders`,
       {
         order_id: cfOrderId,
-        order_amount: Number(amount),
+        order_amount: amount,
         order_currency: "INR",
         customer_details: {
-          customer_id: String(customerId),
-          customer_phone: String(customerPhone),
-          customer_name: customerName || "Customer"
+          customer_id: customer.id,
+          customer_phone: customer.phone,
+          customer_name: customer.name
+        },
+        order_meta: {
+          notify_url: `${process.env.BASE_URL}/api/payments/cashfree/webhook`
         }
       },
       {
         headers: {
-          "x-client-id": CF_APP_ID,
-          "x-client-secret": CF_SECRET,
-          "x-api-version": CF_API_VERSION,
+          "x-client-id": process.env.CF_APP_ID,
+          "x-client-secret": process.env.CF_SECRET,
+          "x-api-version": CF_VERSION,
           "Content-Type": "application/json"
         }
       }
     );
 
-    // 🔹 Save as PENDING only
     await Payment.create({
       orderId,
-      transactionId: cfOrderId,
+      cfOrderId,
       amount,
       status: "PENDING"
     });
 
-    return res.json({
+    res.json({
       success: true,
-      cfOrderId,
       paymentSessionId: response.data.payment_session_id
     });
 
   } catch (err) {
-    console.error("CREATE SESSION ERROR:", err.response?.data || err.message);
-    res.status(500).json({
-      success: false,
-      error: err.response?.data || err.message
-    });
+    console.error("CREATE PAYMENT ERROR:", err.response?.data || err.message);
+    res.status(500).json({ success: false, error: err.message });
   }
 };
 
-/* =====================================================
-   2️⃣ VERIFY PAYMENT (ONLY PLACE ORDER HERE ✅)
-===================================================== */
+/* ================= VERIFY (READ-ONLY) ================= */
 exports.verifyPayment = async (req, res) => {
   try {
     const { orderId } = req.params;
 
     const order = await Order.findById(orderId);
     if (!order) {
-      return res.status(404).json({
-        success: false,
-        message: "Order not found"
-      });
+      return res.status(404).json({ success: false });
     }
 
-    // ✅ Already placed → return fast
-    if (order.status === "Placed") {
-      return res.json({
-        success: true,
-        status: "Placed"
-      });
-    }
-
-    const payment = await Payment.findOne({ orderId });
-    if (!payment) {
-      return res.json({
-        success: true,
-        status: "Pending"
-      });
-    }
-
-    // 🔹 Ask Cashfree
-    const response = await axios.get(
-      `${CF_BASE_URL}/orders/${payment.transactionId}`,
-      {
-        headers: {
-          "x-client-id": CF_APP_ID,
-          "x-client-secret": CF_SECRET,
-          "x-api-version": CF_API_VERSION
-        }
-      }
-    );
-
-    const cfStatus = response.data.order_status;
-
-    // ✅ FINAL SUCCESS
-    if (cfStatus === "PAID") {
-      payment.status = "SUCCESS";
-      await payment.save();
-
-      order.status = "Placed";
-      await order.save();
-
-      return res.json({
-        success: true,
-        status: "Placed"
-      });
-    }
-
-    // ⏳ Still waiting
     return res.json({
       success: true,
-      status: "Pending"
+      status: order.status
     });
 
   } catch (err) {
-    console.error("VERIFY ERROR:", err.response?.data || err.message);
-    res.status(500).json({
-      success: false,
-      error: err.response?.data || err.message
-    });
+    res.status(500).json({ success: false });
   }
 };
+
 
 
 

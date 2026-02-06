@@ -37,6 +37,11 @@ app.use('/api/v1/products', require('./routes/productRoutes'));
 app.use('/api/v1/orders', require('./routes/orderRoutes'));
 app.use('/api/v1/payments', require('./routes/paymentRoutes'));
 app.use('/api/v1/reels', require('./routes/reelRoutes'));
+app.use(
+  "/api/payments/cashfree/webhook",
+  express.raw({ type: "application/json" })
+);
+
 
 // Seller & Admin Routes
 app.use('/api/v1/seller', require('./routes/sellerRoutes'));
