@@ -3,6 +3,7 @@ const Product = require('../models/Product');
 const Seller = require('../models/Seller');
 const SubCategory = require('../models/SubCategory');
 
+
 // 🌟 Helper: இமேஜ் மற்றும் வீடியோ லிங்க்குகளை முழுமையான URL ஆக மாற்ற
 const formatProductMedia = (product, req) => {
     const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
@@ -58,37 +59,37 @@ exports.createProduct = async (req, res) => {
     }
 };
 
+// --- 🌟 GET ALL PRODUCTS (Optimized for Large Scale) ---
 exports.getAllProducts = async (req, res) => {
     try {
+        // 1. Get page and limit from query, default to page 1, limit 20
         const { category, subCategory, search, page = 1, limit = 20 } = req.query;
         
-        // 1. Efficient Query
         let query = { isArchived: { $ne: true } };
         if (category) query.category = category;
         if (subCategory) query.subCategory = subCategory;
         if (search) query.name = { $regex: search, $options: "i" };
 
-        // 2. Pagination Logic
+        // 2. Calculate how many items to skip
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
-        // 3. Execution with .lean() and .select()
+        // 3. Use .lean() to get plain JS objects instead of heavy Mongoose documents
         const products = await Product.find(query)
-            .select('name price mrp images weight discountPercentage seller category') // 🌟 Send only necessary fields
-            .populate("category", "name")
-            .populate("seller", "shopName")
+            .populate("category subCategory", "name image")
+            .populate("seller", "shopName name address")
             .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(parseInt(limit))
-            .lean(); // 🌟 Converts Mongoose docs to plain JS objects (Faster)
+            .skip(skip)   // Skip previous pages
+            .limit(parseInt(limit)) // Only fetch 20
+            .lean(); 
 
         const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
         
-        // 4. Formatting Media
         const data = products.map(p => ({
             ...p,
             images: p.images ? p.images.map(img => 
                 (img && img.startsWith('http')) ? img : baseUrl + img
-            ) : []
+            ) : [],
+            video: p.video ? (p.video.startsWith('http') ? p.video : baseUrl + p.video) : ""
         }));
 
         res.status(200).json({ 
@@ -121,30 +122,22 @@ exports.getProductById = async (req, res) => {
 
 exports.getMyProducts = async (req, res) => {
     try {
-        // 1. செல்லர் ஐடியை வைத்து தயாரிப்புகளை எடுத்தல்
         const products = await Product.find({ 
             seller: req.user.id, 
             isArchived: { $ne: true } 
-        }).populate('category subCategory');
+        })
+        .populate('category subCategory')
+        .lean(); // 🌟 Makes query much faster by returning plain objects
 
-        // 2. பேஸ் URL (Base URL) உருவாக்குதல்
         const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
 
-        // 3. ஒவ்வொரு தயாரிப்பிற்கும் இமேஜ் மற்றும் வீடியோ URL-ஐ மேனுவலாக இணைத்தல்
-        const data = products.map(p => {
-            const doc = p._doc; // மங்கூஸ் டாக்குமெண்டில் இருந்து டேட்டாவை எடுத்தல்
-            return {
-                ...doc,
-                // இமேஜ்களை URL உடன் இணைத்தல்
-                images: doc.images ? doc.images.map(img => 
-                    (img && (img.startsWith('http') || img.startsWith('https'))) ? img : baseUrl + img
-                ) : [],
-                // வீடியோவை URL உடன் இணைத்தல்
-                video: doc.video ? 
-                    ((doc.video.startsWith('http') || doc.video.startsWith('https')) ? doc.video : baseUrl + doc.video) 
-                    : ""
-            };
-        });
+        const data = products.map(p => ({
+            ...p,
+            images: p.images ? p.images.map(img => 
+                (img && img.startsWith('http')) ? img : baseUrl + img
+            ) : [],
+            video: p.video ? (p.video.startsWith('http') ? p.video : baseUrl + p.video) : ""
+        }));
 
         res.json({ 
             success: true, 
