@@ -555,37 +555,47 @@ exports.createSession = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
+
 exports.verifyPayment = async (req, res) => {
-  try {
-    
-    const { orderId } = req.params; 
+  try {
+    const cfOrderId = req.params.orderId;
 
-    
-    const payment = await Payment.findOne({ orderId: orderId });
+    const payment = await Payment.findOne({ transactionId: cfOrderId });
 
-    if (!payment) {
-      
-      const order = await Order.findById(orderId);
-      return res.json({ success: true, status: order ? order.status : "Pending" });
-    }
+    if (!payment) {
+      return res.status(404).json({ success: false, message: "Payment not found" });
+    }
 
-    
-    const response = await axios.get(`${CF_BASE_URL}/orders/${payment.transactionId}`, {
-      headers: {
-        "x-client-id": CF_APP_ID,
-        "x-client-secret": CF_SECRET,
-        "x-api-version": "2023-08-01"
-      }
-    });
+    const response = await axios.get(`${CF_BASE_URL}/orders/${cfOrderId}`, {
+      headers: {
+        "x-client-id": CF_APP_ID,
+        "x-client-secret": CF_SECRET,
+        "x-api-version": "2023-08-01"
+      }
+    });
 
-    if (response.data.order_status === "PAID") {
-      await Order.findByIdAndUpdate(orderId, { status: "Placed" });
-      return res.json({ success: true, status: "Placed" });
-    }
+    // 🌟 மிக முக்கியம்: ஆப் எதிர்பார்க்கும் 'status' மற்றும் 'Placed' தகவலை இங்கே அனுப்ப வேண்டும்
+    if (response.data.order_status === "PAID") {
+      payment.status = "SUCCESS";
+      await payment.save();
 
-    res.json({ success: true, status: "Pending" });
+      await Order.findByIdAndUpdate(payment.orderId, { status: "Placed" });
 
- } catch (err) {
+      return res.json({ 
+        success: true, 
+        status: "Placed", // 🌟 இதைக் கண்டிப்பாக சேர்க்கவும்
+        message: "Payment successful" 
+      });
+    }
+
+    // பேமெண்ட் இன்னும் முடியவில்லையென்றால் 'Pending' என அனுப்பவும்
+    res.json({ 
+      success: true, 
+      status: "Pending", // 🌟 இதையும் சேர்க்கவும்
+      message: "Payment pending" 
+    });
+
+  } catch (err) {
     res.status(500).json({ success: false, error: err.message });
-}
+  }
 };
