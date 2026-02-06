@@ -131,48 +131,44 @@ const axios = require("axios");
 const Order = require("../models/Order");
 const Payment = require("../models/Payment");
 
-// ✅ Standard Sandbox URL
-const CF_BASE_URL = "https://sandbox.cashfree.com/pg";
-
-// ⚠️ Check your AWS .env file for these!
-const CF_APP_ID = process.env.CF_APP_ID;
-const CF_SECRET = process.env.CF_SECRET;
+// ✅ DO NOT CHANGE THIS URL
+const CASHFREE_END_POINT = "https://sandbox.cashfree.com/pg/orders";
 
 exports.createSession = async (req, res) => {
   try {
     const { orderId, amount, customerId, customerPhone, customerName } = req.body;
 
-    if (!CF_APP_ID || !CF_SECRET) {
-      return res.status(500).json({ success: false, message: "Payment credentials missing on AWS server" });
+    // Use local variables to ensure they are being read from .env correctly
+    const appId = process.env.CF_APP_ID;
+    const secretKey = process.env.CF_SECRET;
+
+    if (!appId || !secretKey) {
+      return res.status(500).json({ success: false, message: "Payment Keys Missing in .env" });
     }
 
-    const order = await Order.findById(orderId);
-    if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+    const cfOrderId = `ORD_${orderId}_${Date.now()}`;
 
-    const cfOrderId = `CF_${orderId}_${Date.now()}`;
-
-    // 🚀 Sending the POST request (This is what the browser CANNOT do)
-    const response = await axios.post(
-      `${CF_BASE_URL}/orders`,
-      {
+    // 🚀 THE POST CALL (Server-to-Server)
+    const response = await axios({
+      method: 'post',
+      url: CASHFREE_END_POINT,
+      headers: {
+        "x-client-id": appId,
+        "x-client-secret": secretKey,
+        "x-api-version": "2023-08-01",
+        "Content-Type": "application/json"
+      },
+      data: {
         order_id: cfOrderId,
-        order_amount: Number(amount),
+        order_amount: parseFloat(amount),
         order_currency: "INR",
         customer_details: {
           customer_id: String(customerId),
           customer_phone: String(customerPhone),
-          customer_name: customerName || "Customer"
-        }
-      },
-      {
-        headers: {
-          "x-client-id": CF_APP_ID,
-          "x-client-secret": CF_SECRET,
-          "x-api-version": "2023-08-01",
-          "Content-Type": "application/json"
+          customer_name: customerName || "Guest User"
         }
       }
-    );
+    });
 
     await Payment.create({
       orderId,
@@ -181,7 +177,7 @@ exports.createSession = async (req, res) => {
       status: "PENDING", 
     });
 
-    // 🎯 Send this sessionId to your Mobile App
+    // 🎯 Return the Session ID to the Mobile App
     res.json({
       success: true,
       cfOrderId,
@@ -189,12 +185,10 @@ exports.createSession = async (req, res) => {
     });
 
   } catch (err) {
-    // 🔍 THIS LOGS THE REAL REASON IN YOUR TERMINAL
-    console.error("CASHFREE API ERROR DETAILS:", err.response?.data || err.message);
-    res.status(500).json({ 
-      success: false, 
-      error: err.response?.data?.message || "Check server logs for details" 
-    });
+    // 🔍 THIS WILL SHOW THE REAL ERROR IN YOUR VS CODE TERMINAL
+    const errorData = err.response?.data || err.message;
+    console.error("CASHFREE REJECTION:", errorData);
+    res.status(500).json({ success: false, error: errorData });
   }
 };
 
