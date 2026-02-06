@@ -127,15 +127,14 @@
 
 
 
-
 const axios = require("axios");
 const Order = require("../models/Order");
 const Payment = require("../models/Payment");
 
-// Hardcoding the URL here is safe and standard
+// ✅ Standard Sandbox URL
 const CF_BASE_URL = "https://sandbox.cashfree.com/pg";
 
-// Ensure these are set in your .env file on the AWS server
+// ⚠️ Check your AWS .env file for these!
 const CF_APP_ID = process.env.CF_APP_ID;
 const CF_SECRET = process.env.CF_SECRET;
 
@@ -143,27 +142,24 @@ exports.createSession = async (req, res) => {
   try {
     const { orderId, amount, customerId, customerPhone, customerName } = req.body;
 
-    // 1. Validate Credentials exist
     if (!CF_APP_ID || !CF_SECRET) {
-      return res.status(500).json({ success: false, message: "Payment credentials missing on server" });
+      return res.status(500).json({ success: false, message: "Payment credentials missing on AWS server" });
     }
 
     const order = await Order.findById(orderId);
-    if (!order) {
-      return res.status(404).json({ success: false, message: "Order not found" });
-    }
+    if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
     const cfOrderId = `CF_${orderId}_${Date.now()}`;
 
-    // 2. Call Cashfree POST API (This cannot be done via browser)
+    // 🚀 Sending the POST request (This is what the browser CANNOT do)
     const response = await axios.post(
       `${CF_BASE_URL}/orders`,
       {
         order_id: cfOrderId,
-        order_amount: Number(amount), // Ensure amount is a number
+        order_amount: Number(amount),
         order_currency: "INR",
         customer_details: {
-          customer_id: String(customerId), // Ensure ID is a string
+          customer_id: String(customerId),
           customer_phone: String(customerPhone),
           customer_name: customerName || "Customer"
         }
@@ -178,7 +174,6 @@ exports.createSession = async (req, res) => {
       }
     );
 
-    // 3. Save Pending Payment to DB
     await Payment.create({
       orderId,
       transactionId: cfOrderId,
@@ -186,18 +181,19 @@ exports.createSession = async (req, res) => {
       status: "PENDING", 
     });
 
+    // 🎯 Send this sessionId to your Mobile App
     res.json({
       success: true,
       cfOrderId,
-      paymentSessionId: response.data.payment_session_id // Give this to Mobile SDK
+      paymentSessionId: response.data.payment_session_id 
     });
 
   } catch (err) {
-    // This logs the EXACT reason why Cashfree rejected the POST request
-    console.error("CASHFREE API ERROR:", err.response?.data || err.message);
+    // 🔍 THIS LOGS THE REAL REASON IN YOUR TERMINAL
+    console.error("CASHFREE API ERROR DETAILS:", err.response?.data || err.message);
     res.status(500).json({ 
       success: false, 
-      error: err.response?.data?.message || err.message 
+      error: err.response?.data?.message || "Check server logs for details" 
     });
   }
 };
