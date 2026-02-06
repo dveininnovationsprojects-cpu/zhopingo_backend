@@ -130,16 +130,21 @@ const axios = require("axios");
 const Order = require("../models/Order");
 const Payment = require("../models/Payment");
 
+// 🌟 Hardcoding the URL is safe and prevents "undefined" errors
 const CF_BASE_URL = "https://sandbox.cashfree.com/pg";
+
+// 🌟 These MUST be set in your AWS server's .env file
 const CF_APP_ID = process.env.CF_APP_ID;
 const CF_SECRET = process.env.CF_SECRET;
 
-/* =====================================================
-    1. CREATE SESSION (With Auto-Success for Fast Testing)
-===================================================== */
 exports.createSession = async (req, res) => {
   try {
     const { orderId, amount, customerId, customerPhone, customerName } = req.body;
+
+    // Validate Credentials
+    if (!CF_APP_ID || !CF_SECRET) {
+      return res.status(500).json({ success: false, message: "Payment credentials missing on server" });
+    }
 
     const order = await Order.findById(orderId);
     if (!order) {
@@ -155,7 +160,7 @@ exports.createSession = async (req, res) => {
         order_amount: amount,
         order_currency: "INR",
         customer_details: {
-          customer_id: customerId,
+          customer_id: String(customerId),
           customer_phone: customerPhone,
           customer_name: customerName || "Customer"
         }
@@ -170,16 +175,13 @@ exports.createSession = async (req, res) => {
       }
     );
 
-    // 🌟 உடனடி சக்சஸ் என்ட்ரி
+    // Initial Database Entry
     await Payment.create({
       orderId,
       transactionId: cfOrderId,
       amount,
-      status: "SUCCESS", 
+      status: "PENDING", 
     });
-
-    // 🌟 ஆர்டர் ஸ்டேட்டஸ் மாற்றம்
-    await Order.findByIdAndUpdate(orderId, { status: "Placed" });
 
     res.json({
       success: true,
@@ -189,35 +191,22 @@ exports.createSession = async (req, res) => {
 
   } catch (err) {
     console.error("CREATE SESSION ERROR:", err.response?.data || err.message);
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ 
+      success: false, 
+      error: err.response?.data?.message || err.message 
+    });
   }
 };
 
-/* =====================================================
-    2. VERIFY PAYMENT (Super Fast Polling Response)
-===================================================== */
 exports.verifyPayment = async (req, res) => {
   try {
     const { orderId } = req.params; 
 
-    // 1. Database-ல் தேடு
     const payment = await Payment.findOne({ 
       $or: [{ orderId: orderId }, { transactionId: orderId }] 
     });
 
-    // 2. ஒருவேளை ஏற்கனவே Placed ஆகி இருந்தால் உடனே பதில் சொல்
-    const order = await Order.findById(orderId);
-    if (order && order.status === "Placed") {
-        return res.json({ 
-            success: true, 
-            status: "Placed",
-            message: "Order already confirmed"
-        });
-    }
-
-    if (!payment) {
-      return res.json({ success: true, status: "Pending" });
-    }
+    if (!payment) return res.json({ success: true, status: "Pending" });
 
     const response = await axios.get(`${CF_BASE_URL}/orders/${payment.transactionId}`, {
       headers: { 
@@ -227,15 +216,12 @@ exports.verifyPayment = async (req, res) => {
       }
     });
 
-    if (response.data.order_status === "PAID" || response.data.order_status === "ACTIVE") {
+    if (response.data.order_status === "PAID") {
       await Order.findByIdAndUpdate(orderId, { status: "Placed" });
       payment.status = "SUCCESS";
       await payment.save();
 
-      return res.json({ 
-        success: true, 
-        status: "Placed"
-      });
+      return res.json({ success: true, status: "Placed" });
     }
 
     res.json({ success: true, status: "Pending" });

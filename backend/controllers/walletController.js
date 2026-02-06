@@ -4,7 +4,8 @@ const axios = require('axios');
 // Cashfree Credentials
 const CF_APP_ID = process.env.CF_APP_ID;
 const CF_SECRET = process.env.CF_SECRET;
-const CF_URL = process.env.CF_URL;
+// Hardcode the URL directly for the APK to work
+const CF_BASE_URL = "https://sandbox.cashfree.com/pg";
 
 // 🌟 Wallet Controller (அதே உங்களுடைய ஸ்டைலில்)
 exports.createWalletTopupSession = async (req, res) => {
@@ -59,7 +60,7 @@ exports.verifyWalletTopup = async (req, res) => {
         if (!topupId) return res.status(400).send("Invalid Topup ID");
 
         // Cashfree-யிலிருந்து பேமெண்ட் நிலையைச் சரிபார்க்கவும்
-        const response = await axios.get(`${CF_URL}/${topupId}`, {
+        const response = await axios.get(`${CF_BASE_URL}/orders/${topupId}`, {
             headers: {
                 "x-client-id": CF_APP_ID,
                 "x-client-secret": CF_SECRET,
