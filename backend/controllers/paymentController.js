@@ -192,45 +192,33 @@ exports.createSession = async (req, res) => {
   }
 };
 // controllers/paymentController.js
+// controllers/paymentController.js
 
 exports.verifyPayment = async (req, res) => {
   try {
     const { orderId } = req.params; 
 
-    // 1. Database-la payment record-ai edu
-    const payment = await Payment.findOne({ 
-      $or: [{ orderId: orderId }, { transactionId: orderId }] 
-    });
+    const payment = await Payment.findOne({ orderId: orderId });
+    if (!payment) return res.status(404).json({ success: false, message: "Record not found" });
 
-    if (!payment) return res.json({ success: false, message: "Payment record not found" });
-
-    // 2. Cashfree API-ai koopittu status-ai check pannu
     const response = await axios.get(`${CF_BASE_URL}/orders/${payment.transactionId}`, {
       headers: { 
-          "x-client-id": CF_APP_ID, 
-          "x-client-secret": CF_SECRET, 
+          "x-client-id": process.env.CF_APP_ID, 
+          "x-client-secret": process.env.CF_SECRET, 
           "x-api-version": "2023-08-01" 
       }
     });
 
-    // 3. Status 'PAID' nu vantha Order-ai 'Placed' nu maathura logic
+    // Payment success aana Order status-ai mathanum
     if (response.data.order_status === "PAID") {
-      // 🌟 ORDER STATUS UPDATE
       await Order.findByIdAndUpdate(orderId, { status: "Placed" });
-      
-      // 🌟 PAYMENT STATUS UPDATE
       payment.status = "SUCCESS";
       await payment.save();
 
-      return res.json({ 
-        success: true, 
-        status: "Placed", 
-        message: "Payment successful and Order Placed!" 
-      });
+      return res.json({ success: true, status: "Placed", message: "Order Success!" });
     }
 
     res.json({ success: true, status: "Pending" });
-
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
