@@ -6,52 +6,53 @@ const CF_APP_ID = process.env.CF_APP_ID;
 const CF_SECRET = process.env.CF_SECRET;
 const CF_URL = process.env.CF_URL;
 
-// 🌟 1. CREATE WALLET TOP-UP SESSION (Cashfree Payment Link)
+// 🌟 Wallet Controller (அதே உங்களுடைய ஸ்டைலில்)
 exports.createWalletTopupSession = async (req, res) => {
     try {
         const { userId, amount, customerPhone, customerName } = req.body;
-        
-        // தனித்துவமான டாப்-அப் ஐடி
-        const topupId = `TOPUP_${userId}_${Date.now()}`;
+        const cfOrderId = `TOPUP_${userId}_${Date.now()}`;
 
-        // சர்வர் URL மற்றும் ரிட்டர்ன் URL (Verified automatically by Cashfree)
-        const serverURL = `${req.protocol}://${req.get('host')}`; 
-        const returnURL = `${serverURL}/api/v1/wallet/verify-topup?topup_id=${topupId}`;
-
-        const response = await axios.post(CF_URL,
-            {
-                order_id: topupId,
-                order_amount: Number(amount),
-                order_currency: "INR",
-                customer_details: {
-                    customer_id: userId,
-                    customer_phone: customerPhone,
-                    customer_name: customerName || "Zhopingo User"
-                },
-                order_meta: {
-                    return_url: returnURL
-                }
-            },
-            {
-                headers: {
-                    "x-client-id": CF_APP_ID,
-                    "x-client-secret": CF_SECRET,
-                    "x-api-version": "2023-08-01"
-                }
+        const response = await axios.post(CF_BASE_URL + "/orders", {
+            order_id: cfOrderId,
+            order_amount: amount,
+            order_currency: "INR",
+            customer_details: {
+                customer_id: userId,
+                customer_phone: customerPhone,
+                customer_name: customerName || "Customer"
             }
-        );
+        }, {
+            headers: {
+                "x-client-id": CF_APP_ID,
+                "x-client-secret": CF_SECRET,
+                "x-api-version": "2023-08-01"
+            }
+        });
+
+        // 🌟 ஆர்டர் கண்ட்ரோலர் போலவே உடனடி அப்டேட்
+        const user = await User.findById(userId);
+        if (user) {
+            user.walletBalance += Number(amount);
+            user.walletTransactions.unshift({
+                amount: amount,
+                type: 'CREDIT',
+                reason: `Wallet Topup (ID: ${cfOrderId})`,
+                date: new Date()
+            });
+            await user.save();
+        }
 
         res.json({
             success: true,
-            order_id: topupId,
-            payment_url: response.data.payment_link || response.data.order_pay_url
+            cfOrderId,
+            paymentSessionId: response.data.payment_session_id
         });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.response?.data?.message || err.message });
+        res.status(500).json({ success: false, error: err.message });
     }
 };
 
-// 🌟 2. VERIFY TOP-UP & AUTO-CREDIT (தானாக பணம் ஏறும் லாஜிக்)
+
 exports.verifyWalletTopup = async (req, res) => {
     try {
         const topupId = req.query.topup_id;
