@@ -1,159 +1,159 @@
 
-const Product = require('../models/Product');
-const Seller = require('../models/Seller');
-const SubCategory = require('../models/SubCategory');
+// const Product = require('../models/Product');
+// const Seller = require('../models/Seller');
+// const SubCategory = require('../models/SubCategory');
 
-// 🌟 Helper: இமேஜ் மற்றும் வீடியோ லிங்க்குகளை முழுமையான URL ஆக மாற்ற
-const formatProductMedia = (product, req) => {
-    const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
-    // Mongoose ஆப்ஜெக்ட்டை சுத்தமான JSON ஆக மாற்றுதல்
-    const doc = product.toObject ? product.toObject() : product;
+// // 🌟 Helper: இமேஜ் மற்றும் வீடியோ லிங்க்குகளை முழுமையான URL ஆக மாற்ற
+// const formatProductMedia = (product, req) => {
+//     const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
+//     // Mongoose ஆப்ஜெக்ட்டை சுத்தமான JSON ஆக மாற்றுதல்
+//     const doc = product.toObject ? product.toObject() : product;
 
-    return {
-        ...doc,
-        images: (doc.images || []).map(img => 
-            (img && img.startsWith('http')) ? img : baseUrl + img
-        ),
-        video: doc.video ? 
-            (doc.video.startsWith('http') ? doc.video : baseUrl + doc.video) 
-            : ""
-    };
-};
+//     return {
+//         ...doc,
+//         images: (doc.images || []).map(img => 
+//             (img && img.startsWith('http')) ? img : baseUrl + img
+//         ),
+//         video: doc.video ? 
+//             (doc.video.startsWith('http') ? doc.video : baseUrl + doc.video) 
+//             : ""
+//     };
+// };
 
-// --- 🌟 1. CREATE PRODUCT ---
-exports.createProduct = async (req, res) => {
-    try {
-        const sellerId = req.user?.id || req.body.seller; 
-        const seller = await Seller.findById(sellerId);
-        if (!seller) return res.status(404).json({ success: false, message: "Seller not found" });
+// // --- 🌟 1. CREATE PRODUCT ---
+// exports.createProduct = async (req, res) => {
+//     try {
+//         const sellerId = req.user?.id || req.body.seller; 
+//         const seller = await Seller.findById(sellerId);
+//         if (!seller) return res.status(404).json({ success: false, message: "Seller not found" });
 
-        const subCat = await SubCategory.findById(req.body.subCategory);
-        if (!subCat) return res.status(400).json({ success: false, message: "Invalid SubCategory" });
+//         const subCat = await SubCategory.findById(req.body.subCategory);
+//         if (!subCat) return res.status(400).json({ success: false, message: "Invalid SubCategory" });
 
-        const taxRate = subCat.gstRate || subCat.gstPercentage;
+//         const taxRate = subCat.gstRate || subCat.gstPercentage;
 
-        // மல்டர் மூலம் வந்த ஃபைல் பெயர்களை அரே-வாக எடுத்தல்
-        const images = req.files['images'] ? req.files['images'].map(f => f.filename) : [];
-        const video = req.files['video'] ? req.files['video'][0].filename : "";
+//         // மல்டர் மூலம் வந்த ஃபைல் பெயர்களை அரே-வாக எடுத்தல்
+//         const images = req.files['images'] ? req.files['images'].map(f => f.filename) : [];
+//         const video = req.files['video'] ? req.files['video'][0].filename : "";
 
-        const discount = req.body.mrp > req.body.price 
-            ? Math.round(((req.body.mrp - req.body.price) / req.body.mrp) * 100) 
-            : 0;
+//         const discount = req.body.mrp > req.body.price 
+//             ? Math.round(((req.body.mrp - req.body.price) / req.body.mrp) * 100) 
+//             : 0;
 
-        const product = new Product({
-            ...req.body,
-            hsnCode: subCat.hsnCode, 
-            gstPercentage: taxRate,
-            discountPercentage: discount,
-            images,
-            video,
-            seller: seller._id,
-            variants: req.body.variants ? (typeof req.body.variants === 'string' ? JSON.parse(req.body.variants) : req.body.variants) : [] 
-        });
+//         const product = new Product({
+//             ...req.body,
+//             hsnCode: subCat.hsnCode, 
+//             gstPercentage: taxRate,
+//             discountPercentage: discount,
+//             images,
+//             video,
+//             seller: seller._id,
+//             variants: req.body.variants ? (typeof req.body.variants === 'string' ? JSON.parse(req.body.variants) : req.body.variants) : [] 
+//         });
 
-        await product.save();
-        res.status(201).json({ success: true, data: product });
-    } catch (err) { 
-        res.status(400).json({ success: false, error: err.message }); 
-    }
-};
+//         await product.save();
+//         res.status(201).json({ success: true, data: product });
+//     } catch (err) { 
+//         res.status(400).json({ success: false, error: err.message }); 
+//     }
+// };
 
-// --- 🌟 2. GET ALL PRODUCTS ---
-exports.getAllProducts = async (req, res) => {
-    try {
-        const { category, subCategory, search } = req.query;
-        let query = { isArchived: { $ne: true } };
+// // --- 🌟 2. GET ALL PRODUCTS ---
+// exports.getAllProducts = async (req, res) => {
+//     try {
+//         const { category, subCategory, search } = req.query;
+//         let query = { isArchived: { $ne: true } };
 
-        if (category) query.category = category;
-        if (subCategory) query.subCategory = subCategory;
-        if (search) query.name = { $regex: search, $options: "i" };
+//         if (category) query.category = category;
+//         if (subCategory) query.subCategory = subCategory;
+//         if (search) query.name = { $regex: search, $options: "i" };
 
-        const products = await Product.find(query)
-            .populate("category subCategory", "name image")
-            .populate("seller", "shopName name address")
-            .sort({ createdAt: -1 });
+//         const products = await Product.find(query)
+//             .populate("category subCategory", "name image")
+//             .populate("seller", "shopName name address")
+//             .sort({ createdAt: -1 });
 
-        const data = products.map(p => formatProductMedia(p, req));
-        res.status(200).json({ success: true, count: data.length, data });
-    } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
-    }
-};
+//         const data = products.map(p => formatProductMedia(p, req));
+//         res.status(200).json({ success: true, count: data.length, data });
+//     } catch (err) {
+//         res.status(500).json({ success: false, error: err.message });
+//     }
+// };
 
-// // 🌟 4. GET MY PRODUCTS (Seller Dashboard)
-exports.getMyProducts = async (req, res) => {
-    try {
-        const products = await Product.find({ seller: req.user.id, isArchived: { $ne: true } })
-            .populate('category subCategory');
-        res.json({ success: true, data: products });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
-};
+// // // 🌟 4. GET MY PRODUCTS (Seller Dashboard)
+// exports.getMyProducts = async (req, res) => {
+//     try {
+//         const products = await Product.find({ seller: req.user.id, isArchived: { $ne: true } })
+//             .populate('category subCategory');
+//         res.json({ success: true, data: products });
+//     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+// };
 
-// --- 🌟 5. UPDATE & DELETE ---
-exports.updateProduct = async (req, res) => {
-    try {
-        const updated = await Product.findByIdAndUpdate(req.params.id, req.body, { new: true });
-        res.json({ success: true, data: updated });
-    } catch (err) { res.status(400).json({ success: false, error: err.message }); }
-};
+// // --- 🌟 5. UPDATE & DELETE ---
+// exports.updateProduct = async (req, res) => {
+//     try {
+//         const updated = await Product.findByIdAndUpdate(req.params.id, req.body, { new: true });
+//         res.json({ success: true, data: updated });
+//     } catch (err) { res.status(400).json({ success: false, error: err.message }); }
+// };
 
-exports.deleteProduct = async (req, res) => {
-    try {
-        // 1. முதலில் அந்த தயாரிப்பைக் கண்டறியவும்
-        const product = await Product.findById(req.params.id);
+// exports.deleteProduct = async (req, res) => {
+//     try {
+//         // 1. முதலில் அந்த தயாரிப்பைக் கண்டறியவும்
+//         const product = await Product.findById(req.params.id);
         
-        if (!product) {
-            return res.status(404).json({ success: false, message: "Product not found" });
-        }
+//         if (!product) {
+//             return res.status(404).json({ success: false, message: "Product not found" });
+//         }
 
-        // 2. இமேஜ்களை சர்வரில் இருந்து நீக்குதல்
-        if (product.images && product.images.length > 0) {
-            product.images.forEach(imgName => {
-                // உங்கள் multerConfig படி பாத்: public/uploads/
-                const imagePath = path.join(__dirname, '../public/uploads/', imgName);
-                if (fs.existsSync(imagePath)) {
-                    fs.unlinkSync(imagePath); // ஃபைலை டெலீட் செய்யும்
-                }
-            });
-        }
+//         // 2. இமேஜ்களை சர்வரில் இருந்து நீக்குதல்
+//         if (product.images && product.images.length > 0) {
+//             product.images.forEach(imgName => {
+//                 // உங்கள் multerConfig படி பாத்: public/uploads/
+//                 const imagePath = path.join(__dirname, '../public/uploads/', imgName);
+//                 if (fs.existsSync(imagePath)) {
+//                     fs.unlinkSync(imagePath); // ஃபைலை டெலீட் செய்யும்
+//                 }
+//             });
+//         }
 
-        // 3. வீடியோவை சர்வரில் இருந்து நீக்குதல்
-        if (product.video) {
-            const videoPath = path.join(__dirname, '../public/uploads/', product.video);
-            if (fs.existsSync(videoPath)) {
-                fs.unlinkSync(videoPath); // வீடியோவை டெலீட் செய்யும்
-            }
-        }
+//         // 3. வீடியோவை சர்வரில் இருந்து நீக்குதல்
+//         if (product.video) {
+//             const videoPath = path.join(__dirname, '../public/uploads/', product.video);
+//             if (fs.existsSync(videoPath)) {
+//                 fs.unlinkSync(videoPath); // வீடியோவை டெலீட் செய்யும்
+//             }
+//         }
 
-        // 4. இப்போது டேட்டாபேஸில் இருந்து நீக்கவும் (முழுமையாக நீக்க Delete பயன்படுத்தவும்)
-        await Product.findByIdAndDelete(req.params.id);
+//         // 4. இப்போது டேட்டாபேஸில் இருந்து நீக்கவும் (முழுமையாக நீக்க Delete பயன்படுத்தவும்)
+//         await Product.findByIdAndDelete(req.params.id);
 
-        res.json({ success: true, message: "Product and its media files deleted successfully!" });
-    } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
-    }
-};
+//         res.json({ success: true, message: "Product and its media files deleted successfully!" });
+//     } catch (err) {
+//         res.status(500).json({ success: false, error: err.message });
+//     }
+// };
 
 
-// 🌟 5. GET SIMILAR PRODUCTS
-exports.getSimilarProducts = async (req, res) => {
-    try {
-        const { category } = req.query;
-        const products = await Product.find({ 
-            category: category, 
-            _id: { $ne: req.params.id },
-            isArchived: false 
-        }).limit(10).sort({ createdAt: -1 });
+// // 🌟 5. GET SIMILAR PRODUCTS
+// exports.getSimilarProducts = async (req, res) => {
+//     try {
+//         const { category } = req.query;
+//         const products = await Product.find({ 
+//             category: category, 
+//             _id: { $ne: req.params.id },
+//             isArchived: false 
+//         }).limit(10).sort({ createdAt: -1 });
 
-        const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
-        const data = products.map(p => ({
-            ...p._doc,
-            images: p.images.map(img => baseUrl + img)
-        }));
+//         const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
+//         const data = products.map(p => ({
+//             ...p._doc,
+//             images: p.images.map(img => baseUrl + img)
+//         }));
 
-        res.json({ success: true, data });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
-};
+//         res.json({ success: true, data });
+//     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+// };
 
 
 
@@ -318,3 +318,109 @@ exports.getSimilarProducts = async (req, res) => {
 //         res.json({ success: true, averageRating: product.averageRating });
 //     } catch (err) { res.status(500).json({ error: err.message }); }
 // };
+
+
+
+const Product = require('../models/Product');
+const Seller = require('../models/Seller');
+const SubCategory = require('../models/SubCategory');
+const fs = require('fs');
+const path = require('path');
+
+const formatProductMedia = (product, req) => {
+  const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
+  const doc = product.toObject();
+
+  return {
+    ...doc,
+    images: (doc.images || []).map(img =>
+      img.startsWith('http') ? img : baseUrl + img
+    ),
+    video: doc.video
+      ? (doc.video.startsWith('http') ? doc.video : baseUrl + doc.video)
+      : ""
+  };
+};
+
+exports.createProduct = async (req, res) => {
+  try {
+    const sellerId = req.user.id;
+    const seller = await Seller.findById(sellerId);
+    if (!seller) return res.status(404).json({ message: "Seller not found" });
+
+    const subCat = await SubCategory.findById(req.body.subCategory);
+    if (!subCat) return res.status(400).json({ message: "Invalid SubCategory" });
+
+    const images = req.files?.images?.map(f => f.filename) || [];
+    const video = req.files?.video?.[0]?.filename || "";
+
+    const mrp = Number(req.body.mrp);
+    const price = Number(req.body.price);
+    const discount = mrp > price ? Math.round(((mrp - price) / mrp) * 100) : 0;
+
+    const product = new Product({
+      ...req.body,
+      seller: sellerId,
+      images,
+      video,
+      gstPercentage: subCat.gstRate,
+      hsnCode: subCat.hsnCode,
+      discountPercentage: discount
+    });
+
+    await product.save();
+    res.status(201).json({ success: true, data: product });
+  } catch (e) {
+    res.status(400).json({ success: false, error: e.message });
+  }
+};
+
+exports.getAllProducts = async (req, res) => {
+  try {
+    const products = await Product.find({ isArchived: { $ne: true } })
+      .populate('category subCategory seller')
+      .sort({ createdAt: -1 });
+
+    res.json({
+      success: true,
+      data: products.map(p => formatProductMedia(p, req))
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+};
+
+exports.getProductById = async (req, res) => {
+  const product = await Product.findById(req.params.id)
+    .populate('category subCategory seller');
+
+  if (!product) {
+    return res.status(404).json({ message: "Product not found" });
+  }
+
+  res.json({ success: true, data: formatProductMedia(product, req) });
+};
+
+exports.getMyProducts = async (req, res) => {
+  const products = await Product.find({ seller: req.user.id });
+  res.json({ success: true, data: products });
+};
+
+exports.getSimilarProducts = async (req, res) => {
+  const products = await Product.find({
+    category: req.query.category,
+    _id: { $ne: req.params.id }
+  }).limit(10);
+
+  res.json({ success: true, data: products });
+};
+
+exports.updateProduct = async (req, res) => {
+  const updated = await Product.findByIdAndUpdate(req.params.id, req.body, { new: true });
+  res.json({ success: true, data: updated });
+};
+
+exports.deleteProduct = async (req, res) => {
+  await Product.findByIdAndDelete(req.params.id);
+  res.json({ success: true, message: "Deleted" });
+};
