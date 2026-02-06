@@ -58,23 +58,45 @@ exports.createProduct = async (req, res) => {
     }
 };
 
-// --- 🌟 2. GET ALL PRODUCTS ---
 exports.getAllProducts = async (req, res) => {
     try {
-        const { category, subCategory, search } = req.query;
+        const { category, subCategory, search, page = 1, limit = 20 } = req.query;
+        
+        // 1. Efficient Query
         let query = { isArchived: { $ne: true } };
-
         if (category) query.category = category;
         if (subCategory) query.subCategory = subCategory;
         if (search) query.name = { $regex: search, $options: "i" };
 
-        const products = await Product.find(query)
-            .populate("category subCategory", "name image")
-            .populate("seller", "shopName name address")
-            .sort({ createdAt: -1 });
+        // 2. Pagination Logic
+        const skip = (parseInt(page) - 1) * parseInt(limit);
 
-        const data = products.map(p => formatProductMedia(p, req));
-        res.status(200).json({ success: true, count: data.length, data });
+        // 3. Execution with .lean() and .select()
+        const products = await Product.find(query)
+            .select('name price mrp images weight discountPercentage seller category') // 🌟 Send only necessary fields
+            .populate("category", "name")
+            .populate("seller", "shopName")
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit))
+            .lean(); // 🌟 Converts Mongoose docs to plain JS objects (Faster)
+
+        const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
+        
+        // 4. Formatting Media
+        const data = products.map(p => ({
+            ...p,
+            images: p.images ? p.images.map(img => 
+                (img && img.startsWith('http')) ? img : baseUrl + img
+            ) : []
+        }));
+
+        res.status(200).json({ 
+            success: true, 
+            count: data.length,
+            currentPage: Number(page),
+            data 
+        });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
