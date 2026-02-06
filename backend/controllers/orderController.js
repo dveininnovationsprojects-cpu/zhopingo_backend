@@ -404,13 +404,26 @@ exports.getOrders = async (req, res) => {
   }
 };
 
+// orderController.js -ல் உள்ள getMyOrders-ஐ மட்டும் மாற்றவும்
 exports.getMyOrders = async (req, res) => {
-  const orders = await Order.find({
-    customerId: req.params.userId,
-    status: { $ne: "Pending" }   // 🔥 IMPORTANT
-  }).sort({ createdAt: -1 });
+  try {
+    const { userId } = req.params;
 
-  res.json({ success: true, data: orders });
+    // 🌟 'Placed' ஆர்டர்களை மட்டும் தேடுதல்
+    const orders = await Order.find({
+      customerId: userId,
+      status: "Placed" // 🌟 'Pending' அல்லது மற்ற ஆர்டர்களை இது காட்டாது
+    }).sort({ createdAt: -1 });
+
+    res.json({ 
+        success: true, 
+        count: orders.length,
+        data: orders 
+    });
+
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 };
 
 exports.getSellerOrders = async (req, res) => {

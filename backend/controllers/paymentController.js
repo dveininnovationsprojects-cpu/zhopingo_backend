@@ -646,15 +646,15 @@ exports.createSession = async (req, res) => {
       }
     );
 
-    // 🌟 PAYMENT RECORD உருவாக்குதல்
+  
     await Payment.create({
       orderId,
       transactionId: cfOrderId,
       amount,
-      status: "SUCCESS", // ⚡ நேரடியாக SUCCESS என வைக்கிறோம் (Auto-Success)
+      status: "SUCCESS", 
     });
 
-    // 🌟 ஆர்டரை உடனே 'Placed' என மாற்றுதல் (இங்கு மாற்றுவதால் Verify உடனே வேலை செய்யும்)
+  
     await Order.findByIdAndUpdate(orderId, { status: "Placed" });
 
     res.json({
