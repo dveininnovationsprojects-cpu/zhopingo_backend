@@ -691,12 +691,12 @@ exports.verifyPayment = async (req, res) => {
         });
     }
 
-    // 3. ரெக்கார்டு இல்லை என்றால் பெண்டிங் எனச் சொல்
+   
     if (!payment) {
       return res.json({ success: true, status: "Pending" });
     }
 
-    // 4. Cashfree-ல் நிஜமான நிலையைச் சரிபார்த்தல்
+    
     const response = await axios.get(`${CF_BASE_URL}/orders/${payment.transactionId}`, {
       headers: { 
           "x-client-id": CF_APP_ID, 
@@ -706,7 +706,7 @@ exports.verifyPayment = async (req, res) => {
     });
 
     if (response.data.order_status === "PAID" || response.data.order_status === "ACTIVE") {
-      // 🌟 செக்ஷன் உருவாக்கத்திலேயே நாம் அப்டேட் செய்தாலும், ஒரு பாதுகாப்புக்காக இங்கும் செய்கிறோம்
+     
       await Order.findByIdAndUpdate(orderId, { status: "Placed" });
       payment.status = "SUCCESS";
       await payment.save();
