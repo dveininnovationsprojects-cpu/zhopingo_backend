@@ -5,10 +5,15 @@ const Payment = require("../models/Payment");
 const CF_BASE = "https://sandbox.cashfree.com/pg";
 const CF_VERSION = "2023-08-01";
 
-/* ================= CREATE PAYMENT SESSION ================= */
 exports.createPaymentSession = async (req, res) => {
   try {
-    const { orderId, amount, customer } = req.body;
+    const {
+      orderId,
+      amount,
+      customerId,
+      customerPhone,
+      customerName
+    } = req.body;
 
     const order = await Order.findById(orderId);
     if (!order) {
@@ -18,15 +23,15 @@ exports.createPaymentSession = async (req, res) => {
     const cfOrderId = `CF_${orderId}_${Date.now()}`;
 
     const response = await axios.post(
-      `${CF_BASE}/orders`,
+      "https://sandbox.cashfree.com/pg/orders",
       {
         order_id: cfOrderId,
         order_amount: amount,
         order_currency: "INR",
         customer_details: {
-          customer_id: customer.id,
-          customer_phone: customer.phone,
-          customer_name: customer.name
+          customer_id: String(customerId),
+          customer_phone: String(customerPhone),
+          customer_name: customerName || "Customer"
         },
         order_meta: {
           notify_url: `${process.env.BASE_URL}/api/payments/cashfree/webhook`
@@ -36,7 +41,7 @@ exports.createPaymentSession = async (req, res) => {
         headers: {
           "x-client-id": process.env.CF_APP_ID,
           "x-client-secret": process.env.CF_SECRET,
-          "x-api-version": CF_VERSION,
+          "x-api-version": "2023-08-01",
           "Content-Type": "application/json"
         }
       }
@@ -55,8 +60,11 @@ exports.createPaymentSession = async (req, res) => {
     });
 
   } catch (err) {
-    console.error("CREATE PAYMENT ERROR:", err.response?.data || err.message);
-    res.status(500).json({ success: false, error: err.message });
+    console.error("CREATE SESSION ERROR:", err.response?.data || err.message);
+    res.status(500).json({
+      success: false,
+      error: err.response?.data || err.message
+    });
   }
 };
 
