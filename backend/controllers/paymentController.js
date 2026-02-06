@@ -555,45 +555,43 @@ exports.createSession = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
-
 exports.verifyPayment = async (req, res) => {
   try {
-    const cfOrderId = req.params.orderId;
+    const { orderId } = req.params; 
 
-    const payment = await Payment.findOne({ transactionId: cfOrderId });
-
-    if (!payment) {
-      return res.status(404).json({ success: false, message: "Payment not found" });
-    }
-
-    const response = await axios.get(`${CF_BASE_URL}/orders/${cfOrderId}`, {
-      headers: {
-        "x-client-id": CF_APP_ID,
-        "x-client-secret": CF_SECRET,
-        "x-api-version": "2023-08-01"
-      }
+    // 🌟 1. முதலில் Database ID அல்லது Transaction ID எதில் இருந்தாலும் தேடு
+    const payment = await Payment.findOne({ 
+      $or: [{ orderId: orderId }, { transactionId: orderId }] 
     });
 
-    // 🌟 மிக முக்கியம்: ஆப் எதிர்பார்க்கும் 'status' மற்றும் 'Placed' தகவலை இங்கே அனுப்ப வேண்டும்
+    if (!payment) {
+      // ரெக்கார்டு இல்லையென்றால் ஆர்டர் ஸ்டேட்டஸை மட்டும் செக் பண்ணு
+      const order = await Order.findById(orderId);
+      return res.json({ 
+        success: true, 
+        status: order ? order.status : "Pending" 
+      });
+    }
+
+    // 🌟 2. Cashfree-ல் நிஜமான நிலையை அறிய transactionId-ஐப் பயன்படுத்து
+    const response = await axios.get(`${CF_BASE_URL}/orders/${payment.transactionId}`, {
+      headers: { "x-client-id": CF_APP_ID, "x-client-secret": CF_SECRET, "x-api-version": "2023-08-01" }
+    });
+
     if (response.data.order_status === "PAID") {
       payment.status = "SUCCESS";
       await payment.save();
 
+      // 🌟 மிக முக்கியம்: ஆர்டரை 'Placed' என மாற்று
       await Order.findByIdAndUpdate(payment.orderId, { status: "Placed" });
 
       return res.json({ 
         success: true, 
-        status: "Placed", // 🌟 இதைக் கண்டிப்பாக சேர்க்கவும்
-        message: "Payment successful" 
+        status: "Placed" // 🌟 இதைக் கண்டிப்பாக அனுப்ப வேண்டும்
       });
     }
 
-    // பேமெண்ட் இன்னும் முடியவில்லையென்றால் 'Pending' என அனுப்பவும்
-    res.json({ 
-      success: true, 
-      status: "Pending", // 🌟 இதையும் சேர்க்கவும்
-      message: "Payment pending" 
-    });
+    res.json({ success: true, status: "Pending" });
 
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
