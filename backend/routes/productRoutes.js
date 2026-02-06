@@ -74,6 +74,6 @@ router.put('/update/:id', protect, productCtrl.updateProduct);
 router.delete('/delete/:id', protect, productCtrl.deleteProduct);
 
 // User Interaction
-router.post('/rate/:id', protect, productCtrl.rateProduct);
+// router.post('/rate/:id', protect, productCtrl.rateProduct);
 
 module.exports = router;
