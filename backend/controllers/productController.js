@@ -323,3 +323,24 @@ exports.deleteProduct = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
+
+
+// 🌟 5. GET SIMILAR PRODUCTS
+exports.getSimilarProducts = async (req, res) => {
+    try {
+        const { category } = req.query;
+        const products = await Product.find({ 
+            category: category, 
+            _id: { $ne: req.params.id },
+            isArchived: false 
+        }).limit(10).sort({ createdAt: -1 });
+
+        const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
+        const data = products.map(p => ({
+            ...p._doc,
+            images: p.images.map(img => baseUrl + img)
+        }));
+
+        res.json({ success: true, data });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+};
