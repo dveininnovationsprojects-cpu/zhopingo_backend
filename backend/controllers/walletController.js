@@ -1,31 +1,36 @@
 const User = require('../models/User');
 const axios = require('axios');
 
-// Cashfree Credentials from .env
+// Cashfree Credentials
 const CF_APP_ID = process.env.CF_APP_ID;
 const CF_SECRET = process.env.CF_SECRET;
 const CF_URL = process.env.CF_URL;
 
+// 🌟 1. CREATE WALLET TOP-UP SESSION (Cashfree Payment Link)
 exports.createWalletTopupSession = async (req, res) => {
     try {
         const { userId, amount, customerPhone, customerName } = req.body;
+        
+        // தனித்துவமான டாப்-அப் ஐடி
         const topupId = `TOPUP_${userId}_${Date.now()}`;
 
-        // உங்கள் சர்வர் ஐபி (Port 5000 அல்லது 80 உங்கள் அமைப்பிற்கு ஏற்ப)
+        // சர்வர் URL மற்றும் ரிட்டர்ன் URL (Verified automatically by Cashfree)
         const serverURL = `${req.protocol}://${req.get('host')}`; 
         const returnURL = `${serverURL}/api/v1/wallet/verify-topup?topup_id=${topupId}`;
 
         const response = await axios.post(CF_URL,
             {
                 order_id: topupId,
-                order_amount: amount,
+                order_amount: Number(amount),
                 order_currency: "INR",
                 customer_details: {
                     customer_id: userId,
                     customer_phone: customerPhone,
                     customer_name: customerName || "Zhopingo User"
                 },
-                order_meta: { return_url: returnURL }
+                order_meta: {
+                    return_url: returnURL
+                }
             },
             {
                 headers: {
@@ -46,15 +51,13 @@ exports.createWalletTopupSession = async (req, res) => {
     }
 };
 
-// 🌟 2. VERIFY & APPROVE TOP-UP (User OK கொடுத்த பிறகு அப்டேட் ஆகும்)
+// 🌟 2. VERIFY TOP-UP & AUTO-CREDIT (தானாக பணம் ஏறும் லாஜிக்)
 exports.verifyWalletTopup = async (req, res) => {
     try {
         const topupId = req.query.topup_id;
-        const confirmAction = req.query.confirm; // 🌟 OK பட்டன் அழுத்திய பிறகு இது வரும்
-
         if (!topupId) return res.status(400).send("Invalid Topup ID");
 
-        // கேஷ்ஃப்ரீயிலிருந்து பேமெண்ட் ஸ்டேட்டஸ் சரிபார்த்தல்
+        // Cashfree-யிலிருந்து பேமெண்ட் நிலையைச் சரிபார்க்கவும்
         const response = await axios.get(`${CF_URL}/${topupId}`, {
             headers: {
                 "x-client-id": CF_APP_ID,
@@ -63,60 +66,56 @@ exports.verifyWalletTopup = async (req, res) => {
             }
         });
 
-        const isPaid = response.data.order_status === "PAID";
-        const amount = Number(response.data.order_amount);
-        const userId = response.data.customer_details.customer_id;
+        // ஸ்டேட்டஸ் PAID ஆக இருந்தால் மட்டும் வேலட்டில் சேர்க்கவும்
+        if (response.data.order_status === "PAID") {
+            const amount = Number(response.data.order_amount);
+            const userId = response.data.customer_details.customer_id;
+            
+            const user = await User.findById(userId);
+            if (!user) return res.status(404).send("User not found");
 
-        if (!isPaid) return res.status(400).send("<h1>Payment Not Completed</h1>");
+            // 🔁 டூப்ளிகேட் என்ட்ரியைத் தவிர்க்க (Payout லாஜிக் போல)
+            const alreadyProcessed = user.walletTransactions.some(t => t.reason.includes(topupId));
+            
+            if (!alreadyProcessed) {
+                user.walletBalance = (user.walletBalance || 0) + amount;
+                user.walletTransactions.unshift({
+                    amount: amount,
+                    type: 'CREDIT',
+                    reason: `Wallet Recharge (ID: ${topupId})`,
+                    date: new Date()
+                });
+                await user.save();
+            }
 
-        // 🌟 பயனர் இன்னும் OK அழுத்தவில்லை என்றால், Confirmation Screen காட்டுதல்
-        if (confirmAction !== "true") {
-            return res.send(`
+            // வெற்றிகரமான மெசேஜ் மற்றும் ஆப்பிற்குத் திரும்புதல்
+            res.send(`
                 <div style="text-align:center; padding:50px; font-family:sans-serif;">
-                    <h2 style="color:#333;">Payment Received! ₹${amount}</h2>
-                    <p>Click below to finalize and add balance to your wallet.</p>
-                    <a href="/api/v1/wallet/verify-topup?topup_id=${topupId}&confirm=true" 
-                       style="background:#0c831f; color:white; padding:15px 30px; text-decoration:none; border-radius:10px; font-weight:bold; display:inline-block; margin-top:20px;">
-                       OK, Approve Top-up
-                    </a>
+                    <h1 style="color:#0c831f;">Payment Successful! ✅</h1>
+                    <p style="font-size:18px;">₹${amount} added to your Zhopingo Wallet.</p>
+                    <script>
+                        setTimeout(() => { window.location.href = "zhopingo://wallet"; }, 2000);
+                    </script>
+                </div>
+            `);
+        } else {
+            res.send(`
+                <div style="text-align:center; padding:50px; font-family:sans-serif;">
+                    <h1 style="color:#e11d48;">Payment Failed or Pending ❌</h1>
+                    <p>Please try again if the amount was not deducted.</p>
+                    <script>
+                        setTimeout(() => { window.location.href = "zhopingo://wallet"; }, 3000);
+                    </script>
                 </div>
             `);
         }
-
-        // 🌟 பயனர் OK அழுத்திவிட்டார் (confirm=true), இப்போது வேலட் அப்டேட் செய்தல்
-        const user = await User.findById(userId);
-        if (!user) return res.status(404).send("User not found");
-
-        const alreadyProcessed = user.walletTransactions.some(t => t.reason.includes(topupId));
-        if (alreadyProcessed) {
-            return res.send(`<html><body style="text-align:center; padding:50px;"><h1>Already Added ✅</h1></body></html>`);
-        }
-
-        user.walletBalance += amount;
-        user.walletTransactions.unshift({
-            amount: amount,
-            type: 'CREDIT',
-            reason: `Wallet Top-up (ID: ${topupId})`,
-            date: new Date()
-        });
-
-        await user.save();
-
-        res.send(`
-            <div style="text-align:center; padding:50px; font-family:sans-serif;">
-                <h1 style="color:#0c831f;">Success! ✅</h1>
-                <p>₹${amount} added to your wallet.</p>
-                <script>
-                    setTimeout(function() { window.location.href = "zhopingo://wallet-success"; }, 2000);
-                </script>
-            </div>
-        `);
-
     } catch (err) {
+        console.error("Verification Error:", err.message);
         res.status(500).send("Verification Error");
     }
 };
-// 🌟 3. GET WALLET STATUS (பேலன்ஸ் மற்றும் டிரான்ஸாக்ஷன்கள்)
+
+// 🌟 3. GET WALLET STATUS
 exports.getWalletStatus = async (req, res) => {
     try {
         const user = await User.findById(req.params.userId).select('walletBalance walletTransactions');
