@@ -126,14 +126,16 @@
 // };
 
 
+
+
 const axios = require("axios");
 const Order = require("../models/Order");
 const Payment = require("../models/Payment");
 
-// 🌟 Hardcoding the URL is safe and prevents "undefined" errors
+// Hardcoding the URL here is safe and standard
 const CF_BASE_URL = "https://sandbox.cashfree.com/pg";
 
-// 🌟 These MUST be set in your AWS server's .env file
+// Ensure these are set in your .env file on the AWS server
 const CF_APP_ID = process.env.CF_APP_ID;
 const CF_SECRET = process.env.CF_SECRET;
 
@@ -141,7 +143,7 @@ exports.createSession = async (req, res) => {
   try {
     const { orderId, amount, customerId, customerPhone, customerName } = req.body;
 
-    // Validate Credentials
+    // 1. Validate Credentials exist
     if (!CF_APP_ID || !CF_SECRET) {
       return res.status(500).json({ success: false, message: "Payment credentials missing on server" });
     }
@@ -153,15 +155,16 @@ exports.createSession = async (req, res) => {
 
     const cfOrderId = `CF_${orderId}_${Date.now()}`;
 
+    // 2. Call Cashfree POST API (This cannot be done via browser)
     const response = await axios.post(
       `${CF_BASE_URL}/orders`,
       {
         order_id: cfOrderId,
-        order_amount: amount,
+        order_amount: Number(amount), // Ensure amount is a number
         order_currency: "INR",
         customer_details: {
-          customer_id: String(customerId),
-          customer_phone: customerPhone,
+          customer_id: String(customerId), // Ensure ID is a string
+          customer_phone: String(customerPhone),
           customer_name: customerName || "Customer"
         }
       },
@@ -175,7 +178,7 @@ exports.createSession = async (req, res) => {
       }
     );
 
-    // Initial Database Entry
+    // 3. Save Pending Payment to DB
     await Payment.create({
       orderId,
       transactionId: cfOrderId,
@@ -186,11 +189,12 @@ exports.createSession = async (req, res) => {
     res.json({
       success: true,
       cfOrderId,
-      paymentSessionId: response.data.payment_session_id
+      paymentSessionId: response.data.payment_session_id // Give this to Mobile SDK
     });
 
   } catch (err) {
-    console.error("CREATE SESSION ERROR:", err.response?.data || err.message);
+    // This logs the EXACT reason why Cashfree rejected the POST request
+    console.error("CASHFREE API ERROR:", err.response?.data || err.message);
     res.status(500).json({ 
       success: false, 
       error: err.response?.data?.message || err.message 
