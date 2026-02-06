@@ -192,7 +192,6 @@ exports.createSession = async (req, res) => {
   }
 };
 // controllers/paymentController.js
-// controllers/paymentController.js
 
 exports.verifyPayment = async (req, res) => {
   try {
@@ -201,7 +200,7 @@ exports.verifyPayment = async (req, res) => {
     const payment = await Payment.findOne({ orderId: orderId });
     if (!payment) return res.status(404).json({ success: false, message: "Record not found" });
 
-    const response = await axios.get(`${CF_BASE_URL}/orders/${payment.transactionId}`, {
+    const response = await axios.get(`${CASHFREE_END_POINT}/${payment.transactionId}`, {
       headers: { 
           "x-client-id": process.env.CF_APP_ID, 
           "x-client-secret": process.env.CF_SECRET, 
