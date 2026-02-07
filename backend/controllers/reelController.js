@@ -1,5 +1,6 @@
 
 const Reel = require('../models/Reel');
+const mongoose = require('mongoose');
 
 exports.uploadReel = async (req, res) => {
     try {
@@ -63,45 +64,32 @@ exports.getAllReels = async (req, res) => {
   }
 };
 exports.toggleLike = async (req, res) => {
-  try {
-    if (!req.user || !req.user._id) {
-      return res.status(401).json({ success: false, message: "Unauthorized" });
+    try {
+        const userId = req.user.id || req.user._id;
+        const reel = await Reel.findById(req.params.id);
+
+        if (!reel) return res.status(404).json({ success: false, message: "Reel not found" });
+
+        // 🌟 இங்கே mongoose பயன்படுத்துவதால் மேலே require('mongoose') கட்டாயம் தேவை
+        const userObjectId = new mongoose.Types.ObjectId(userId);
+
+        const index = reel.likedBy.findIndex(id => id.toString() === userObjectId.toString());
+
+        let isLiked;
+        if (index === -1) {
+            reel.likedBy.push(userObjectId);
+            isLiked = true;
+        } else {
+            reel.likedBy.splice(index, 1);
+            isLiked = false;
+        }
+
+        await reel.save();
+        res.json({ success: true, likes: reel.likedBy.length, isLiked });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
     }
-
-    const reel = await Reel.findById(req.params.id);
-    if (!reel) {
-      return res.status(404).json({ success: false, message: "Reel not found" });
-    }
-
-    const userId = new mongoose.Types.ObjectId(req.user._id);
-
-    const index = reel.likedBy.findIndex(
-      id => id.toString() === userId.toString()
-    );
-
-    let isLiked;
-
-    if (index === -1) {
-      reel.likedBy.push(userId);
-      isLiked = true;
-    } else {
-      reel.likedBy.splice(index, 1);
-      isLiked = false;
-    }
-
-    await reel.save();
-
-    res.json({
-      success: true,
-      likes: reel.likedBy.length,
-      isLiked
-    });
-  } catch (err) {
-    console.error("LIKE ERROR:", err);
-    res.status(500).json({ success: false, message: err.message });
-  }
 };
-
 
 
 exports.reportReel = async (req, res) => {
