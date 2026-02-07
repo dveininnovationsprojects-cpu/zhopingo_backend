@@ -1,10 +1,14 @@
 const axios = require("axios");
+const crypto = require("crypto");
 const Order = require("../models/Order");
 const Payment = require("../models/Payment");
 
-const CASHFREE_ORDER_URL = "https://sandbox.cashfree.com/pg/orders";
+const CF_BASE = "https://sandbox.cashfree.com/pg";
+const CF_VERSION = "2023-08-01";
 
-/* ================= CREATE PAYMENT SESSION ================= */
+/* =====================================================
+   1️⃣ CREATE PAYMENT SESSION (SERVER → CASHFREE)
+===================================================== */
 exports.createPaymentSession = async (req, res) => {
   try {
     const {
@@ -15,18 +19,15 @@ exports.createPaymentSession = async (req, res) => {
       customerName
     } = req.body;
 
-    // 1️⃣ Validate order
     const order = await Order.findById(orderId);
     if (!order) {
       return res.status(404).json({ success: false, message: "Order not found" });
     }
 
-    // 2️⃣ Create Cashfree Order ID
     const cfOrderId = `CF_${orderId}_${Date.now()}`;
 
-    // 3️⃣ Call Cashfree (SERVER → SERVER)
     const response = await axios.post(
-      CASHFREE_ORDER_URL,
+      `${CF_BASE}/orders`,
       {
         order_id: cfOrderId,
         order_amount: Number(amount),
@@ -37,20 +38,19 @@ exports.createPaymentSession = async (req, res) => {
           customer_name: customerName || "Customer"
         },
         order_meta: {
-          notify_url: `${process.env.BASE_URL}/api/payments/cashfree/webhook`
+          notify_url: `${process.env.BASE_URL}/api/v1/payments/cashfree/webhook`
         }
       },
       {
         headers: {
           "x-client-id": process.env.CF_APP_ID,
           "x-client-secret": process.env.CF_SECRET,
-          "x-api-version": "2023-08-01",
+          "x-api-version": CF_VERSION,
           "Content-Type": "application/json"
         }
       }
     );
 
-    // 4️⃣ Save payment record
     await Payment.create({
       orderId,
       cfOrderId,
@@ -58,14 +58,13 @@ exports.createPaymentSession = async (req, res) => {
       status: "PENDING"
     });
 
-    // 5️⃣ Send session ID to frontend
     res.json({
       success: true,
       paymentSessionId: response.data.payment_session_id
     });
 
   } catch (err) {
-    console.error("CASHFREE CREATE ERROR:", err.response?.data || err.message);
+    console.error("CREATE SESSION ERROR:", err.response?.data || err.message);
     res.status(500).json({
       success: false,
       error: err.response?.data || err.message
@@ -73,12 +72,62 @@ exports.createPaymentSession = async (req, res) => {
   }
 };
 
-/* ================= VERIFY (DB ONLY – REAL WORLD) ================= */
+/* =====================================================
+   2️⃣ CASHFREE WEBHOOK (ONLY PLACE ORDER HERE ✅)
+===================================================== */
+exports.cashfreeWebhook = async (req, res) => {
+  try {
+    const signature = req.headers["x-webhook-signature"];
+    const rawBody = JSON.stringify(req.body);
+
+    const expectedSignature = crypto
+      .createHmac("sha256", process.env.CF_WEBHOOK_SECRET)
+      .update(rawBody)
+      .digest("base64");
+
+    if (signature !== expectedSignature) {
+      return res.status(401).send("Invalid signature");
+    }
+
+    const { order_id, order_status } = req.body.data;
+
+    const payment = await Payment.findOne({ cfOrderId: order_id });
+    if (!payment) return res.sendStatus(200);
+
+    if (order_status === "PAID") {
+      payment.status = "SUCCESS";
+      await payment.save();
+
+      await Order.findByIdAndUpdate(payment.orderId, {
+        status: "Placed"
+      });
+    }
+
+    if (order_status === "FAILED") {
+      payment.status = "FAILED";
+      await payment.save();
+
+      await Order.findByIdAndUpdate(payment.orderId, {
+        status: "Failed"
+      });
+    }
+
+    res.sendStatus(200);
+
+  } catch (err) {
+    console.error("WEBHOOK ERROR:", err.message);
+    res.sendStatus(500);
+  }
+};
+
+/* =====================================================
+   3️⃣ VERIFY (READ-ONLY – OPTIONAL)
+===================================================== */
 exports.verifyPayment = async (req, res) => {
   try {
     const { orderId } = req.params;
-
     const order = await Order.findById(orderId);
+
     if (!order) {
       return res.status(404).json({ success: false });
     }
@@ -92,7 +141,6 @@ exports.verifyPayment = async (req, res) => {
     res.status(500).json({ success: false });
   }
 };
-
 
 
 
