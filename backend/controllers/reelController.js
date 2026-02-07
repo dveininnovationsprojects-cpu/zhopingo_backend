@@ -40,19 +40,21 @@ exports.uploadReel = async (req, res) => {
 exports.getAllReels = async (req, res) => {
   try {
     const userId = req.user?._id;
+    const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
 
     const reels = await Reel.find({ isBlocked: false })
       .populate('sellerId', 'shopName')
+      .populate('productId') // ✅ ADD THIS
       .sort({ createdAt: -1 });
 
     const formatted = reels.map(reel => ({
       _id: reel._id,
-      videoUrl: reel.videoUrl,
+      videoUrl: baseUrl + reel.videoUrl, // ✅ FULL URL
       description: reel.description,
       sellerId: reel.sellerId,
       productId: reel.productId,
       shares: reel.shares,
-      likes: reel.likedBy.length, // 👈 derived
+      likes: reel.likedBy.length,
       isLiked: userId
         ? reel.likedBy.some(id => id.toString() === userId.toString())
         : false
@@ -64,9 +66,12 @@ exports.getAllReels = async (req, res) => {
   }
 };
 
+
+const mongoose = require('mongoose');
+
 exports.toggleLike = async (req, res) => {
   try {
-    if (!req.user || !req.user.id) {
+    if (!req.user || !req.user._id) {
       return res.status(401).json({ success: false, message: "Unauthorized" });
     }
 
@@ -75,7 +80,7 @@ exports.toggleLike = async (req, res) => {
       return res.status(404).json({ success: false, message: "Reel not found" });
     }
 
-    const userId = new mongoose.Types.ObjectId(req.user.id); // 🔥 CRITICAL FIX
+    const userId = new mongoose.Types.ObjectId(req.user._id);
 
     const index = reel.likedBy.findIndex(
       id => id.toString() === userId.toString()
@@ -99,10 +104,11 @@ exports.toggleLike = async (req, res) => {
       isLiked
     });
   } catch (err) {
-    console.error("LIKE ERROR:", err); // 👈 will now be clean
+    console.error("LIKE ERROR:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
+
 
 
 exports.reportReel = async (req, res) => {
