@@ -39,23 +39,21 @@ exports.uploadReel = async (req, res) => {
 };
 exports.getAllReels = async (req, res) => {
   try {
-    const userId = req.user?._id;
+    // 🌟 Middleware-லிருந்து id எடுக்கிறோம்
+    const userId = req.user ? (req.user.id || req.user._id) : null; 
+    const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
 
     const reels = await Reel.find({ isBlocked: false })
       .populate('sellerId', 'shopName')
+      .populate('productId')
       .sort({ createdAt: -1 });
 
     const formatted = reels.map(reel => ({
-      _id: reel._id,
-      videoUrl: reel.videoUrl,
-      description: reel.description,
-      sellerId: reel.sellerId,
-      productId: reel.productId,
-      shares: reel.shares,
-      likes: reel.likedBy.length, // 👈 derived
-      isLiked: userId
-        ? reel.likedBy.some(id => id.toString() === userId.toString())
-        : false
+      ...reel._doc,
+      videoUrl: baseUrl + reel.videoUrl,
+      likes: reel.likedBy.length,
+      // 🌟 லாக்-இன் செய்த யூசர் இந்த லிஸ்டில் இருக்கிறாரா என்று செக் செய்கிறோம்
+      isLiked: userId ? reel.likedBy.some(id => id.toString() === userId.toString()) : false
     }));
 
     res.json({ success: true, data: formatted });
@@ -63,7 +61,6 @@ exports.getAllReels = async (req, res) => {
     res.status(500).json({ success: false, message: err.message });
   }
 };
-const mongoose = require('mongoose');
 
 exports.toggleLike = async (req, res) => {
   try {
