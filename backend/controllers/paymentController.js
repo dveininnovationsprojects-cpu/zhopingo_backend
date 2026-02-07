@@ -253,9 +253,22 @@ const Payment = require("../models/Payment");
 const CF_APP_ID = process.env.CF_APP_ID;
 const CF_SECRET = process.env.CF_SECRET;
 
+const axios = require("axios");
+const Order = require("../models/Order");
+const Payment = require("../models/Payment");
+
+const CF_BASE = "https://sandbox.cashfree.com/pg";
+const CF_VERSION = "2023-08-01";
+
 exports.createPaymentSession = async (req, res) => {
   try {
-    const { orderId, amount, customerId, customerPhone, customerName } = req.body;
+    const {
+      orderId,
+      amount,
+      customerId,
+      customerPhone,
+      customerName
+    } = req.body;
 
     const order = await Order.findById(orderId);
     if (!order) {
@@ -265,29 +278,37 @@ exports.createPaymentSession = async (req, res) => {
     const cfOrderId = `CF_${orderId}_${Date.now()}`;
 
     const response = await axios.post(
-      "https://sandbox.cashfree.com/pg/orders",
+      `${CF_BASE}/orders`,
       {
         order_id: cfOrderId,
         order_amount: amount,
         order_currency: "INR",
+
         customer_details: {
           customer_id: String(customerId),
           customer_phone: String(customerPhone),
           customer_name: customerName || "Customer"
         },
+
+        // 🔥 REQUIRED – VERY IMPORTANT
         order_meta: {
-          notify_url: `${process.env.BASE_URL}/api/v1/payments/cashfree/webhook`
+          return_url: "myapp://payment-success",
+          notify_url: "http://54.157.210.26/api/v1/payments/cashfree/webhook"
         }
       },
       {
         headers: {
-          "x-client-id": CF_APP_ID,
-          "x-client-secret": CF_SECRET,
-          "x-api-version": "2023-08-01",
+          "x-client-id": process.env.CF_APP_ID,
+          "x-client-secret": process.env.CF_SECRET,
+          "x-api-version": CF_VERSION,
           "Content-Type": "application/json"
         }
       }
     );
+
+    if (!response.data?.payment_session_id) {
+      return res.status(500).json({ success: false, message: "Session not created" });
+    }
 
     await Payment.create({
       orderId,
@@ -296,16 +317,20 @@ exports.createPaymentSession = async (req, res) => {
       status: "PENDING"
     });
 
-    res.json({
+    return res.json({
       success: true,
-      paymentSessionId: response.data.payment_session_id
+      paymentSessionId: response.data.payment_session_id.trim()
     });
 
   } catch (err) {
-    console.error("CASHFREE ERROR:", err.response?.data || err.message);
-    res.status(500).json({ success: false });
+    console.error("🔥 CASHFREE ERROR:", err.response?.data || err.message);
+    return res.status(500).json({
+      success: false,
+      error: err.response?.data || err.message
+    });
   }
 };
+
 
 exports.verifyPayment = async (req, res) => {
   try {
