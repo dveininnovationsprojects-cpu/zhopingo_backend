@@ -10,6 +10,17 @@ const walletRoutes = require('./routes/walletRoutes');
 
 
 const app = express();
+// Webhook MUST come before express.json
+app.use(
+  "/api/payments/cashfree/webhook",
+  express.raw({ type: "application/json" }),
+  require("./routes/cashfreeWebhook")
+);
+
+app.use(express.json());
+
+app.use("/api/payments", require("./routes/paymentRoutes"));
+
 app.use(express.json());
 app.use(cookieParser()); 
 app.use(cors({ 
@@ -37,10 +48,6 @@ app.use('/api/v1/products', require('./routes/productRoutes'));
 app.use('/api/v1/orders', require('./routes/orderRoutes'));
 app.use('/api/v1/payments', require('./routes/paymentRoutes'));
 app.use('/api/v1/reels', require('./routes/reelRoutes'));
-app.use(
-  "/api/payments/cashfree/webhook",
-  express.raw({ type: "application/json" })
-);
 
 
 // Seller & Admin Routes

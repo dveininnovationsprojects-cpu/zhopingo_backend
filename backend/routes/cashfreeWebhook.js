@@ -8,15 +8,15 @@ const router = express.Router();
 router.post("/cashfree/webhook", async (req, res) => {
   try {
     const signature = req.headers["x-webhook-signature"];
-    const rawBody = JSON.stringify(req.body);
+    const body = JSON.stringify(req.body);
 
     const expected = crypto
       .createHmac("sha256", process.env.CF_WEBHOOK_SECRET)
-      .update(rawBody)
+      .update(body)
       .digest("base64");
 
     if (signature !== expected) {
-      return res.status(401).send("Invalid signature");
+      return res.sendStatus(401);
     }
 
     const { order_id, order_status } = req.body.data;

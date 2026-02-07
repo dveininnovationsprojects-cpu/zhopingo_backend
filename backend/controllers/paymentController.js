@@ -2,9 +2,9 @@ const axios = require("axios");
 const Order = require("../models/Order");
 const Payment = require("../models/Payment");
 
-const CF_BASE = "https://sandbox.cashfree.com/pg";
-const CF_VERSION = "2023-08-01";
+const CASHFREE_ORDER_URL = "https://sandbox.cashfree.com/pg/orders";
 
+/* ================= CREATE PAYMENT SESSION ================= */
 exports.createPaymentSession = async (req, res) => {
   try {
     const {
@@ -15,18 +15,21 @@ exports.createPaymentSession = async (req, res) => {
       customerName
     } = req.body;
 
+    // 1️⃣ Validate order
     const order = await Order.findById(orderId);
     if (!order) {
-      return res.status(404).json({ message: "Order not found" });
+      return res.status(404).json({ success: false, message: "Order not found" });
     }
 
+    // 2️⃣ Create Cashfree Order ID
     const cfOrderId = `CF_${orderId}_${Date.now()}`;
 
+    // 3️⃣ Call Cashfree (SERVER → SERVER)
     const response = await axios.post(
-      "https://sandbox.cashfree.com/pg/orders",
+      CASHFREE_ORDER_URL,
       {
         order_id: cfOrderId,
-        order_amount: amount,
+        order_amount: Number(amount),
         order_currency: "INR",
         customer_details: {
           customer_id: String(customerId),
@@ -47,6 +50,7 @@ exports.createPaymentSession = async (req, res) => {
       }
     );
 
+    // 4️⃣ Save payment record
     await Payment.create({
       orderId,
       cfOrderId,
@@ -54,13 +58,14 @@ exports.createPaymentSession = async (req, res) => {
       status: "PENDING"
     });
 
+    // 5️⃣ Send session ID to frontend
     res.json({
       success: true,
       paymentSessionId: response.data.payment_session_id
     });
 
   } catch (err) {
-    console.error("CREATE SESSION ERROR:", err.response?.data || err.message);
+    console.error("CASHFREE CREATE ERROR:", err.response?.data || err.message);
     res.status(500).json({
       success: false,
       error: err.response?.data || err.message
@@ -68,7 +73,7 @@ exports.createPaymentSession = async (req, res) => {
   }
 };
 
-/* ================= VERIFY (READ-ONLY) ================= */
+/* ================= VERIFY (DB ONLY – REAL WORLD) ================= */
 exports.verifyPayment = async (req, res) => {
   try {
     const { orderId } = req.params;
