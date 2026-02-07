@@ -40,24 +40,16 @@ exports.uploadReel = async (req, res) => {
 exports.getAllReels = async (req, res) => {
     try {
         const userId = req.user ? req.user.id : null; 
+        const reels = await Reel.find().populate('sellerId', 'shopName');
 
-        const reels = await Reel.find()
-            .populate('productId')
-            .populate('sellerId', 'name shopName')
-            .sort({ createdAt: -1 });
+        const data = reels.map(reel => ({
+            ...reel._doc,
+            
+            isLiked: userId ? reel.likedBy.includes(userId) : false, 
+            likes: reel.likedBy.length
+        }));
 
-        const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
-        
-        const reelsWithFullUrl = reels.map(reel => {
-            return {
-                ...reel._doc,
-                videoUrl: baseUrl + reel.videoUrl,
-                
-                isLiked: userId ? reel.likedBy.includes(userId) : false
-            };
-        });
-
-        res.json({ success: true, data: reelsWithFullUrl });
+        res.json({ success: true, data });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
