@@ -39,7 +39,7 @@ exports.uploadReel = async (req, res) => {
 };
 exports.getAllReels = async (req, res) => {
     try {
-        // லாக்-இன் செய்துள்ள யூசர் ஐடியை எடுக்கிறோம்
+        // 🌟 'protect' மிடில்வேர் மூலம் வரும் லாக்-இன் செய்த யூசர் ஐடி
         const userId = req.user ? req.user.id : null; 
 
         const reels = await Reel.find()
@@ -49,13 +49,17 @@ exports.getAllReels = async (req, res) => {
 
         const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
         
-        const data = reels.map(reel => ({
-            ...reel._doc,
-            videoUrl: baseUrl + reel.videoUrl,
-            
-            isLiked: userId ? reel.likedBy.some(id => id.toString() === userId.toString()) : false,
-            likes: reel.likedBy.length 
-        }));
+        const data = reels.map(reel => {
+            const reelObj = reel._doc;
+            return {
+                ...reelObj,
+                videoUrl: baseUrl + reelObj.videoUrl,
+                // 🌟 இந்த ஒரு வரி தான் உங்கள் ஹார்ட் பட்டனை சிவப்பாக்கும்:
+                // லாக்-இன் செய்த யூசர் ஐடி 'likedBy' அரே-வில் இருக்கிறாரா என்று செக் செய்கிறோம்
+                isLiked: userId ? reelObj.likedBy.some(id => id.toString() === userId.toString()) : false,
+                likes: reelObj.likedBy.length
+            };
+        });
 
         res.json({ success: true, data });
     } catch (err) { 
