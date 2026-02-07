@@ -55,14 +55,14 @@ const axios = require("axios");
 const Order = require("../models/Order");
 const Payment = require("../models/Payment");
 
-// DO NOT CHANGE THIS URL
+
 const CASHFREE_END_POINT = "https://sandbox.cashfree.com/pg/orders";
 
 exports.createSession = async (req, res) => {
   try {
     const { orderId, amount, customerId, customerPhone, customerName } = req.body;
 
-    // Use local variables to ensure they are being read from .env correctly
+    
     const appId = process.env.CF_APP_ID;
     const secretKey = process.env.CF_SECRET;
 
@@ -72,7 +72,7 @@ exports.createSession = async (req, res) => {
 
     const cfOrderId = `ORD_${orderId}_${Date.now()}`;
 
-    // THE POST CALL (Server-to-Server)
+   
     const response = await axios({
       method: 'post',
       url: CASHFREE_END_POINT,
@@ -101,7 +101,7 @@ exports.createSession = async (req, res) => {
       status: "PENDING", 
     });
 
-    //  Return the Session ID to the Mobile App
+   
     res.json({
       success: true,
       cfOrderId,
@@ -109,13 +109,13 @@ exports.createSession = async (req, res) => {
     });
 
   } catch (err) {
-    //  THIS WILL SHOW THE REAL ERROR IN YOUR VS CODE TERMINAL
+    
     const errorData = err.response?.data || err.message;
     console.error("CASHFREE REJECTION:", errorData);
     res.status(500).json({ success: false, error: errorData });
   }
 };
-// controllers/paymentController.js
+
 
 exports.verifyPayment = async (req, res) => {
   try {
@@ -132,7 +132,7 @@ exports.verifyPayment = async (req, res) => {
       }
     });
 
-    // Payment success aana Order status-ai mathanum
+    
     if (response.data.order_status === "PAID") {
       await Order.findByIdAndUpdate(orderId, { status: "Placed" });
       payment.status = "SUCCESS";
