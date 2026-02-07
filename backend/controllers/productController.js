@@ -192,33 +192,43 @@ exports.deleteProduct = async (req, res) => {
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
-};
-exports.getSimilarProducts = async (req, res) => {
+};exports.getSimilarProducts = async (req, res) => {
     try {
         const { id } = req.params; // தற்போது பார்க்கும் தயாரிப்பின் ID
         const { category } = req.query; // URL-ல் வரும் Category ID
 
-        if (!category) {
-            return res.status(400).json({ success: false, message: "Category is required" });
+        // ஐடி செக் செய்தல்
+        if (!category || category === 'undefined') {
+            return res.status(400).json({ success: false, message: "Valid Category ID is required" });
         }
 
-        
+        // 🌟 லாஜிக்: அதே பிரிவில் இருக்க வேண்டும், ஆனால் அதே தயாரிப்பாக இருக்கக்கூடாது
         const similarProducts = await Product.find({
             category: category,
-            _id: { $ne: id }, 
-            isArchived: false
+            _id: { $ne: id }, // $ne = Not Equal (தற்போதைய தயாரிப்பைத் தவிர்க்க)
+            isArchived: { $ne: true }
         })
-        .limit(10) // எத்தனை தயாரிப்புகள் காட்ட வேண்டும்
-        .populate('category subCategory');
+        .limit(6) // 6 தயாரிப்புகள் போதும்
+        .populate('category subCategory', 'name')
+        .lean();
+
+        const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
+        
+        // இமேஜ் URL-களைச் சேர்த்தல்
+        const data = similarProducts.map(p => ({
+            ...p,
+            images: p.images ? p.images.map(img => 
+                (img && img.startsWith('http')) ? img : baseUrl + img
+            ) : []
+        }));
 
         res.json({
             success: true,
-            count: similarProducts.length,
-            data: similarProducts
+            count: data.length,
+            data: data
         });
     } catch (err) {
-        console.error("Similar Products Error:", err.message);
-        res.status(500).json({ success: false, message: err.message });
+        res.status(500).json({ success: false, error: err.message });
     }
 };
 
