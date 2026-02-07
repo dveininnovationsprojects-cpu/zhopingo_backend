@@ -43,8 +43,14 @@ router.put('/hsn-master/:id', catalogController.updateHsnStatus);
 router.delete('/hsn-master/:id', catalogController.deleteHsnCode);
 
 // --- Categories ---
-// 🌟 Added processImages after upload.single
-router.post('/categories', upload.single('image'), processImages, catalogController.createCategory);
+
+router.post(
+  "/categories",
+  upload.single("image"),   
+  processImages,
+  catalogController.createCategory
+);
+
 router.get('/categories', catalogController.getCategories);
 router.put('/categories/:id', upload.single('image'), processImages, catalogController.updateCategory);
 router.delete('/categories/:id', catalogController.deleteCategory);

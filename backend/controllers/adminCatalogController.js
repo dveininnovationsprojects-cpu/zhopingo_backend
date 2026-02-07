@@ -52,18 +52,33 @@ exports.updateHsnStatus = async (req, res) => {
 
 
 
-// ================= 🌟 CATEGORY FEATURES =================
 exports.createCategory = async (req, res) => {
-    try {
-        const { name, description, hsnCode, gstRate } = req.body;
-        const imagePath = req.file ? `/uploads/${req.file.filename}` : null;
-        if (!imagePath) return res.status(400).json({ error: "Image is required" });
+  try {
+    const { name, description, hsnCode, gstRate } = req.body;
 
-        const category = new Category({ name, description, hsnCode, gstRate, image: imagePath });
-        await category.save();
-        res.status(201).json({ success: true, data: category });
-    } catch (err) { res.status(400).json({ error: err.message }); }
+    if (!req.file) {
+      return res.status(400).json({ error: "Image upload failed" });
+    }
+
+    const imagePath = `/uploads/${req.file.filename}`;
+
+    const category = new Category({
+      name,
+      description,
+      hsnCode,
+      gstRate,
+      image: imagePath,
+      isActive: true
+    });
+
+    await category.save();
+
+    res.status(201).json({ success: true, data: category });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 };
+
 
 exports.getCategories = async (req, res) => {
     try {

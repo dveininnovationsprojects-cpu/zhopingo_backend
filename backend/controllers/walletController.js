@@ -84,3 +84,49 @@ exports.verifyWalletTopup = async (req, res) => {
     res.redirect("zhopingo://wallet-failed");
   }
 };
+// ✅ GET WALLET STATUS
+exports.getWalletStatus = async (req, res) => {
+  try {
+    const user = await User.findById(req.params.userId).select(
+      "walletBalance walletTransactions"
+    );
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    res.json({
+      success: true,
+      balance: user.walletBalance,
+      transactions: user.walletTransactions
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+// ✅ ADMIN WALLET UPDATE
+exports.adminUpdateWallet = async (req, res) => {
+  try {
+    const { userId, amount, reason } = req.body;
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    user.walletBalance += Number(amount);
+    user.walletTransactions.unshift({
+      amount: Number(amount),
+      type: amount >= 0 ? "CREDIT" : "DEBIT",
+      reason: reason || "Admin Adjustment",
+      date: new Date()
+    });
+
+    await user.save();
+
+    res.json({ success: true, balance: user.walletBalance });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
