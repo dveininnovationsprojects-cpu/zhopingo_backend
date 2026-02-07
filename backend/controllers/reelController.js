@@ -39,7 +39,7 @@ exports.uploadReel = async (req, res) => {
 };
 exports.getAllReels = async (req, res) => {
   try {
-    // 🌟 Middleware-லிருந்து id எடுக்கிறோம்
+    // 🌟 req.user இல்லை என்றாலும் எரர் வராது, null என எடுத்துக்கொள்ளும்
     const userId = req.user ? (req.user.id || req.user._id) : null; 
     const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
 
@@ -51,17 +51,17 @@ exports.getAllReels = async (req, res) => {
     const formatted = reels.map(reel => ({
       ...reel._doc,
       videoUrl: baseUrl + reel.videoUrl,
-      likes: reel.likedBy.length,
-      // 🌟 லாக்-இன் செய்த யூசர் இந்த லிஸ்டில் இருக்கிறாரா என்று செக் செய்கிறோம்
-      isLiked: userId ? reel.likedBy.some(id => id.toString() === userId.toString()) : false
+      likes: reel.likedBy ? reel.likedBy.length : 0,
+      // 🌟 யூசர் லாக்-இன் செய்திருந்தால் மட்டுமே isLiked செக் செய்யும்
+      isLiked: (userId && reel.likedBy) ? reel.likedBy.some(id => id.toString() === userId.toString()) : false
     }));
 
     res.json({ success: true, data: formatted });
   } catch (err) {
+    console.error("GET REELS ERROR:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
-
 exports.toggleLike = async (req, res) => {
   try {
     if (!req.user || !req.user._id) {
