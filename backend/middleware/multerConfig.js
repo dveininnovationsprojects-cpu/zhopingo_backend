@@ -1,45 +1,38 @@
-const multer = require('multer');
-const sharp = require('sharp');
-const path = require('path');
-const fs = require('fs');
+const multer = require("multer");
+const path = require("path");
+const fs = require("fs");
 
-const storage = multer.memoryStorage(); // Store in RAM for Sharp to process
+// ensure upload folder exists
+const uploadDir = path.join(__dirname, "../public/uploads");
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
 
-const upload = multer({ 
-    storage: storage,
-    limits: { fileSize: 100 * 1024 * 1024 } 
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, uploadDir);
+  },
+  filename: function (req, file, cb) {
+    const uniqueName =
+      Date.now() + "-" + Math.round(Math.random() * 1e9) + path.extname(file.originalname);
+    cb(null, uniqueName);
+  }
 });
 
-const processImages = async (req, res, next) => {
-    if (!req.files && !req.file) return next();
-
-    try {
-        const uploadDir = 'public/uploads/';
-        if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-
-        const processFile = async (file) => {
-            const fileName = `${Date.now()}-${Math.round(Math.random() * 1E9)}.webp`;
-            await sharp(file.buffer)
-                .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
-                .webp({ quality: 80 }) 
-                .toFile(path.join(uploadDir, fileName));
-            file.filename = fileName; // Important for your Controller
-        };
-
-        if (req.files && req.files['images']) {
-            await Promise.all(req.files['images'].map(file => processFile(file)));
-        }
-
-        if (req.files && req.files['video']) {
-            const video = req.files['video'][0];
-            const videoName = `${Date.now()}-${video.originalname.replace(/\s/g, '_')}`;
-            fs.writeFileSync(path.join(uploadDir, videoName), video.buffer);
-            video.filename = videoName;
-        }
-        next();
-    } catch (err) {
-        res.status(500).json({ success: false, error: "Image processing failed" });
+const upload = multer({
+  storage,
+  fileFilter: (req, file, cb) => {
+    if (!file.mimetype.startsWith("image/")) {
+      return cb(new Error("Only image files allowed"), false);
     }
+    cb(null, true);
+  }
+});
+
+// ✅ IMPORTANT: processImages must NOT modify req.file
+const processImages = (req, res, next) => {
+  // just pass through
+  next();
 };
 
-module.exports = { upload, processImages }; // Exporting BOTH
+module.exports = { upload, processImages };
