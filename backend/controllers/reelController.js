@@ -38,50 +38,65 @@ exports.uploadReel = async (req, res) => {
     }
 };
 exports.getAllReels = async (req, res) => {
-    try {
-        // 🌟 'protect' மிடில்வேர் மூலம் வரும் லாக்-இன் செய்த யூசர் ஐடி
-        const userId = req.user ? req.user.id : null; 
+  try {
+    const userId = req.user?._id;
 
-        const reels = await Reel.find()
-            .populate('productId')
-            .populate('sellerId', 'name shopName') 
-            .sort({ createdAt: -1 });
+    const reels = await Reel.find({ isBlocked: false })
+      .populate('sellerId', 'shopName')
+      .sort({ createdAt: -1 });
 
-        const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
-        
-        const data = reels.map(reel => {
-            const reelObj = reel._doc;
-            return {
-                ...reelObj,
-                videoUrl: baseUrl + reelObj.videoUrl,
-                // 🌟 இந்த ஒரு வரி தான் உங்கள் ஹார்ட் பட்டனை சிவப்பாக்கும்:
-                // லாக்-இன் செய்த யூசர் ஐடி 'likedBy' அரே-வில் இருக்கிறாரா என்று செக் செய்கிறோம்
-                isLiked: userId ? reelObj.likedBy.some(id => id.toString() === userId.toString()) : false,
-                likes: reelObj.likedBy.length
-            };
-        });
+    const formatted = reels.map(reel => ({
+      _id: reel._id,
+      videoUrl: reel.videoUrl,
+      description: reel.description,
+      sellerId: reel.sellerId,
+      productId: reel.productId,
+      shares: reel.shares,
+      likes: reel.likedBy.length, // 👈 derived
+      isLiked: userId
+        ? reel.likedBy.some(id => id.toString() === userId.toString())
+        : false
+    }));
 
-        res.json({ success: true, data });
-    } catch (err) { 
-        res.status(500).json({ error: err.message }); 
-    }
+    res.json({ success: true, data: formatted });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
 };
-exports.toggleLike = async (req, res) => {
-    try {
-        const reel = await Reel.findById(req.params.id);
-        const userId = req.user.id; 
 
-        const isLiked = reel.likedBy.includes(userId);
-        if (isLiked) {
-            reel.likes -= 1;
-            reel.likedBy = reel.likedBy.filter(id => id.toString() !== userId);
-        } else {
-            reel.likes += 1;
-            reel.likedBy.push(userId);
-        }
-        await reel.save();
-        res.json({ success: true, likes: reel.likes, isLiked: !isLiked });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+// 🔹 TOGGLE LIKE
+exports.toggleLike = async (req, res) => {
+  try {
+    const reel = await Reel.findById(req.params.id);
+    if (!reel) {
+      return res.status(404).json({ success: false, message: 'Reel not found' });
+    }
+
+    const userId = req.user._id;
+    const index = reel.likedBy.findIndex(
+      id => id.toString() === userId.toString()
+    );
+
+    let isLiked;
+
+    if (index === -1) {
+      reel.likedBy.push(userId);
+      isLiked = true;
+    } else {
+      reel.likedBy.splice(index, 1);
+      isLiked = false;
+    }
+
+    await reel.save();
+
+    res.json({
+      success: true,
+      likes: reel.likedBy.length,
+      isLiked
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
 };
 
 
