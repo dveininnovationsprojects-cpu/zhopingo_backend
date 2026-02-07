@@ -39,22 +39,29 @@ exports.uploadReel = async (req, res) => {
 };
 exports.getAllReels = async (req, res) => {
     try {
+        // லாக்-இன் செய்துள்ள யூசர் ஐடியை எடுக்கிறோம்
         const userId = req.user ? req.user.id : null; 
-        const reels = await Reel.find().populate('sellerId', 'shopName');
 
+        const reels = await Reel.find()
+            .populate('productId')
+            .populate('sellerId', 'name shopName') 
+            .sort({ createdAt: -1 });
+
+        const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
+        
         const data = reels.map(reel => ({
             ...reel._doc,
+            videoUrl: baseUrl + reel.videoUrl,
             
-            isLiked: userId ? reel.likedBy.includes(userId) : false, 
-            likes: reel.likedBy.length
+            isLiked: userId ? reel.likedBy.some(id => id.toString() === userId.toString()) : false,
+            likes: reel.likedBy.length 
         }));
 
         res.json({ success: true, data });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
+    } catch (err) { 
+        res.status(500).json({ error: err.message }); 
     }
 };
-
 exports.toggleLike = async (req, res) => {
     try {
         const reel = await Reel.findById(req.params.id);
