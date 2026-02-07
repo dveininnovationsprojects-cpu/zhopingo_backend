@@ -62,9 +62,17 @@ await Payment.create({
   status: "PENDING"
 });
 
+const rawSessionId = response.data.payment_session_id;
+
+const paymentSessionId = rawSessionId
+  ? rawSessionId.toString().trim()
+  : null;
+
+console.log("✅ CASHFREE SESSION ID:", paymentSessionId);
+
 res.json({
   success: true,
-  paymentSessionId: response.data.payment_session_id
+  paymentSessionId
 });
 
   } catch (err) {
