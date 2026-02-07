@@ -39,25 +39,21 @@ exports.uploadReel = async (req, res) => {
 };
 exports.getAllReels = async (req, res) => {
   try {
-    const userId = req.user?._id;
+   
+    const userId = req.user ? req.user.id || req.user._id : null; 
     const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
 
     const reels = await Reel.find({ isBlocked: false })
       .populate('sellerId', 'shopName')
-      .populate('productId') // ✅ ADD THIS
+      .populate('productId')
       .sort({ createdAt: -1 });
 
     const formatted = reels.map(reel => ({
-      _id: reel._id,
-      videoUrl: baseUrl + reel.videoUrl, // ✅ FULL URL
-      description: reel.description,
-      sellerId: reel.sellerId,
-      productId: reel.productId,
-      shares: reel.shares,
+      ...reel._doc,
+      videoUrl: baseUrl + reel.videoUrl,
       likes: reel.likedBy.length,
-      isLiked: userId
-        ? reel.likedBy.some(id => id.toString() === userId.toString())
-        : false
+      
+      isLiked: userId ? reel.likedBy.some(id => id.toString() === userId.toString()) : false
     }));
 
     res.json({ success: true, data: formatted });
@@ -66,33 +62,21 @@ exports.getAllReels = async (req, res) => {
   }
 };
 
-
-const mongoose = require('mongoose');
-
 exports.toggleLike = async (req, res) => {
   try {
-    if (!req.user || !req.user._id) {
-      return res.status(401).json({ success: false, message: "Unauthorized" });
-    }
-
+    const userId = req.user.id || req.user._id; 
     const reel = await Reel.findById(req.params.id);
-    if (!reel) {
-      return res.status(404).json({ success: false, message: "Reel not found" });
-    }
 
-    const userId = new mongoose.Types.ObjectId(req.user._id);
+    if (!reel) return res.status(404).json({ success: false, message: "Reel not found" });
 
-    const index = reel.likedBy.findIndex(
-      id => id.toString() === userId.toString()
-    );
+    const index = reel.likedBy.findIndex(id => id.toString() === userId.toString());
 
     let isLiked;
-
     if (index === -1) {
-      reel.likedBy.push(userId);
+      reel.likedBy.push(userId); 
       isLiked = true;
     } else {
-      reel.likedBy.splice(index, 1);
+      reel.likedBy.splice(index, 1); 
       isLiked = false;
     }
 
@@ -101,10 +85,9 @@ exports.toggleLike = async (req, res) => {
     res.json({
       success: true,
       likes: reel.likedBy.length,
-      isLiked
+      isLiked: isLiked
     });
   } catch (err) {
-    console.error("LIKE ERROR:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
