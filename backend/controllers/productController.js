@@ -193,7 +193,6 @@ exports.deleteProduct = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
-
 exports.getSimilarProducts = async (req, res) => {
     try {
         const { id } = req.params; // தற்போது பார்க்கும் தயாரிப்பின் ID
@@ -203,10 +202,7 @@ exports.getSimilarProducts = async (req, res) => {
             return res.status(400).json({ success: false, message: "Category is required" });
         }
 
-        // 🌟 லாஜிக்: 
-        // 1. அதே Category-இல் இருக்க வேண்டும்
-        // 2. தற்போது பார்க்கும் தயாரிப்பின் ID-யாக இருக்கக் கூடாது ($ne: id)
-        // 3. பிளாக் செய்யப்படாத (Archived) தயாரிப்பாக இருக்க வேண்டும்
+        
         const similarProducts = await Product.find({
             category: category,
             _id: { $ne: id }, 
