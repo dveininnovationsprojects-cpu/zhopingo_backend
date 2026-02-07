@@ -75,7 +75,7 @@ exports.toggleLike = async (req, res) => {
       return res.status(404).json({ success: false, message: "Reel not found" });
     }
 
-    const userId = req.user.id; // 🔥 FIX HERE
+    const userId = new mongoose.Types.ObjectId(req.user.id); // 🔥 CRITICAL FIX
 
     const index = reel.likedBy.findIndex(
       id => id.toString() === userId.toString()
@@ -99,11 +99,10 @@ exports.toggleLike = async (req, res) => {
       isLiked
     });
   } catch (err) {
-    console.error("LIKE ERROR:", err);
+    console.error("LIKE ERROR:", err); // 👈 will now be clean
     res.status(500).json({ success: false, message: err.message });
   }
 };
-
 
 
 exports.reportReel = async (req, res) => {
