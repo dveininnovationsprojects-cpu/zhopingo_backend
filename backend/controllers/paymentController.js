@@ -30,45 +30,42 @@ exports.createPaymentSession = async (req, res) => {
     if (!order) {
       return res.status(404).json({ success: false, message: "Order not found" });
     }
+const cfOrderId = `CF_${orderId}_${Date.now()}`;
 
-    const cfOrderId = `CF_${orderId}_${Date.now()}`;
+const response = await axios.post(
+  "https://sandbox.cashfree.com/pg/orders",
+  {
+    order_id: cfOrderId,
+    order_amount: amount,
+    order_currency: "INR",
+    customer_details: {
+      customer_id: String(customerId),
+      customer_phone: String(customerPhone),
+      customer_name: customerName || "Customer"
+    }
+  },
+  {
+    headers: {
+      "x-client-id": process.env.CF_APP_ID,
+      "x-client-secret": process.env.CF_SECRET,
+      "x-api-version": "2023-08-01",
+      "Content-Type": "application/json"
+    }
+  }
+);
 
-    const response = await axios.post(
-      `${CF_BASE}/orders`,
-      {
-        order_id: cfOrderId,
-        order_amount: Number(amount),
-        order_currency: "INR",
-        customer_details: {
-          customer_id: String(customerId),
-          customer_phone: String(customerPhone),
-          customer_name: customerName || "Customer"
-        },
-        order_meta: {
-          notify_url: `${BASE_URL}/api/v1/payments/cashfree/webhook`
-        }
-      },
-      {
-        headers: {
-          "x-client-id": CF_APP_ID,
-          "x-client-secret": CF_SECRET,
-          "x-api-version": CF_VERSION,
-          "Content-Type": "application/json"
-        }
-      }
-    );
+// ✅ IMPORTANT FIX HERE
+await Payment.create({
+  orderId,
+  transactionId: cfOrderId,   // 🔥 THIS LINE FIXES EVERYTHING
+  amount,
+  status: "PENDING"
+});
 
-    await Payment.create({
-      orderId,
-      cfOrderId,
-      amount,
-      status: "PENDING"
-    });
-
-    return res.json({
-      success: true,
-      paymentSessionId: response.data.payment_session_id
-    });
+res.json({
+  success: true,
+  paymentSessionId: response.data.payment_session_id
+});
 
   } catch (err) {
     console.error("CASHFREE CREATE ERROR:", err.response?.data || err.message);
