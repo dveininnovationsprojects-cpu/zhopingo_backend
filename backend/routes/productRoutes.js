@@ -73,5 +73,7 @@ router.post('/add', protect, upload.fields([
 
 router.put('/update/:id', protect, productCtrl.updateProduct);
 router.delete('/delete/:id', protect, productCtrl.deleteProduct);
+// router.post('/rate/:id', protect, productCtrl.rateProduct);
+router.get('/similar/:id', productCtrl.getSimilarProducts);
 
 module.exports = router;

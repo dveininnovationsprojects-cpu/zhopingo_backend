@@ -194,27 +194,37 @@ exports.deleteProduct = async (req, res) => {
     }
 };
 
-
-// 🌟 5. GET SIMILAR PRODUCTS
 exports.getSimilarProducts = async (req, res) => {
     try {
-        const { category } = req.query;
-        const products = await Product.find({ 
-            category: category, 
-            _id: { $ne: req.params.id },
-            isArchived: false 
-        }).limit(10).sort({ createdAt: -1 });
+        const { id } = req.params; // தற்போது பார்க்கும் தயாரிப்பின் ID
+        const { category } = req.query; // URL-ல் வரும் Category ID
 
-        const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
-        const data = products.map(p => ({
-            ...p._doc,
-            images: p.images.map(img => baseUrl + img)
-        }));
+        if (!category) {
+            return res.status(400).json({ success: false, message: "Category is required" });
+        }
 
-        res.json({ success: true, data });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+        // 🌟 லாஜிக்: 
+        // 1. அதே Category-இல் இருக்க வேண்டும்
+        // 2. தற்போது பார்க்கும் தயாரிப்பின் ID-யாக இருக்கக் கூடாது ($ne: id)
+        // 3. பிளாக் செய்யப்படாத (Archived) தயாரிப்பாக இருக்க வேண்டும்
+        const similarProducts = await Product.find({
+            category: category,
+            _id: { $ne: id }, 
+            isArchived: false
+        })
+        .limit(10) // எத்தனை தயாரிப்புகள் காட்ட வேண்டும்
+        .populate('category subCategory');
+
+        res.json({
+            success: true,
+            count: similarProducts.length,
+            data: similarProducts
+        });
+    } catch (err) {
+        console.error("Similar Products Error:", err.message);
+        res.status(500).json({ success: false, message: err.message });
+    }
 };
-
 
 
 // const Product = require('../models/Product');
