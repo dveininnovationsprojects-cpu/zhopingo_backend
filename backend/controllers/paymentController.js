@@ -1,13 +1,19 @@
 const axios = require("axios");
-const crypto = require("crypto");
 const Order = require("../models/Order");
 const Payment = require("../models/Payment");
 
+/* ================= CASHFREE TEST CONFIG (HARDCODE) ================= */
 const CF_BASE = "https://sandbox.cashfree.com/pg";
 const CF_VERSION = "2023-08-01";
 
+const CF_APP_ID = process.env.CF_APP_ID || "cf_test_8e360c8a3d88c2943a9154d687e0e7b3";
+const CF_SECRET = process.env.CF_SECRET || "cfsk_ma_test_8e360c8a3d88c2943a9154d687e0e7b3_7f6c8bbe";
+
+/* 🔥 NGROK URL – DIRECT */
+const BASE_URL = "https://liliana-exsufflicate-radioactively.ngrok-free.dev";
+
 /* =====================================================
-   1️⃣ CREATE PAYMENT SESSION (SERVER → CASHFREE)
+   1️⃣ CREATE PAYMENT SESSION
 ===================================================== */
 exports.createPaymentSession = async (req, res) => {
   try {
@@ -38,13 +44,13 @@ exports.createPaymentSession = async (req, res) => {
           customer_name: customerName || "Customer"
         },
         order_meta: {
-          notify_url: `${process.env.BASE_URL}/api/v1/payments/cashfree/webhook`
+          notify_url: `${BASE_URL}/api/v1/payments/cashfree/webhook`
         }
       },
       {
         headers: {
-          "x-client-id": process.env.CF_APP_ID,
-          "x-client-secret": process.env.CF_SECRET,
+          "x-client-id": CF_APP_ID,
+          "x-client-secret": CF_SECRET,
           "x-api-version": CF_VERSION,
           "Content-Type": "application/json"
         }
@@ -58,14 +64,14 @@ exports.createPaymentSession = async (req, res) => {
       status: "PENDING"
     });
 
-    res.json({
+    return res.json({
       success: true,
       paymentSessionId: response.data.payment_session_id
     });
 
   } catch (err) {
-    console.error("CREATE SESSION ERROR:", err.response?.data || err.message);
-    res.status(500).json({
+    console.error("CASHFREE CREATE ERROR:", err.response?.data || err.message);
+    return res.status(500).json({
       success: false,
       error: err.response?.data || err.message
     });
@@ -73,23 +79,14 @@ exports.createPaymentSession = async (req, res) => {
 };
 
 /* =====================================================
-   2️⃣ CASHFREE WEBHOOK (ONLY PLACE ORDER HERE ✅)
+   2️⃣ CASHFREE WEBHOOK (NO SECRET – TEST ONLY)
 ===================================================== */
 exports.cashfreeWebhook = async (req, res) => {
   try {
-    const signature = req.headers["x-webhook-signature"];
-    const rawBody = JSON.stringify(req.body);
+    console.log("🔥 WEBHOOK HIT:", req.body);
 
-    const expectedSignature = crypto
-      .createHmac("sha256", process.env.CF_WEBHOOK_SECRET)
-      .update(rawBody)
-      .digest("base64");
-
-    if (signature !== expectedSignature) {
-      return res.status(401).send("Invalid signature");
-    }
-
-    const { order_id, order_status } = req.body.data;
+    const { order_id, order_status } = req.body?.data || {};
+    if (!order_id) return res.sendStatus(200);
 
     const payment = await Payment.findOne({ cfOrderId: order_id });
     if (!payment) return res.sendStatus(200);
@@ -112,16 +109,16 @@ exports.cashfreeWebhook = async (req, res) => {
       });
     }
 
-    res.sendStatus(200);
+    return res.sendStatus(200);
 
   } catch (err) {
     console.error("WEBHOOK ERROR:", err.message);
-    res.sendStatus(500);
+    return res.sendStatus(500);
   }
 };
 
 /* =====================================================
-   3️⃣ VERIFY (READ-ONLY – OPTIONAL)
+   3️⃣ VERIFY (SIMPLE STATUS)
 ===================================================== */
 exports.verifyPayment = async (req, res) => {
   try {
@@ -138,7 +135,7 @@ exports.verifyPayment = async (req, res) => {
     });
 
   } catch (err) {
-    res.status(500).json({ success: false });
+    return res.status(500).json({ success: false });
   }
 };
 
