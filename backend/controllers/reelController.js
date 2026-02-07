@@ -64,15 +64,19 @@ exports.getAllReels = async (req, res) => {
   }
 };
 
-// 🔹 TOGGLE LIKE
 exports.toggleLike = async (req, res) => {
   try {
-    const reel = await Reel.findById(req.params.id);
-    if (!reel) {
-      return res.status(404).json({ success: false, message: 'Reel not found' });
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
     }
 
-    const userId = req.user._id;
+    const reel = await Reel.findById(req.params.id);
+    if (!reel) {
+      return res.status(404).json({ success: false, message: "Reel not found" });
+    }
+
+    const userId = req.user.id; // 🔥 FIX HERE
+
     const index = reel.likedBy.findIndex(
       id => id.toString() === userId.toString()
     );
@@ -95,9 +99,11 @@ exports.toggleLike = async (req, res) => {
       isLiked
     });
   } catch (err) {
+    console.error("LIKE ERROR:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
+
 
 
 exports.reportReel = async (req, res) => {
