@@ -6,8 +6,8 @@ const Payment = require("../models/Payment");
 const CF_BASE = "https://sandbox.cashfree.com/pg";
 const CF_VERSION = "2023-08-01";
 
-const CF_APP_ID = process.env.CF_APP_ID || "cf_test_8e360c8a3d88c2943a9154d687e0e7b3";
-const CF_SECRET = process.env.CF_SECRET || "cfsk_ma_test_8e360c8a3d88c2943a9154d687e0e7b3_7f6c8bbe";
+const CF_APP_ID = process.env.CF_APP_ID;
+const CF_SECRET = process.env.CF_SECRET ;
 
 /* 🔥 NGROK URL – DIRECT */
 const BASE_URL = "https://liliana-exsufflicate-radioactively.ngrok-free.dev";
