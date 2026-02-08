@@ -21,26 +21,45 @@ const formatProductMedia = (product, req) => {
     };
 };
 
-// --- 🌟 1. CREATE PRODUCT ---
 exports.createProduct = async (req, res) => {
     try {
-         const sellerId = req.user.id;
+        // 1. Get Seller ID from Token (req.user.id) or Request Body (for testing)
+        const sellerId = req.user?.id || req.body.seller;
+
+        if (!sellerId) {
+            return res.status(400).json({ success: false, message: "Seller ID is missing in token or body" });
+        }
+
+        // 2. Validate Seller
         const seller = await Seller.findById(sellerId);
-        if (!seller) return res.status(404).json({ success: false, message: "Seller not found" });
+        
+        // 💡 DEBUG LOG: Check this in your terminal to see which ID is being sent
+        console.log("Attempting to create product for Seller ID:", sellerId);
 
+        if (!seller) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Seller not found. Ensure your User ID is registered as a Seller.",
+                receivedId: sellerId 
+            });
+        }
+
+        // 3. Validate SubCategory
         const subCat = await SubCategory.findById(req.body.subCategory);
-        if (!subCat) return res.status(400).json({ success: false, message: "Invalid SubCategory" });
+        if (!subCat) return res.status(400).json({ success: false, message: "Invalid SubCategory ID" });
 
-        const taxRate = subCat.gstRate || subCat.gstPercentage;
+        const taxRate = subCat.gstRate || subCat.gstPercentage || 0;
 
-        // மல்டர் மூலம் வந்த ஃபைல் பெயர்களை அரே-வாக எடுத்தல்
-        const images = req.files['images'] ? req.files['images'].map(f => f.filename) : [];
-        const video = req.files['video'] ? req.files['video'][0].filename : "";
+        // 4. Media Handling
+        const images = req.files && req.files['images'] ? req.files['images'].map(f => f.filename) : [];
+        const video = req.files && req.files['video'] ? req.files['video'][0].filename : "";
 
+        // 5. Discount Calculation
         const discount = req.body.mrp > req.body.price 
             ? Math.round(((req.body.mrp - req.body.price) / req.body.mrp) * 100) 
             : 0;
 
+        // 6. Save Product
         const product = new Product({
             ...req.body,
             hsnCode: subCat.hsnCode, 
@@ -54,7 +73,9 @@ exports.createProduct = async (req, res) => {
 
         await product.save();
         res.status(201).json({ success: true, data: product });
+
     } catch (err) { 
+        console.error("Create Product Error:", err);
         res.status(400).json({ success: false, error: err.message }); 
     }
 };
