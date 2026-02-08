@@ -38,7 +38,7 @@ const apiRoutes = require('./routes/apiRoutes');
 // --- 🌟 STATIC FILES ---
 app.use(
   '/uploads',
-  express.static(path.join(__dirname, 'public/uploads'))
+  express.static(path.join(__dirname, '../public/uploads'))
 );
 
 app.use('/uploads/kyc', express.static(path.join(__dirname, 'uploads/kyc')));
