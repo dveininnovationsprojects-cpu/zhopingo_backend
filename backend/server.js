@@ -42,9 +42,13 @@ app.use(
   "/uploads",
   express.static(path.resolve(process.cwd(), "public/uploads"))
 );
+app.use(
+  '/uploads/categories',
+  express.static(path.resolve(process.cwd(), "public/uploads/categories"))
+);
 
 
-app.use('/uploads/kyc', express.static(path.join(__dirname, 'uploads/kyc')));
+app.use('/uploads/kyc', express.static(path.resolve(process.cwd(), "public/uploads/kyc")));
 
 // --- 🌟 ROUTES ---
 // Customer & Auth Routes
