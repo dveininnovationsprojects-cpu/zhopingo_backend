@@ -148,7 +148,7 @@ exports.uploadReel = async (req, res) => {
       .populate('productId')
       .populate('sellerId', 'name shopName');
 
-    const fullUrl = `${req.protocol}://${req.get('host')}/uploads/${populatedReel.videoUrl}`;
+    const fullUrl = `https://${req.get('host')}/uploads/${populatedReel.videoUrl}`;
 
     res.status(201).json({
       success: true,
@@ -164,7 +164,7 @@ exports.getAllReels = async (req, res) => {
   try {
     
     const userId = req.user ? (req.user.id || req.user._id) : null;
-    const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
+    const baseUrl = `https://${req.get('host')}/uploads/`;
 
     const reels = await Reel.find({ isBlocked: false })
       .populate('sellerId', 'shopName')
