@@ -2,47 +2,55 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 
-const uploadDir = path.join(__dirname, "../public/uploads");
-
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
+const BASE_UPLOAD = path.join(__dirname, "../public/uploads");
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, uploadDir);
+    let folder = BASE_UPLOAD;
+
+    // product images
+    if (file.fieldname === "images") folder = path.join(BASE_UPLOAD, "products");
+    if (file.fieldname === "video") folder = path.join(BASE_UPLOAD, "products/videos");
+
+    // category / sub-category
+    if (file.fieldname === "image") folder = path.join(BASE_UPLOAD, "categories");
+
+    // kyc
+    if (file.fieldname === "pan_doc") folder = path.join(BASE_UPLOAD, "kyc/pan");
+    if (file.fieldname === "gst_doc") folder = path.join(BASE_UPLOAD, "kyc/gst");
+    if (file.fieldname === "fssai_doc") folder = path.join(BASE_UPLOAD, "kyc/fssai");
+    if (file.fieldname === "msme_doc") folder = path.join(BASE_UPLOAD, "kyc/msme");
+
+    if (!fs.existsSync(folder)) {
+      fs.mkdirSync(folder, { recursive: true });
+    }
+
+    cb(null, folder);
   },
+
   filename: (req, file, cb) => {
-    const uniqueName =
-      Date.now() + "-" + Math.round(Math.random() * 1e9) + path.extname(file.originalname);
-    cb(null, uniqueName);
+    const unique =
+      Date.now() + "-" + Math.round(Math.random() * 1e9);
+    cb(null, unique + path.extname(file.originalname));
   }
 });
-
-const fileFilter = (req, file, cb) => {
-  // 🟢 IMAGE fields
-  if (file.fieldname === "images") {
-    if (!file.mimetype.startsWith("image/")) {
-      return cb(new Error("Only image files allowed"), false);
-    }
-  }
-
-  // 🟢 VIDEO field
-  if (file.fieldname === "video") {
-    if (!file.mimetype.startsWith("video/")) {
-      return cb(new Error("Only video files allowed"), false);
-    }
-  }
-
-  cb(null, true);
-};
 
 const upload = multer({
   storage,
-  fileFilter,
-  limits: {
-    fileSize: 100 * 1024 * 1024 // 100MB
+  fileFilter: (req, file, cb) => {
+    if (
+      file.mimetype.startsWith("image/") ||
+      file.mimetype.startsWith("video/") ||
+      file.mimetype === "application/pdf"
+    ) {
+      cb(null, true);
+    } else {
+      cb(new Error("Unsupported file type"), false);
+    }
   }
 });
 
-module.exports = { upload };
+// 👇 JUST pass-through (future-proof)
+const processImages = (req, res, next) => next();
+
+module.exports = { upload, processImages };

@@ -17,7 +17,7 @@ app.use(
   require("./routes/cashfreeWebhook")
 );
 
-app.use(express.json());
+
 
 app.use("/api/payments", require("./routes/paymentRoutes"));
 
@@ -36,7 +36,11 @@ app.use(cors({
 
 const apiRoutes = require('./routes/apiRoutes');
 // --- 🌟 STATIC FILES ---
-app.use('/uploads', express.static(path.join(__dirname, '../public/uploads')));
+app.use(
+  '/uploads',
+  express.static(path.join(__dirname, 'public/uploads'))
+);
+
 app.use('/uploads/kyc', express.static(path.join(__dirname, 'uploads/kyc')));
 
 // --- 🌟 ROUTES ---
