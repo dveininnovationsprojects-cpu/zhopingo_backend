@@ -142,43 +142,31 @@ exports.getProductById = async (req, res) => {
 
 exports.getMyProducts = async (req, res) => {
     try {
-        // 1. Check if req.user exists (from protect middleware)
+        // 1. Check matching with Step 1 (req.user.id)
         if (!req.user || !req.user.id) {
-            return res.status(401).json({ success: false, message: "Not authorized, no ID found in token" });
+            return res.status(401).json({ success: false, message: "Seller ID missing in token" });
         }
 
-        const sellerId = req.user.id;
-        console.log("🔍 Fetching products for Seller ID from Token:", sellerId);
-
-        // 2. Query products
+        // 2. Query matching the field name
         const products = await Product.find({ 
-            seller: sellerId, 
+            seller: req.user.id, 
             isArchived: { $ne: true } 
-        })
-        .populate('category subCategory')
-        .lean();
+        }).populate('category subCategory').lean();
 
-        // 3. Format Media URLs
-        const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
+        // 3. Image URL Fix (Avoiding double domains)
+        const baseUrl = `${req.protocol}://${req.get('host')}/uploads/products/`;
 
         const data = products.map(p => ({
             ...p,
             images: p.images ? p.images.map(img => 
-                (img && img.startsWith('http')) ? img : baseUrl + img
-            ) : [],
-            video: p.video ? (p.video.startsWith('http') ? p.video : baseUrl + p.video) : ""
+                (img && (img.startsWith('http') || img.includes('zhopingo.in'))) 
+                ? img 
+                : baseUrl + img
+            ) : []
         }));
 
-        console.log(`✅ Found ${data.length} products for this seller.`);
-
-        res.json({ 
-            success: true, 
-            count: data.length, 
-            data: data 
-        });
-
+        res.json({ success: true, count: data.length, data });
     } catch (err) {
-        console.error("❌ Error in getMyProducts:", err.message);
         res.status(500).json({ success: false, error: err.message });
     }
 };

@@ -27,7 +27,7 @@ exports.protect = (req, res, next) => {
     );
 
     // 🔥 NORMALIZE USER OBJECT
-    req.user = { _id: decoded.id };
+   req.user = { id: decoded.id };
 
     next();
   } catch (err) {
