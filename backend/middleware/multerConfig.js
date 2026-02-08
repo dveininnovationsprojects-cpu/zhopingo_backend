@@ -2,56 +2,81 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 
-const BASE_UPLOAD = path.resolve(process.cwd(), "public/uploads");
-
+// 🔥 Always resolve from project root
+const BASE_UPLOAD = path.resolve(process.cwd(), "public", "uploads");
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     let folder = BASE_UPLOAD;
 
-    // product images
-    if (file.fieldname === "images") folder = path.join(BASE_UPLOAD, "products");
-    if (file.fieldname === "video") folder = path.join(BASE_UPLOAD, "products/videos");
+    switch (file.fieldname) {
+      // 🟢 PRODUCT
+      case "images":
+        folder = path.join(BASE_UPLOAD, "products");
+        break;
 
-    // category / sub-category
-    if (file.fieldname === "image") folder = path.join(BASE_UPLOAD, "categories");
+      case "video":
+        folder = path.join(BASE_UPLOAD, "products", "videos");
+        break;
 
-    // kyc
-    if (file.fieldname === "pan_doc") folder = path.join(BASE_UPLOAD, "kyc/pan");
-    if (file.fieldname === "gst_doc") folder = path.join(BASE_UPLOAD, "kyc/gst");
-    if (file.fieldname === "fssai_doc") folder = path.join(BASE_UPLOAD, "kyc/fssai");
-    if (file.fieldname === "msme_doc") folder = path.join(BASE_UPLOAD, "kyc/msme");
+      // 🟢 CATEGORY / SUB-CATEGORY
+      case "image":
+        folder = path.join(BASE_UPLOAD, "categories");
+        break;
 
-    if (!fs.existsSync(folder)) {
-      fs.mkdirSync(folder, { recursive: true });
+      // 🟢 KYC
+      case "pan_doc":
+        folder = path.join(BASE_UPLOAD, "kyc", "pan");
+        break;
+
+      case "gst_doc":
+        folder = path.join(BASE_UPLOAD, "kyc", "gst");
+        break;
+
+      case "fssai_doc":
+        folder = path.join(BASE_UPLOAD, "kyc", "fssai");
+        break;
+
+      case "msme_doc":
+        folder = path.join(BASE_UPLOAD, "kyc", "msme");
+        break;
+
+      default:
+        folder = BASE_UPLOAD;
     }
+
+    // 🔥 Ensure folder exists
+    fs.mkdirSync(folder, { recursive: true });
 
     cb(null, folder);
   },
 
   filename: (req, file, cb) => {
-    const unique =
+    const uniqueName =
       Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, unique + path.extname(file.originalname));
+    cb(null, uniqueName + path.extname(file.originalname));
   }
 });
 
 const upload = multer({
   storage,
+  limits: {
+    fileSize: 50 * 1024 * 1024 // 50MB safe limit
+  },
   fileFilter: (req, file, cb) => {
-    if (
+    const allowed =
       file.mimetype.startsWith("image/") ||
       file.mimetype.startsWith("video/") ||
-      file.mimetype === "application/pdf"
-    ) {
-      cb(null, true);
-    } else {
-      cb(new Error("Unsupported file type"), false);
+      file.mimetype === "application/pdf";
+
+    if (!allowed) {
+      return cb(new Error("Unsupported file type"), false);
     }
+    cb(null, true);
   }
 });
 
-// 👇 JUST pass-through (future-proof)
+// 🔹 keep for future image processing (sharp, compression, etc.)
 const processImages = (req, res, next) => next();
 
 module.exports = { upload, processImages };

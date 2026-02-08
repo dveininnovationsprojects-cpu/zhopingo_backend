@@ -60,7 +60,7 @@ exports.createCategory = async (req, res) => {
       return res.status(400).json({ error: "Image upload failed" });
     }
 
-    const imagePath = `/uploads/categories/${req.file.filename}`;
+    const imagePath = `categories/${req.file.filename}`;
 
 
     const category = new Category({
@@ -91,7 +91,7 @@ exports.getCategories = async (req, res) => {
 exports.updateCategory = async (req, res) => {
     try {
         const updateData = { ...req.body };
-        if (req.file) updateData.image =  `/uploads/categories/${req.file.filename}`;
+        if (req.file) updateData.image =  `categories/${req.file.filename}`;
         const category = await Category.findByIdAndUpdate(req.params.id, updateData, { new: true });
         res.json({ success: true, data: category });
     } catch (err) { res.status(400).json({ error: err.message }); }
@@ -115,7 +115,7 @@ exports.createSubCategory = async (req, res) => {
             name, category, description,
             hsnCode: parent.hsnCode, // Inherited from Category
             gstRate: parent.gstRate, // Inherited from Category
-            image: req.file ?  `/uploads/categories/${req.file.filename}` : null 
+            image: req.file ?  `categories/${req.file.filename}` : null 
         });
         await subCat.save();
         res.status(201).json({ success: true, data: subCat });
@@ -139,7 +139,7 @@ exports.getSubsByCategory = async (req, res) => {
 exports.updateSubCategory = async (req, res) => {
     try {
         const updateData = { ...req.body };
-        if (req.file) updateData.image = `/uploads/categories/${req.file.filename}`;
+        if (req.file) updateData.image = `categories/${req.file.filename}`;
         const sub = await SubCategory.findByIdAndUpdate(req.params.id, updateData, { new: true }).populate('category');
         res.json({ success: true, data: sub });
     } catch (err) { res.status(400).json({ error: err.message }); }
