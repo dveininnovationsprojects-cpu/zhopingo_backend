@@ -36,10 +36,13 @@ app.use(cors({
 
 const apiRoutes = require('./routes/apiRoutes');
 // --- 🌟 STATIC FILES ---
+
+
 app.use(
-  '/uploads',
-  express.static(path.join(__dirname, '../public/uploads'))
+  "/uploads",
+  express.static(path.resolve(__dirname, "public/uploads"))
 );
+
 
 app.use('/uploads/kyc', express.static(path.join(__dirname, 'uploads/kyc')));
 
