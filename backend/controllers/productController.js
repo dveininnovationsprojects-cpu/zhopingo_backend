@@ -24,7 +24,7 @@ const formatProductMedia = (product, req) => {
 // --- 🌟 1. CREATE PRODUCT ---
 exports.createProduct = async (req, res) => {
     try {
-        const sellerId = req.user?.id || req.body.seller; 
+         const sellerId = req.user.id;
         const seller = await Seller.findById(sellerId);
         if (!seller) return res.status(404).json({ success: false, message: "Seller not found" });
 
