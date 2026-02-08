@@ -40,7 +40,7 @@ const apiRoutes = require('./routes/apiRoutes');
 
 app.use(
   "/uploads",
-  express.static(path.resolve(__dirname, "public/uploads"))
+  express.static(path.resolve(process.cwd(), "public/uploads"))
 );
 
 
