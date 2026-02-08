@@ -140,16 +140,25 @@ exports.getProductById = async (req, res) => {
     }
 };
 
-
 exports.getMyProducts = async (req, res) => {
     try {
+        // 1. Check if req.user exists (from protect middleware)
+        if (!req.user || !req.user.id) {
+            return res.status(401).json({ success: false, message: "Not authorized, no ID found in token" });
+        }
+
+        const sellerId = req.user.id;
+        console.log("🔍 Fetching products for Seller ID from Token:", sellerId);
+
+        // 2. Query products
         const products = await Product.find({ 
-            seller: req.user.id, 
+            seller: sellerId, 
             isArchived: { $ne: true } 
         })
         .populate('category subCategory')
-        .lean(); // 🌟 Makes query much faster by returning plain objects
+        .lean();
 
+        // 3. Format Media URLs
         const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
 
         const data = products.map(p => ({
@@ -160,18 +169,19 @@ exports.getMyProducts = async (req, res) => {
             video: p.video ? (p.video.startsWith('http') ? p.video : baseUrl + p.video) : ""
         }));
 
+        console.log(`✅ Found ${data.length} products for this seller.`);
+
         res.json({ 
             success: true, 
-            count: data.length,
+            count: data.length, 
             data: data 
         });
-        console.log("JWT SELLER ID:", req.user.id);
 
     } catch (err) {
+        console.error("❌ Error in getMyProducts:", err.message);
         res.status(500).json({ success: false, error: err.message });
     }
 };
-
 // --- 🌟 5. UPDATE & DELETE ---
 exports.updateProduct = async (req, res) => {
     try {
