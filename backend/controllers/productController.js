@@ -144,6 +144,8 @@ exports.getMyProducts = async (req, res) => {
             count: data.length,
             data: data 
         });
+        console.log("JWT SELLER ID:", req.user.id);
+
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
