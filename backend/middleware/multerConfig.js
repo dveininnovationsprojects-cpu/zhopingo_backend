@@ -2,7 +2,8 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 
-const BASE_UPLOAD = path.join(__dirname, "../public/uploads");
+const BASE_UPLOAD = path.resolve(process.cwd(), "public/uploads");
+
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
