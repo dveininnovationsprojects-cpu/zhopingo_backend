@@ -89,6 +89,13 @@ exports.uploadKyc = async (req, res) => {
       };
     }
 
+     if (req.files.fssai_doc) {
+  seller.kycDocuments.fssaiDoc = {
+    fileName: req.files.fssai_doc[0].filename,
+    fileUrl: `uploads/kyc/${req.files.fssai_doc[0].filename}`
+  };
+}
+
     seller.kycStatus = "pending";
     await seller.save();
 
