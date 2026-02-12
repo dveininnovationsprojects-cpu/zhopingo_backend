@@ -4,27 +4,10 @@ const Seller = require('../models/Seller');
 const SubCategory = require('../models/SubCategory');
 
 
-// // 🌟 Helper: இமேஜ் மற்றும் வீடியோ லிங்க்குகளை முழுமையான URL ஆக மாற்ற
-// const formatProductMedia = (product, req) => {
-//     const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
-//     // Mongoose ஆப்ஜெக்ட்டை சுத்தமான JSON ஆக மாற்றுதல்
-//     const doc = product.toObject ? product.toObject() : product;
-
-//     return {
-//         ...doc,
-//         images: (doc.images || []).map(img => 
-//             (img && img.startsWith('http')) ? img : baseUrl + img
-//         ),
-//         video: doc.video ? 
-//             (doc.video.startsWith('http') ? doc.video : baseUrl + doc.video) 
-//             : ""
-//     };
-// };
-
-// 🌟 YOUR EXACT WORKING MEDIA FORMATTER
+// 🌟 Helper: இமேஜ் மற்றும் வீடியோ லிங்க்குகளை முழுமையான URL ஆக மாற்ற
 const formatProductMedia = (product, req) => {
     const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
-    if (!product) return null;
+    // Mongoose ஆப்ஜெக்ட்டை சுத்தமான JSON ஆக மாற்றுதல்
     const doc = product.toObject ? product.toObject() : product;
 
     return {
@@ -38,82 +21,45 @@ const formatProductMedia = (product, req) => {
     };
 };
 
-// exports.createProduct = async (req, res) => {
-//     try {
-//         // 1. Get Seller ID from Token (req.user.id) or Request Body (for testing)
-//         const sellerId = req.user?.id || req.body.seller;
-
-//         if (!sellerId) {
-//             return res.status(400).json({ success: false, message: "Seller ID is missing in token or body" });
-//         }
-
-//         // 2. Validate Seller
-//         const seller = await Seller.findById(sellerId);
-        
-//         // 💡 DEBUG LOG: Check this in your terminal to see which ID is being sent
-//         console.log("Attempting to create product for Seller ID:", sellerId);
-
-//         if (!seller) {
-//             return res.status(404).json({ 
-//                 success: false, 
-//                 message: "Seller not found. Ensure your User ID is registered as a Seller.",
-//                 receivedId: sellerId 
-//             });
-//         }
-
-//         // 3. Validate SubCategory
-//         const subCat = await SubCategory.findById(req.body.subCategory);
-//         if (!subCat) return res.status(400).json({ success: false, message: "Invalid SubCategory ID" });
-
-//         const taxRate = subCat.gstRate || subCat.gstPercentage || 0;
-
-//         // 4. Media Handling
-//         const images = req.files && req.files['images'] ? req.files['images'].map(f => f.filename) : [];
-//         const video = req.files && req.files['video'] ? req.files['video'][0].filename : "";
-
-//         // 5. Discount Calculation
-//         const discount = req.body.mrp > req.body.price 
-//             ? Math.round(((req.body.mrp - req.body.price) / req.body.mrp) * 100) 
-//             : 0;
-
-//         // 6. Save Product
-//         const product = new Product({
-//             ...req.body,
-//             hsnCode: subCat.hsnCode, 
-//             gstPercentage: taxRate,
-//             discountPercentage: discount,
-//             images,
-//             video,
-//             seller: seller._id,
-//             variants: req.body.variants ? (typeof req.body.variants === 'string' ? JSON.parse(req.body.variants) : req.body.variants) : [] 
-//         });
-
-//         await product.save();
-//         res.status(201).json({ success: true, data: product });
-
-//     } catch (err) { 
-//         console.error("Create Product Error:", err);
-//         res.status(400).json({ success: false, error: err.message }); 
-//     }
-// };
-// 🌟 createProduct stays exactly same as yours
 exports.createProduct = async (req, res) => {
     try {
+        // 1. Get Seller ID from Token (req.user.id) or Request Body (for testing)
         const sellerId = req.user?.id || req.body.seller;
-        const seller = await Seller.findById(sellerId);
-        if (!seller) return res.status(404).json({ success: false, message: "Seller not found" });
 
+        if (!sellerId) {
+            return res.status(400).json({ success: false, message: "Seller ID is missing in token or body" });
+        }
+
+        // 2. Validate Seller
+        const seller = await Seller.findById(sellerId);
+        
+        // 💡 DEBUG LOG: Check this in your terminal to see which ID is being sent
+        console.log("Attempting to create product for Seller ID:", sellerId);
+
+        if (!seller) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Seller not found. Ensure your User ID is registered as a Seller.",
+                receivedId: sellerId 
+            });
+        }
+
+        // 3. Validate SubCategory
         const subCat = await SubCategory.findById(req.body.subCategory);
         if (!subCat) return res.status(400).json({ success: false, message: "Invalid SubCategory ID" });
 
         const taxRate = subCat.gstRate || subCat.gstPercentage || 0;
+
+        // 4. Media Handling
         const images = req.files && req.files['images'] ? req.files['images'].map(f => f.filename) : [];
         const video = req.files && req.files['video'] ? req.files['video'][0].filename : "";
 
+        // 5. Discount Calculation
         const discount = req.body.mrp > req.body.price 
             ? Math.round(((req.body.mrp - req.body.price) / req.body.mrp) * 100) 
             : 0;
 
+        // 6. Save Product
         const product = new Product({
             ...req.body,
             hsnCode: subCat.hsnCode, 
@@ -127,10 +73,13 @@ exports.createProduct = async (req, res) => {
 
         await product.save();
         res.status(201).json({ success: true, data: product });
+
     } catch (err) { 
+        console.error("Create Product Error:", err);
         res.status(400).json({ success: false, error: err.message }); 
     }
 };
+
 // --- 🌟 GET ALL PRODUCTS (Optimized for Large Scale) ---
 exports.getAllProducts = async (req, res) => {
     try {
@@ -190,42 +139,34 @@ exports.getProductById = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
-// 🌟 FIXED Seller Dashboard Products Logic (Zero-Error Version)
+
 exports.getMyProducts = async (req, res) => {
     try {
+        // 1. Check matching with Step 1 (req.user.id)
         if (!req.user || !req.user.id) {
             return res.status(401).json({ success: false, message: "Seller ID missing in token" });
         }
 
-        // lean() use panni light-weight objects edukroam
+        // 2. Query matching the field name
         const products = await Product.find({ 
             seller: req.user.id, 
             isArchived: { $ne: true } 
         }).populate('category subCategory').lean();
 
-        // 💡 Server error varama irukka fallback URL setup
-        const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
+        // 3. Image URL Fix (Avoiding double domains)
+        const baseUrl = `${req.protocol}://${req.get('host')}/uploads/products/`;
 
-        const data = products.map(p => {
-            // Null check for images to prevent 500 error
-            const formattedImages = Array.isArray(p.images) 
-                ? p.images.map(img => {
-                    if (!img) return "";
-                    return (img.startsWith('http') || img.includes('zhopingo.in')) 
-                        ? img 
-                        : baseUrl + img;
-                }) 
-                : [];
+        const data = products.map(p => ({
+            ...p,
+            images: p.images ? p.images.map(img => 
+                (img && (img.startsWith('http') || img.includes('zhopingo.in'))) 
+                ? img 
+                : baseUrl + img
+            ) : []
+        }));
 
-            return {
-                ...p,
-                images: formattedImages
-            };
-        });
-
-        res.status(200).json({ success: true, count: data.length, data });
+        res.json({ success: true, count: data.length, data });
     } catch (err) {
-        console.error("Dashboard Logic Error:", err);
         res.status(500).json({ success: false, error: err.message });
     }
 };
