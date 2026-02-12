@@ -136,7 +136,7 @@ exports.addUserAddress = async (req, res) => {
 
     const { flatNo, addressLine, pincode, addressType, isDefault } = req.body;
 
-    // If this is marked as default, unset other defaults
+    
     if (isDefault) {
       user.addressBook.forEach(addr => addr.isDefault = false);
     }
