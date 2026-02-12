@@ -21,13 +21,14 @@ const SubCategory = require('../models/SubCategory');
 //     };
 // };
 
+// 🌟 Existing Media Formatter (Logic is NOT changed, only ensuring doc is clean)
 const formatProductMedia = (product, req) => {
     const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
+    // product._doc or product.toObject() use panni raw data edukroam
     const doc = product.toObject ? product.toObject() : product;
 
-    // Existing media logic (No change)
-    const formattedMedia = {
-        ...doc,
+    return {
+        ...doc, // This spreads ALL fields including NEW ONES automatically
         images: (doc.images || []).map(img => 
             (img && img.startsWith('http')) ? img : baseUrl + img
         ),
@@ -35,8 +36,6 @@ const formatProductMedia = (product, req) => {
             (doc.video.startsWith('http') ? doc.video : baseUrl + doc.video) 
             : ""
     };
-
-    return formattedMedia;
 };
 
 exports.createProduct = async (req, res) => {

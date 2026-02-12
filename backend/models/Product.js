@@ -57,7 +57,6 @@
 // module.exports = mongoose.model('Product', productSchema);
 
 
-
 const mongoose = require('mongoose');
 
 const productSchema = new mongoose.Schema({
@@ -85,23 +84,21 @@ const productSchema = new mongoose.Schema({
   stock: { type: Number, required: true, default: 0 },
   seller: { type: mongoose.Schema.Types.ObjectId, ref: 'Seller', required: true, index: true },
   
-  // 🌟 NEW PREMIUM FIELDS SECTION (Blinkit Style)
-  // Highlights dropdown logic
+  // 🌟 NEW PREMIUM FIELDS (Optional - Will not break existing code)
   keyFeatures: [{ type: String }], // Bullet points
   ingredients: { type: String },
   shelfLife: { type: String },
   fssaiLicense: { type: String },
   
-  // Advanced Info Sections
   highlights: {
     productType: { type: String }, // Ex: Milk Chocolate
-    cocoaContent: { type: String }, // Ex: 0 - 10%
-    fabricType: { type: String },  // For Fashion category
+    cocoaContent: { type: String }, 
+    fabricType: { type: String },  // For Fashion
   },
 
   nutritionInfo: [{
-    label: String, // Energy, Protein, etc.
-    value: String  // 428 Kcal, 5g, etc.
+    label: String, // Protein, Sugar, etc.
+    value: String  // 5g, 10g, etc.
   }],
 
   manufacturerDetails: {
