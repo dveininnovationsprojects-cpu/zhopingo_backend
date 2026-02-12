@@ -22,6 +22,7 @@ const SubCategory = require('../models/SubCategory');
 // };
 
 // 🌟 YOUR EXACT WORKING MEDIA FORMATTER
+// 🌟 YOUR EXACT WORKING MEDIA FORMATTER
 const formatProductMedia = (product, req) => {
     const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
     const doc = product.toObject ? product.toObject() : product;
@@ -96,8 +97,6 @@ const formatProductMedia = (product, req) => {
 //     }
 // };
 
-
-// 🌟 CREATE PRODUCT (Sync with your AddProduct.js payload)
 exports.createProduct = async (req, res) => {
     try {
         const sellerId = req.user?.id || req.body.seller;
@@ -106,6 +105,8 @@ exports.createProduct = async (req, res) => {
 
         const subCat = await SubCategory.findById(req.body.subCategory);
         if (!subCat) return res.status(400).json({ success: false, message: "Invalid SubCategory ID" });
+
+        const taxRate = subCat.gstRate || subCat.gstPercentage || 0;
 
         const images = req.files && req.files['images'] ? req.files['images'].map(f => f.filename) : [];
         const video = req.files && req.files['video'] ? req.files['video'][0].filename : "";
@@ -117,7 +118,7 @@ exports.createProduct = async (req, res) => {
         const product = new Product({
             ...req.body,
             hsnCode: subCat.hsnCode, 
-            gstPercentage: subCat.gstRate || subCat.gstPercentage || 0,
+            gstPercentage: taxRate,
             discountPercentage: discount,
             images,
             video,
@@ -132,7 +133,6 @@ exports.createProduct = async (req, res) => {
         res.status(400).json({ success: false, error: err.message }); 
     }
 };
-
 // --- 🌟 GET ALL PRODUCTS (Optimized for Large Scale) ---
 exports.getAllProducts = async (req, res) => {
     try {
@@ -193,31 +193,35 @@ exports.getProductById = async (req, res) => {
     }
 };
 
-// 🌟 YOUR EXACT WORKING SELLER DASHBOARD LOGIC (No changes)
 exports.getMyProducts = async (req, res) => {
     try {
         if (!req.user || !req.user.id) {
             return res.status(401).json({ success: false, message: "Seller ID missing in token" });
         }
 
+        // isArchived logic sync
         const products = await Product.find({ 
             seller: req.user.id, 
             isArchived: { $ne: true } 
         }).populate('category subCategory').lean();
 
-        const baseUrl = `${req.protocol}://${req.get('host')}/uploads/products/`;
+        const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
 
-        const data = products.map(p => ({
-            ...p,
-            images: p.images ? p.images.map(img => 
-                (img && (img.startsWith('http') || img.includes('zhopingo.in'))) 
-                ? img 
-                : baseUrl + img
-            ) : []
-        }));
+        // 🌟 IMAGE URL FIX: Ensuring images exist before mapping
+        const data = products.map(p => {
+            return {
+                ...p,
+                images: Array.isArray(p.images) ? p.images.map(img => 
+                    (img && (img.startsWith('http') || img.includes('zhopingo.in'))) 
+                    ? img 
+                    : baseUrl + img
+                ) : []
+            };
+        });
 
         res.json({ success: true, count: data.length, data });
     } catch (err) {
+        console.error("Dashboard Error:", err);
         res.status(500).json({ success: false, error: err.message });
     }
 };
