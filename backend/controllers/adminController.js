@@ -92,3 +92,24 @@ exports.verifySellerStatus = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
+
+exports.getAllCustomers = async (req, res) => {
+  try {
+    // Role 'customer' ஆக இருப்பவர்களை மட்டும் எடுத்து வருதல்
+    const customers = await User.find({ role: 'customer' })
+      .select("-password") // பாஸ்வேர்டு விவரங்களை மறைத்தல் (Security)
+      .sort({ createdAt: -1 });
+
+    res.json({
+      success: true,
+      count: customers.length, // மொத்த வாடிக்கையாளர்களின் எண்ணிக்கை
+      data: customers
+    });
+  } catch (err) {
+    res.status(500).json({ 
+      success: false, 
+      message: "வாடிக்கையாளர் விவரங்களைப் பெறுவதில் தோல்வி",
+      error: err.message 
+    });
+  }
+};

@@ -4,7 +4,8 @@ const {
   adminLogin, 
   getAllSellers, 
   verifySellerStatus, 
-  uploadDeliveryRates 
+  uploadDeliveryRates ,
+  getAllCustomers
 } = require("../controllers/adminController"); 
 
 
@@ -16,5 +17,6 @@ router.post('/bulk-upload-pincodes', uploadDeliveryRates);
 
 router.get("/sellers", getAllSellers);
 router.post("/verify-seller", verifySellerStatus);
+router.get('/customers', getAllCustomers);
 
 module.exports = router;
