@@ -21,14 +21,13 @@ const SubCategory = require('../models/SubCategory');
 //     };
 // };
 
-// 🌟 Existing Media Formatter (Logic is NOT changed, only ensuring doc is clean)
+// 🌟 YOUR EXACT WORKING MEDIA FORMATTER
 const formatProductMedia = (product, req) => {
     const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
-    // product._doc or product.toObject() use panni raw data edukroam
     const doc = product.toObject ? product.toObject() : product;
 
     return {
-        ...doc, // This spreads ALL fields including NEW ONES automatically
+        ...doc,
         images: (doc.images || []).map(img => 
             (img && img.startsWith('http')) ? img : baseUrl + img
         ),
@@ -38,49 +37,87 @@ const formatProductMedia = (product, req) => {
     };
 };
 
+// exports.createProduct = async (req, res) => {
+//     try {
+//         // 1. Get Seller ID from Token (req.user.id) or Request Body (for testing)
+//         const sellerId = req.user?.id || req.body.seller;
+
+//         if (!sellerId) {
+//             return res.status(400).json({ success: false, message: "Seller ID is missing in token or body" });
+//         }
+
+//         // 2. Validate Seller
+//         const seller = await Seller.findById(sellerId);
+        
+//         // 💡 DEBUG LOG: Check this in your terminal to see which ID is being sent
+//         console.log("Attempting to create product for Seller ID:", sellerId);
+
+//         if (!seller) {
+//             return res.status(404).json({ 
+//                 success: false, 
+//                 message: "Seller not found. Ensure your User ID is registered as a Seller.",
+//                 receivedId: sellerId 
+//             });
+//         }
+
+//         // 3. Validate SubCategory
+//         const subCat = await SubCategory.findById(req.body.subCategory);
+//         if (!subCat) return res.status(400).json({ success: false, message: "Invalid SubCategory ID" });
+
+//         const taxRate = subCat.gstRate || subCat.gstPercentage || 0;
+
+//         // 4. Media Handling
+//         const images = req.files && req.files['images'] ? req.files['images'].map(f => f.filename) : [];
+//         const video = req.files && req.files['video'] ? req.files['video'][0].filename : "";
+
+//         // 5. Discount Calculation
+//         const discount = req.body.mrp > req.body.price 
+//             ? Math.round(((req.body.mrp - req.body.price) / req.body.mrp) * 100) 
+//             : 0;
+
+//         // 6. Save Product
+//         const product = new Product({
+//             ...req.body,
+//             hsnCode: subCat.hsnCode, 
+//             gstPercentage: taxRate,
+//             discountPercentage: discount,
+//             images,
+//             video,
+//             seller: seller._id,
+//             variants: req.body.variants ? (typeof req.body.variants === 'string' ? JSON.parse(req.body.variants) : req.body.variants) : [] 
+//         });
+
+//         await product.save();
+//         res.status(201).json({ success: true, data: product });
+
+//     } catch (err) { 
+//         console.error("Create Product Error:", err);
+//         res.status(400).json({ success: false, error: err.message }); 
+//     }
+// };
+
+
+// 🌟 CREATE PRODUCT (Sync with your AddProduct.js payload)
 exports.createProduct = async (req, res) => {
     try {
-        // 1. Get Seller ID from Token (req.user.id) or Request Body (for testing)
         const sellerId = req.user?.id || req.body.seller;
-
-        if (!sellerId) {
-            return res.status(400).json({ success: false, message: "Seller ID is missing in token or body" });
-        }
-
-        // 2. Validate Seller
         const seller = await Seller.findById(sellerId);
-        
-        // 💡 DEBUG LOG: Check this in your terminal to see which ID is being sent
-        console.log("Attempting to create product for Seller ID:", sellerId);
+        if (!seller) return res.status(404).json({ success: false, message: "Seller not found" });
 
-        if (!seller) {
-            return res.status(404).json({ 
-                success: false, 
-                message: "Seller not found. Ensure your User ID is registered as a Seller.",
-                receivedId: sellerId 
-            });
-        }
-
-        // 3. Validate SubCategory
         const subCat = await SubCategory.findById(req.body.subCategory);
         if (!subCat) return res.status(400).json({ success: false, message: "Invalid SubCategory ID" });
 
-        const taxRate = subCat.gstRate || subCat.gstPercentage || 0;
-
-        // 4. Media Handling
         const images = req.files && req.files['images'] ? req.files['images'].map(f => f.filename) : [];
         const video = req.files && req.files['video'] ? req.files['video'][0].filename : "";
 
-        // 5. Discount Calculation
         const discount = req.body.mrp > req.body.price 
             ? Math.round(((req.body.mrp - req.body.price) / req.body.mrp) * 100) 
             : 0;
 
-        // 6. Save Product
         const product = new Product({
             ...req.body,
             hsnCode: subCat.hsnCode, 
-            gstPercentage: taxRate,
+            gstPercentage: subCat.gstRate || subCat.gstPercentage || 0,
             discountPercentage: discount,
             images,
             video,
@@ -92,7 +129,6 @@ exports.createProduct = async (req, res) => {
         res.status(201).json({ success: true, data: product });
 
     } catch (err) { 
-        console.error("Create Product Error:", err);
         res.status(400).json({ success: false, error: err.message }); 
     }
 };
@@ -157,20 +193,18 @@ exports.getProductById = async (req, res) => {
     }
 };
 
+// 🌟 YOUR EXACT WORKING SELLER DASHBOARD LOGIC (No changes)
 exports.getMyProducts = async (req, res) => {
     try {
-        // 1. Check matching with Step 1 (req.user.id)
         if (!req.user || !req.user.id) {
             return res.status(401).json({ success: false, message: "Seller ID missing in token" });
         }
 
-        // 2. Query matching the field name
         const products = await Product.find({ 
             seller: req.user.id, 
             isArchived: { $ne: true } 
         }).populate('category subCategory').lean();
 
-        // 3. Image URL Fix (Avoiding double domains)
         const baseUrl = `${req.protocol}://${req.get('host')}/uploads/products/`;
 
         const data = products.map(p => ({
