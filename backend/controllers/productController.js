@@ -4,13 +4,29 @@ const Seller = require('../models/Seller');
 const SubCategory = require('../models/SubCategory');
 
 
-// 🌟 Helper: இமேஜ் மற்றும் வீடியோ லிங்க்குகளை முழுமையான URL ஆக மாற்ற
+// // 🌟 Helper: இமேஜ் மற்றும் வீடியோ லிங்க்குகளை முழுமையான URL ஆக மாற்ற
+// const formatProductMedia = (product, req) => {
+//     const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
+//     // Mongoose ஆப்ஜெக்ட்டை சுத்தமான JSON ஆக மாற்றுதல்
+//     const doc = product.toObject ? product.toObject() : product;
+
+//     return {
+//         ...doc,
+//         images: (doc.images || []).map(img => 
+//             (img && img.startsWith('http')) ? img : baseUrl + img
+//         ),
+//         video: doc.video ? 
+//             (doc.video.startsWith('http') ? doc.video : baseUrl + doc.video) 
+//             : ""
+//     };
+// };
+
 const formatProductMedia = (product, req) => {
     const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
-    // Mongoose ஆப்ஜெக்ட்டை சுத்தமான JSON ஆக மாற்றுதல்
     const doc = product.toObject ? product.toObject() : product;
 
-    return {
+    // Existing media logic (No change)
+    const formattedMedia = {
         ...doc,
         images: (doc.images || []).map(img => 
             (img && img.startsWith('http')) ? img : baseUrl + img
@@ -19,6 +35,8 @@ const formatProductMedia = (product, req) => {
             (doc.video.startsWith('http') ? doc.video : baseUrl + doc.video) 
             : ""
     };
+
+    return formattedMedia;
 };
 
 exports.createProduct = async (req, res) => {
