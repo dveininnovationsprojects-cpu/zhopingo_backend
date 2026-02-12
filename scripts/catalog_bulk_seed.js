@@ -3,8 +3,7 @@ const mongoose = require('mongoose');
 const seedDatabase = async () => {
     try {
         console.log("⏳ Connecting to Zhopingo MongoDB...");
-        const mongoURI = "mongodb+srv://zhopingo:Zhopingo28%40@cluster0.wzjuvty.mongodb.net/zhopingo?retryWrites=true&w=majority";
-        await mongoose.connect(mongoURI);
+        const mongoURI = process.env.MONGO_URI;
         console.log("✅ Connected!");
 
         const db = mongoose.connection.db;
