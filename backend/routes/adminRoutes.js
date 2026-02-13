@@ -5,7 +5,8 @@ const {
   getAllSellers, 
   verifySellerStatus, 
   uploadDeliveryRates ,
-  getAllCustomers
+  getAllCustomers,
+  toggleBrandStatus
 } = require("../controllers/adminController"); 
 
 
@@ -18,5 +19,6 @@ router.post('/bulk-upload-pincodes', uploadDeliveryRates);
 router.get("/sellers", getAllSellers);
 router.post("/verify-seller", verifySellerStatus);
 router.get('/customers', getAllCustomers);
+router.put("/sellers/toggle-brand/:id", toggleBrandStatus);
 
 module.exports = router;

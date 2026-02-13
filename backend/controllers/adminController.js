@@ -113,3 +113,19 @@ exports.getAllCustomers = async (req, res) => {
     });
   }
 };
+
+
+
+exports.toggleBrandStatus = async (req, res) => {
+    try {
+        const seller = await Seller.findById(req.params.id);
+        if (!seller) return res.status(404).json({ success: false, message: "Seller not found" });
+
+        seller.isBrand = !seller.isBrand; // True-வா இருந்தா False ஆகும், False-வா இருந்தா True ஆகும்
+        await seller.save();
+
+        res.json({ success: true, message: `Brand status updated to ${seller.isBrand}`, isBrand: seller.isBrand });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
