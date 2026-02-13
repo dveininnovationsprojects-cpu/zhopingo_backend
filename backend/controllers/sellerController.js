@@ -183,7 +183,24 @@ exports.updateSellerOrderStatus = async (req, res) => {
 exports.logoutSeller = async (req, res) => {
   res.json({ success: true, message: "Logged out successfully" });
 };
+exports.getProductsBySeller = async (req, res) => {
+    try {
+        const { sellerId } = req.params;
+        
+        
+        const products = await Product.find({ seller: sellerId })
+            .populate("category")
+            .sort({ createdAt: -1 }); 
 
+        res.json({ 
+            success: true, 
+            count: products.length,
+            data: products 
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
 
 
 exports.updateSellerProfile = async (req, res) => {
@@ -212,9 +229,14 @@ exports.updateSellerProfile = async (req, res) => {
 
 exports.getAllBrands = async (req, res) => {
     try {
-       
-        const brands = await Seller.find().select("shopName profileImage name");
-        res.json({ success: true, data: brands });
+      
+        const brands = await Seller.find({ isBrand: true }).select("shopName profileImage name");
+        
+        res.json({ 
+            success: true, 
+            count: brands.length,
+            data: brands 
+        });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
