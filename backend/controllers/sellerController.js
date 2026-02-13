@@ -184,6 +184,50 @@ exports.logoutSeller = async (req, res) => {
   res.json({ success: true, message: "Logged out successfully" });
 };
 
+
+exports.getProductsBySeller = async (req, res) => {
+    try {
+        const { sellerId } = req.params;
+        
+        
+        const products = await Product.find({ seller: sellerId })
+            .populate("category")
+            .sort({ createdAt: -1 }); 
+
+        res.json({ 
+            success: true, 
+            count: products.length,
+            data: products 
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+
+exports.updateSellerProfile = async (req, res) => {
+    try {
+        const updateData = { ...req.body };
+
+        
+        if (req.file) {
+            updateData.profileImage = `sellers/${req.file.filename}`;
+        }
+
+        const seller = await mongoose.model("Seller").findByIdAndUpdate(
+            req.params.id,
+            updateData,
+            { new: true }
+        ).select("-password");
+
+        if (!seller) return res.status(404).json({ success: false, message: "Seller not found" });
+
+        res.json({ success: true, data: seller });
+    } catch (err) {
+        res.status(400).json({ success: false, error: err.message });
+    }
+};
+
 // 🌟 ஒரு குறிப்பிட்ட செல்லரின் தயாரிப்புகளை மட்டும் எடுக்க (sellerId-ஐ வைத்து)
 exports.getProductsBySeller = async (req, res) => {
     try {
@@ -203,7 +247,6 @@ exports.getProductsBySeller = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
-
 
 exports.getAllBrands = async (req, res) => {
     try {
