@@ -213,7 +213,7 @@ exports.updateSellerProfile = async (req, res) => {
 exports.getAllBrands = async (req, res) => {
     try {
        
-        const brands = await mongoose.model("Seller").find({ isBrand: true }).select("shopName profileImage name");
+        const brands = await Seller.find().select("shopName profileImage name");
         res.json({ success: true, data: brands });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
