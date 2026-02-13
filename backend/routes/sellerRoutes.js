@@ -37,4 +37,9 @@ router.get("/new-orders/:sellerId", sellerCtrl.getSellerNewOrders);
 
 router.put("/update-order-status", sellerCtrl.updateSellerOrderStatus);
 
+
+router.put("/update-profile/:id", upload.single("profileImage"), sellerCtrl.updateSellerProfile);
+
+router.get("/brands/all", sellerCtrl.getAllBrands);
+
 module.exports = router;
