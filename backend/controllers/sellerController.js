@@ -3,6 +3,7 @@ const Order = require("../models/Order");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { sendAdminNotification } = require("../utils/emailService");
+const mongoose = require("mongoose");
 
 const JWT_SECRET = process.env.JWT_SECRET || "secret123";
 exports.registerSeller = async (req, res) => {
