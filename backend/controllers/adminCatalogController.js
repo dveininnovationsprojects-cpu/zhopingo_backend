@@ -13,7 +13,7 @@ exports.addHsnCode = async (req, res) => {
 
 exports.getAllHsnForAdmin = async (req, res) => {
     try {
-        // Filter ethuvum illaama fetch pannum, appo thaan neenga thirumba ON panna mudiyum
+        
         const list = await HsnMaster.find(); 
         res.json({ success: true, data: list });
     } catch (err) { 
@@ -21,7 +21,7 @@ exports.getAllHsnForAdmin = async (req, res) => {
     }
 };
 
-// 2. Category/Sub-Category Dropdown-ku mattum (Active codes mattum kaatum)
+
 exports.getActiveHsnOnly = async (req, res) => {
     try {
         // Ippo filter use pannunga
@@ -105,22 +105,60 @@ exports.deleteCategory = async (req, res) => {
 };
 
 // ================= 🌟 SUB-CATEGORY FEATURES =================
-exports.createSubCategory = async (req, res) => {
-    try {
-        const { name, category, description } = req.body;
-        const parent = await Category.findById(category);
-        if (!parent) return res.status(404).json({ error: "Category not found" });
+// exports.createSubCategory = async (req, res) => {
+//     try {
+//         const { name, category, description } = req.body;
+//         const parent = await Category.findById(category);
+//         if (!parent) return res.status(404).json({ error: "Category not found" });
 
-        const subCat = new SubCategory({ 
-            name, category, description,
-            hsnCode: parent.hsnCode, // Inherited from Category
-            gstRate: parent.gstRate, // Inherited from Category
-            image: req.file ?  `categories/${req.file.filename}` : null 
-        });
-        await subCat.save();
-        res.status(201).json({ success: true, data: subCat });
-    } catch (err) { res.status(400).json({ error: err.message }); }
+//         const subCat = new SubCategory({ 
+//             name, category, description,
+//             hsnCode: parent.hsnCode, // Inherited from Category
+//             gstRate: parent.gstRate, // Inherited from Category
+//             image: req.file ?  `categories/${req.file.filename}` : null 
+//         });
+//         await subCat.save();
+//         res.status(201).json({ success: true, data: subCat });
+//     } catch (err) { res.status(400).json({ error: err.message }); }
+// };
+
+
+
+exports.createCategory = async (req, res) => {
+  try {
+    const { name, description, hsnCode, gstRate, isPermanent, iconName } = req.body;
+
+    if (!req.file) {
+      return res.status(400).json({ error: "Image upload failed" });
+    }
+
+    const category = new Category({
+      name,
+      description,
+      hsnCode,
+      gstRate,
+      image: `categories/${req.file.filename}`,
+      isActive: true,
+      isPermanent: isPermanent === 'true' || isPermanent === true,
+      iconName: iconName || 'apps' // Icon பெயர் இல்லை என்றால் default 'apps'
+    });
+
+    await category.save();
+    res.status(201).json({ success: true, data: category });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 };
+
+exports.getPermanentCategories = async (req, res) => {
+    try {
+        const permanentCats = await Category.find({ isPermanent: true, isActive: true });
+        res.json({ success: true, data: permanentCats });
+    } catch (err) { 
+        res.status(500).json({ error: err.message }); 
+    }
+};
+
 
 exports.getAllSubCategories = async (req, res) => {
     try {

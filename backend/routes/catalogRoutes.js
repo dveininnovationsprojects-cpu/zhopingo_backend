@@ -54,6 +54,7 @@ router.post(
 router.get('/categories', catalogController.getCategories);
 router.put('/categories/:id', upload.single('image'), processImages, catalogController.updateCategory);
 router.delete('/categories/:id', catalogController.deleteCategory);
+router.get('/categories/permanent', catalogController.getPermanentCategories);
 
 // --- Sub-Categories ---
 // 🌟 Added processImages after upload.single
