@@ -10,6 +10,10 @@ const storage = multer.diskStorage({
     let folder = BASE_UPLOAD;
 
     switch (file.fieldname) {
+
+      case "profileImage":
+        folder = path.join(BASE_UPLOAD, "sellers");
+        break;
       // 🟢 PRODUCT
       case "images":
         folder = path.join(BASE_UPLOAD, "products");
