@@ -4,7 +4,7 @@ const reelCtrl = require('../controllers/reelController');
 const upload = require('../utils/upload'); 
 const { protect, optionalProtect } = require('../middleware/authMiddleware'); 
 
-router.get('/all', optionalProtect, reelCtrl.getAllReels);
+router.get('/', optionalProtect, reelCtrl.getAllReels);
 
 router.post('/upload', protect, upload.single('video'), reelCtrl.uploadReel);
 router.delete('/:id', protect, reelCtrl.deleteReel);
