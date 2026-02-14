@@ -11,6 +11,6 @@ router.delete('/:id', protect, reelCtrl.deleteReel);
 
 
 router.post('/like/:id', protect, reelCtrl.toggleLike); 
-router.post('/report', reelCtrl.reportReel);
+router.post('/report', protect, reelCtrl.reportReel);
 
 module.exports = router;
