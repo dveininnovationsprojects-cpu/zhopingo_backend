@@ -29,3 +29,24 @@ exports.sendAdminNotification = async (sellerData, type = "Registration") => {
   };
   return transporter.sendMail(mailOptions);
 };
+
+
+// utils/emailService.js
+
+exports.sendReelBlockNotification = async (sellerEmail, reelDescription, reason) => {
+  const transporter = nodemailer.createTransport({ /* உன்னுடைய SMTP விவரங்கள் */ });
+
+  const mailOptions = {
+    from: process.env.EMAIL_USER,
+    to: sellerEmail,
+    subject: "Zhopingo - Your Reel has been Blocked",
+    html: `
+      <h2>Important Notice</h2>
+      <p>Hello Seller,</p>
+      <p>Your reel with description: <b>"${reelDescription}"</b> has been blocked by the Administrator.</p>
+      <p><b>Reason:</b> ${reason}</p>
+      <p>If you have any questions, please contact support.</p>
+    `
+  };
+  await transporter.sendMail(mailOptions);
+};

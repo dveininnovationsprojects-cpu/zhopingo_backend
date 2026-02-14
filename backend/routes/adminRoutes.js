@@ -6,8 +6,10 @@ const {
   verifySellerStatus, 
   uploadDeliveryRates ,
   getAllCustomers,
-  toggleBrandStatus
+  toggleBrandStatus,
+  blockReelByAdmin
 } = require("../controllers/adminController"); 
+const { protect } = require('../middleware/authMiddleware');
 
 
 router.post("/login", adminLogin);
@@ -20,5 +22,6 @@ router.get("/sellers", getAllSellers);
 router.post("/verify-seller", verifySellerStatus);
 router.get('/customers', getAllCustomers);
 router.put("/sellers/toggle-brand/:id", toggleBrandStatus);
+router.post('/block-reel', protect,blockReelByAdmin);
 
 module.exports = router;
