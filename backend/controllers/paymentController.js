@@ -2,32 +2,32 @@ const axios = require("axios");
 const Order = require("../models/Order");
 const Payment = require("../models/Payment");
 
-// .env-ல் இருந்து BASE_URL-ஐ எடுக்கிறோம்
+// Base URL configuration
 const MY_BASE_URL = process.env.BASE_URL || "https://api.zhopingo.in";
 const CF_BASE_URL = process.env.NODE_ENV === "production" 
   ? "https://api.cashfree.com/pg" 
   : "https://sandbox.cashfree.com/pg";
 
-// 🌟 1. Create Payment Session
+// 🌟 1. Create Payment Session (Corrected as per Docs)
 exports.createSession = async (req, res) => {
   try {
     const { orderId, amount, customerId, customerPhone, customerName } = req.body;
 
-    // ஆர்டர் இருக்கிறதா என்று சரிபார்
+    // Validate Order
     const order = await Order.findById(orderId);
     if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
-    // 🌟 போன் நம்பர் வேலிடேஷன்: 10 இலக்கங்கள் மட்டும்
+    // 🌟 Phone: Must be exactly 10 digits as per Cashfree rule
     const cleanPhone = String(customerPhone).replace(/\D/g, "").slice(-10);
 
-    // 🌟 Cashfree Order ID: தனித்துவமாகவும் (Unique) 45 எழுத்துக்களுக்குள்ளும் இருக்க வேண்டும்
-    const cfOrderId = `ORD_${orderId.toString().slice(-6)}_${Date.now().toString().slice(-4)}`;
+    // 🌟 Unique Order ID for Cashfree (Avoids "Order already exists" error)
+    const cfOrderId = `CF_ORD_${orderId.toString().slice(-6)}_${Date.now()}`;
 
     const response = await axios.post(
       `${CF_BASE_URL}/orders`,
       {
         order_id: cfOrderId,
-        order_amount: Number(amount),
+        order_amount: parseFloat(amount).toFixed(2), // Ensure 2 decimal points
         order_currency: "INR",
         customer_details: {
           customer_id: String(customerId),
@@ -35,7 +35,7 @@ exports.createSession = async (req, res) => {
           customer_name: customerName || "Zhopingo User"
         },
         order_meta: {
-          // மொபைல் ஆப்பிற்கு திரும்ப வருவதற்கான URL
+          // This must be exactly what the SDK returns after payment
           return_url: `${MY_BASE_URL}/api/v1/payments/cashfree-return?cf_order_id=${cfOrderId}`
         }
       },
@@ -49,7 +49,7 @@ exports.createSession = async (req, res) => {
       }
     );
 
-    // பேமெண்ட் ரெக்கார்டு உருவாக்குதல்
+    // ✅ Payment Record in DB
     await Payment.create({
       orderId,
       transactionId: cfOrderId,
@@ -57,7 +57,8 @@ exports.createSession = async (req, res) => {
       status: "PENDING"
     });
 
-    // ✅ கிரிஸ்டல் கிளியர் ரெஸ்பான்ஸ் (எந்த எக்ஸ்ட்ரா டெக்ஸ்டும் இருக்காது)
+    // 🌟 முக்கியமான இடம்: response.data.payment_session_id-ஐ மட்டும் தான் அனுப்ப வேண்டும்.
+    // வேறு எந்த ஸ்ட்ரிங்கையும் இங்க ஆட் பண்ணக் கூடாது.
     return res.status(200).json({
       success: true,
       paymentSessionId: response.data.payment_session_id,
@@ -69,12 +70,12 @@ exports.createSession = async (req, res) => {
     return res.status(500).json({ 
       success: false, 
       message: "Could not create payment session",
-      error: err.response?.data?.message || err.message 
+      error: err.response?.data || err.message 
     });
   }
 };
 
-// 🌟 2. Cashfree Return (Web Fallback)
+// 🌟 2. Cashfree Return (SDK Fallback)
 exports.cashfreeReturn = async (req, res) => {
   try {
     const { cf_order_id } = req.query;
@@ -112,7 +113,7 @@ exports.cashfreeReturn = async (req, res) => {
   }
 };
 
-// 🌟 3. Verify Payment Status
+// 🌟 3. Verify Payment Status (For Manual Verification)
 exports.verifyPayment = async (req, res) => {
   try {
     const { orderId } = req.params;
