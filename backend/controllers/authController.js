@@ -128,17 +128,15 @@ exports.loginWithOTP = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
+
 exports.addUserAddress = async (req, res) => {
   try {
-    // Middleware 'protect' req.user-ai populate pannidum
     const userId = req.user.id; 
-    
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
     const { flatNo, addressLine, pincode, addressType, isDefault } = req.body;
 
-    // Default logic
     if (isDefault) {
       user.addressBook.forEach(addr => addr.isDefault = false);
     }
@@ -154,10 +152,18 @@ exports.addUserAddress = async (req, res) => {
     user.addressBook.push(newAddress);
     await user.save();
 
+ 
     res.json({ 
       success: true, 
       message: "Address saved successfully",
-      addressBook: user.addressBook 
+      token: req.token, 
+      user: {
+        id: user._id,
+        phone: user.phone,
+        role: user.role,
+        name: user.name || "Customer",
+        addressBook: user.addressBook
+      }
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
