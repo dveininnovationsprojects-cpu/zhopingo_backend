@@ -404,7 +404,6 @@ exports.getOrders = async (req, res) => {
   }
 };
 
-
 exports.getMyOrders = async (req, res) => {
   try {
     const { userId } = req.params;
@@ -412,7 +411,7 @@ exports.getMyOrders = async (req, res) => {
   
     const orders = await Order.find({
       customerId: userId,
-      status: "Placed" 
+      status: { $ne: "Pending" } 
     }).sort({ createdAt: -1 });
 
     res.json({ 
@@ -420,12 +419,10 @@ exports.getMyOrders = async (req, res) => {
         count: orders.length,
         data: orders 
     });
-
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 };
-
 exports.getSellerOrders = async (req, res) => {
   try {
     const { sellerId } = req.params;

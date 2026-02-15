@@ -2,6 +2,8 @@ const axios = require("axios");
 const Order = require("../models/Order");
 const Payment = require("../models/Payment");
 
+
+const MY_BASE_URL = "https://liliana-exsufflicate-radioactively.ngrok-free.dev";
 const CF_BASE_URL = "https://sandbox.cashfree.com/pg";
 
 exports.createSession = async (req, res) => {
@@ -21,23 +23,24 @@ exports.createSession = async (req, res) => {
         order_currency: "INR",
         customer_details: {
           customer_id: String(customerId),
-          customer_phone: String(customerPhone),
+          customer_phone: String(customerPhone), 
           customer_name: customerName || "Customer"
         },
-       order_meta: {
-  return_url: `https://zhopingo.in/api/payment/cashfree-return?cf_order_id=${cfOrderId}`
-}
-
+        order_meta: {
+         
+          return_url: `${MY_BASE_URL}/api/payment/cashfree-return?cf_order_id=${cfOrderId}`
+        }
       },
       {
         headers: {
           "x-client-id": process.env.CF_APP_ID,
           "x-client-secret": process.env.CF_SECRET,
-          "x-api-version": "2025-01-01",
+          "x-api-version": "2023-08-01",
           "Content-Type": "application/json"
         }
       }
     );
+
 
     await Payment.create({
       orderId,
@@ -52,12 +55,12 @@ exports.createSession = async (req, res) => {
       cfOrderId
     });
   } catch (err) {
-    console.error(err.response?.data || err.message);
+    console.error("Backend Error:", err.response?.data || err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 };
 
-//  Return URL Handler (MOST IMPORTANT)
+
 exports.cashfreeReturn = async (req, res) => {
   try {
     const { cf_order_id } = req.query;
@@ -68,7 +71,7 @@ exports.cashfreeReturn = async (req, res) => {
         headers: {
           "x-client-id": process.env.CF_APP_ID,
           "x-client-secret": process.env.CF_SECRET,
-          "x-api-version": "2025-01-01"
+          "x-api-version": "2023-08-01"
         }
       }
     );
@@ -80,6 +83,7 @@ exports.cashfreeReturn = async (req, res) => {
         payment.rawResponse = response.data;
         await payment.save();
 
+        
         await Order.findByIdAndUpdate(payment.orderId, { status: "Placed" });
       }
       return res.redirect("zhopingo://order-success");
@@ -87,12 +91,12 @@ exports.cashfreeReturn = async (req, res) => {
 
     res.redirect("zhopingo://order-failed");
   } catch (err) {
-    console.error(err.message);
+    console.error("Return Error:", err.message);
     res.redirect("zhopingo://order-failed");
   }
 };
 
-// Optional manual verify
+
 exports.verifyPayment = async (req, res) => {
   try {
     const payment = await Payment.findOne({ orderId: req.params.orderId });
