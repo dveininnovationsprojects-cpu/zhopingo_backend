@@ -120,7 +120,6 @@ exports.loginWithOTP = async (req, res) => {
         id: user._id,
         phone: user.phone,
         role: user.role,
-        name: user.name || "Customer",
         addressBook: user.addressBook || []
       }
     });
@@ -129,28 +128,21 @@ exports.loginWithOTP = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
+
 exports.addUserAddress = async (req, res) => {
   try {
-    // 🌟 URL-ல் இருந்து வரும் ID அல்லது Token-ல் இருந்து வரும் ID எதாவது ஒன்றை எடுப்பது பாதுகாப்பு
-    const userId = req.params.userId || req.user.id; 
+   
+    const userId = req.user.id; 
+    
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-    const { flatNo, addressLine, pincode, addressType, isDefault } = req.body;
-
-    // Default logic
-    if (isDefault) {
-      user.addressBook.forEach(addr => addr.isDefault = false);
-    }
-
-    // 🌟 மாடலில் உள்ள ஃபீல்டு பெயர்கள் 'label', 'addressLine' போன்றவை. 
-    // நீ அனுப்பும் 'addressType'-ஐ 'label'-ஆக மாற்றுகிறோம்.
+  
     const newAddress = {
-      label: addressType || "Home", 
-      flatNo: flatNo,
-      addressLine: addressLine,
-      pincode: pincode,
-      isDefault: isDefault || user.addressBook.length === 0
+      label: req.body.addressType || "Home",
+      addressLine: req.body.flatNo,
+      pincode: req.body.pincode,
+      isDefault: false
     };
 
     user.addressBook.push(newAddress);
@@ -159,19 +151,14 @@ exports.addUserAddress = async (req, res) => {
     res.json({ 
       success: true, 
       message: "Address saved successfully",
-      user: {
-        id: user._id,
-        phone: user.phone,
-        role: user.role,
-        name: user.name || "Customer",
-        addressBook: user.addressBook
-      }
+      addressBook: user.addressBook 
     });
   } catch (err) {
-    console.error("Address Error:", err); // எர்ரரை செக் செய்ய
     res.status(500).json({ success: false, error: err.message });
   }
 };
+
+
 
 /* -------- LOGOUT -------- */
 exports.logout = async (req, res) => {
