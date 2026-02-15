@@ -120,6 +120,7 @@ exports.loginWithOTP = async (req, res) => {
         id: user._id,
         phone: user.phone,
         role: user.role,
+        name: user.name || "Customer",
         addressBook: user.addressBook || []
       }
     });
