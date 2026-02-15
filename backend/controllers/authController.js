@@ -137,6 +137,7 @@ exports.addUserAddress = async (req, res) => {
 
     const { flatNo, addressLine, pincode, addressType, isDefault } = req.body;
 
+    // 🌟 Default logic
     if (isDefault) {
       user.addressBook.forEach(addr => addr.isDefault = false);
     }
@@ -152,11 +153,11 @@ exports.addUserAddress = async (req, res) => {
     user.addressBook.push(newAddress);
     await user.save();
 
- 
+    // 🌟 முக்கிய மாற்றம்: லாகின் போது அனுப்பிய அதே பார்மெட்டில் யூசரை திருப்பி அனுப்பு
     res.json({ 
       success: true, 
       message: "Address saved successfully",
-      token: req.token, 
+      token: req.token || req.headers.authorization?.split(' ')[1], // டோக்கனை அப்படியே பாஸ் செய்
       user: {
         id: user._id,
         phone: user.phone,
