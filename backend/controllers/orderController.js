@@ -2,10 +2,9 @@ const Order = require('../models/Order');
 const User = require('../models/User');
 const DeliveryCharge = require('../models/DeliveryCharge');
 const Payout = require('../models/Payout');
-const Seller = require("../models/Seller");
 
 /* =====================================================
-    1️⃣ CREATE ORDER (Updated with New Model Fields)
+    1️⃣ CREATE ORDER
 ===================================================== */
 exports.createOrder = async (req, res) => {
   try {
@@ -31,11 +30,14 @@ exports.createOrder = async (req, res) => {
 
     /* ---------- ITEM LOOP & DATA PREPARATION ---------- */
     const processedItems = items.map(item => {
-      const itemCost = Number(item.price) * Number(item.quantity);
+      // 🌟 Safety: Ensure price and quantity are numbers
+      const price = Number(item.price) || 0;
+      const quantity = Number(item.quantity) || 1;
+      const itemCost = price * quantity;
+      
       totalProductAmount += itemCost;
 
-      // Seller Logic for Split Data
-      const actualSellerId = item.sellerId || item.seller;
+      const actualSellerId = item.sellerId || item.seller || "admin_seller";
       const sellerIdStr = actualSellerId.toString();
 
       if (!sellerWiseSplit[sellerIdStr]) {
@@ -48,7 +50,6 @@ exports.createOrder = async (req, res) => {
         finalDeliveryCharge += baseDeliveryCharge;
       }
 
-      // Free Delivery Check
       if (item.isFreeDeliveryBySeller) {
         finalDeliveryCharge -= sellerWiseSplit[sellerIdStr].deliveryChargeApplied;
         sellerWiseSplit[sellerIdStr].deliveryChargeApplied = 0;
@@ -57,19 +58,17 @@ exports.createOrder = async (req, res) => {
       sellerWiseSplit[sellerIdStr].sellerSubtotal += itemCost;
       sellerWiseSplit[sellerIdStr].items.push(item);
 
-      // 🌟 மாடலுக்கு தேவையான சரியான Item Object-ஐ ரிட்டர்ன் செய்கிறோம்
       return {
         productId: item._id || item.productId,
         name: item.name,
-        quantity: item.quantity,
-        price: item.price,
+        quantity: quantity,
+        price: price,
         sellerId: sellerIdStr,
         image: item.image || item.displayImage
       };
     });
 
-    /* ---------- NEW MODEL LOGIC (Payment Status & Address) ---------- */
-    // WALLET என்றால் உடனே 'Paid', இல்லையெனில் 'Pending'
+    /* ---------- PAYMENT STATUS & ORDER STATUS ---------- */
     const paymentStatus = paymentMethod === 'WALLET' ? 'Paid' : 'Pending';
     const orderStatus = paymentMethod === 'WALLET' ? 'Placed' : 'Pending';
 
@@ -80,8 +79,8 @@ exports.createOrder = async (req, res) => {
       totalAmount: totalProductAmount + finalDeliveryCharge,
       deliveryChargeApplied: finalDeliveryCharge,
       paymentMethod,
-      paymentStatus, // 🌟 புதிய ஃபீல்டு
-      shippingAddress: { // 🌟 விரிவான முகவரி ஸ்ட்ரக்சர்
+      paymentStatus,
+      shippingAddress: {
         flatNo: shippingAddress.flatNo,
         addressLine: shippingAddress.addressLine,
         pincode: shippingAddress.pincode,
@@ -105,14 +104,13 @@ exports.createOrder = async (req, res) => {
 };
 
 /* =====================================================
-    2️⃣ UPDATE ORDER STATUS (DELIVERY → PAYOUT)
+    2️⃣ UPDATE ORDER STATUS
 ===================================================== */
 exports.updateOrderStatus = async (req, res) => {
   try {
     const { status } = req.body;
-
-    // Delivered ஆனால் பேமெண்ட் ஸ்டேட்டஸையும் Paid ஆக மாற்ற வேண்டும்
     const updateData = { status };
+    
     if (status === 'Delivered') {
       updateData.paymentStatus = 'Paid';
     }
@@ -125,12 +123,11 @@ exports.updateOrderStatus = async (req, res) => {
 
     if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
-    /* ---------- PAYOUT LOGIC ---------- */
     if (status === 'Delivered') {
       const adminCommPercent = 10;
       for (let split of order.sellerSplitData) {
         const commission = (split.sellerSubtotal * adminCommPercent) / 100;
-        const finalSellerPay = split.sellerSubtotal - commission;
+        const finalSellerPay = (split.sellerSubtotal + split.deliveryChargeApplied) - commission;
 
         await Payout.create({
           orderId: order._id,
@@ -151,14 +148,13 @@ exports.updateOrderStatus = async (req, res) => {
 };
 
 /* =====================================================
-    3️⃣ CANCEL ORDER + WALLET REFUND
+    3️⃣ CANCEL ORDER + REFUND
 ===================================================== */
 exports.cancelOrder = async (req, res) => {
   try {
     const order = await Order.findById(req.params.orderId);
     if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
-    // Refund logic: Paid ஆக இருந்தால் மட்டுமே ரீஃபண்ட்
     if (order.paymentStatus === 'Paid' && order.status !== 'Cancelled') {
       const user = await User.findById(order.customerId);
       if (user) {
@@ -166,8 +162,8 @@ exports.cancelOrder = async (req, res) => {
         user.walletTransactions.unshift({
           amount: order.totalAmount,
           type: 'CREDIT',
-          reason: "Refund",
-          txnId: order._id.toString(), // 🌟 txnId ஃபீல்டு பயன்படுத்துகிறோம்
+          reason: `Refund for Order #${order._id.toString().slice(-6)}`,
+          txnId: order._id.toString(),
           date: new Date()
         });
         await user.save();
@@ -185,7 +181,7 @@ exports.cancelOrder = async (req, res) => {
 };
 
 /* =====================================================
-    4️⃣ GET ORDERS (ADMIN / USER / SELLER)
+    4️⃣ GET ORDERS
 ===================================================== */
 exports.getOrders = async (req, res) => {
   try {

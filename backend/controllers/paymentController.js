@@ -2,8 +2,8 @@ const axios = require("axios");
 const Order = require("../models/Order");
 const Payment = require("../models/Payment");
 
-// .env-ல் இருந்து BASE_URL-ஐ எடுக்கிறோம் (ngrok அல்லது production url)
-const MY_BASE_URL = process.env.BASE_URL || "https://liliana-exsufflicate-radioactively.ngrok-free.dev";
+// .env-ல் இருந்து BASE_URL-ஐ எடுக்கிறோம்
+const MY_BASE_URL = process.env.BASE_URL || "https://api.zhopingo.in";
 const CF_BASE_URL = process.env.NODE_ENV === "production" 
   ? "https://api.cashfree.com/pg" 
   : "https://sandbox.cashfree.com/pg";
@@ -13,15 +13,15 @@ exports.createSession = async (req, res) => {
   try {
     const { orderId, amount, customerId, customerPhone, customerName } = req.body;
 
+    // ஆர்டர் இருக்கிறதா என்று சரிபார்
     const order = await Order.findById(orderId);
     if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
-    // 🌟 போன் நம்பர்: 10 இலக்க ஸ்ட்ரிங் ஆக இருக்க வேண்டும்
+    // 🌟 போன் நம்பர் வேலிடேஷன்: 10 இலக்கங்கள் மட்டும்
     const cleanPhone = String(customerPhone).replace(/\D/g, "").slice(-10);
 
-    // 🌟 Cashfree Order ID: அதிக நீளம் இருக்கக்கூடாது (Max 45 chars)
-    // format: CF_orderIdSuffix_timestampSuffix
-    const cfOrderId = `CF_${orderId.toString().slice(-6)}_${Date.now().toString().slice(-6)}`;
+    // 🌟 Cashfree Order ID: தனித்துவமாகவும் (Unique) 45 எழுத்துக்களுக்குள்ளும் இருக்க வேண்டும்
+    const cfOrderId = `ORD_${orderId.toString().slice(-6)}_${Date.now().toString().slice(-4)}`;
 
     const response = await axios.post(
       `${CF_BASE_URL}/orders`,
@@ -35,7 +35,8 @@ exports.createSession = async (req, res) => {
           customer_name: customerName || "Zhopingo User"
         },
         order_meta: {
-          return_url: `${MY_BASE_URL}/api/v1/payment/cashfree-return?cf_order_id=${cfOrderId}`
+          // மொபைல் ஆப்பிற்கு திரும்ப வருவதற்கான URL
+          return_url: `${MY_BASE_URL}/api/v1/payments/cashfree-return?cf_order_id=${cfOrderId}`
         }
       },
       {
@@ -48,7 +49,7 @@ exports.createSession = async (req, res) => {
       }
     );
 
-    // Payment Record-ஐ PENDING நிலையில் உருவாக்குகிறோம்
+    // பேமெண்ட் ரெக்கார்டு உருவாக்குதல்
     await Payment.create({
       orderId,
       transactionId: cfOrderId,
@@ -56,15 +57,16 @@ exports.createSession = async (req, res) => {
       status: "PENDING"
     });
 
-    res.json({
+    // ✅ கிரிஸ்டல் கிளியர் ரெஸ்பான்ஸ் (எந்த எக்ஸ்ட்ரா டெக்ஸ்டும் இருக்காது)
+    return res.status(200).json({
       success: true,
       paymentSessionId: response.data.payment_session_id,
       cfOrderId: response.data.order_id
     });
 
   } catch (err) {
-    console.error("Backend Error:", err.response?.data || err.message);
-    res.status(500).json({ 
+    console.error("Cashfree Session Error:", err.response?.data || err.message);
+    return res.status(500).json({ 
       success: false, 
       message: "Could not create payment session",
       error: err.response?.data?.message || err.message 
@@ -72,7 +74,7 @@ exports.createSession = async (req, res) => {
   }
 };
 
-// 🌟 2. Cashfree Return (Web Fallback / Manual Redirect)
+// 🌟 2. Cashfree Return (Web Fallback)
 exports.cashfreeReturn = async (req, res) => {
   try {
     const { cf_order_id } = req.query;
@@ -95,7 +97,6 @@ exports.cashfreeReturn = async (req, res) => {
         payment.rawResponse = response.data;
         await payment.save();
 
-        // ஆர்டர் ஸ்டேட்டஸை 'Placed' ஆக மாற்றுகிறோம்
         await Order.findByIdAndUpdate(payment.orderId, { 
             status: "Placed",
             paymentStatus: "Paid" 
@@ -104,53 +105,43 @@ exports.cashfreeReturn = async (req, res) => {
       return res.redirect("zhopingo://payment-success");
     }
 
-    res.redirect("zhopingo://payment-failed");
+    return res.redirect("zhopingo://payment-failed");
   } catch (err) {
     console.error("Return Error:", err.message);
-    res.redirect("zhopingo://payment-failed");
+    return res.redirect("zhopingo://payment-failed");
   }
 };
 
-// 🌟 3. Verify Payment Status (Used by Frontend after SDK Callback)
+// 🌟 3. Verify Payment Status
 exports.verifyPayment = async (req, res) => {
   try {
     const { orderId } = req.params;
-    
-    // சமீபத்திய பேமெண்ட் ரெக்கார்டை எடுக்கிறோம்
     const payment = await Payment.findOne({ orderId }).sort({ createdAt: -1 });
     
-    if (!payment) {
-      return res.json({ success: false, status: "No Record Found" });
-    }
+    if (!payment) return res.json({ success: false, status: "No Record Found" });
 
-    // ஒருவேளை இன்னும் PENDING ஆக இருந்தால் Cashfree-ல் இருந்து நேரடி நிலையை சரிபார்க்கலாம்
     if (payment.status === "PENDING") {
-        const response = await axios.get(
-            `${CF_BASE_URL}/orders/${payment.transactionId}`,
-            {
-              headers: {
-                "x-client-id": process.env.CF_APP_ID,
-                "x-client-secret": process.env.CF_SECRET,
-                "x-api-version": "2023-08-01"
-              }
-            }
-          );
-          
-          if (response.data.order_status === "PAID") {
-              payment.status = "SUCCESS";
-              await payment.save();
-              await Order.findByIdAndUpdate(orderId, { status: "Placed", paymentStatus: "Paid" });
-              return res.json({ success: true, status: "Placed" });
+      const response = await axios.get(
+        `${CF_BASE_URL}/orders/${payment.transactionId}`,
+        {
+          headers: {
+            "x-client-id": process.env.CF_APP_ID,
+            "x-client-secret": process.env.CF_SECRET,
+            "x-api-version": "2023-08-01"
           }
+        }
+      );
+      
+      if (response.data.order_status === "PAID") {
+        payment.status = "SUCCESS";
+        await payment.save();
+        await Order.findByIdAndUpdate(orderId, { status: "Placed", paymentStatus: "Paid" });
+        return res.json({ success: true, status: "Placed" });
+      }
     }
 
-    if (payment.status === "SUCCESS") {
-      return res.json({ success: true, status: "Placed" });
-    }
-
-    res.json({ success: true, status: "Pending/Failed" });
+    return res.json({ success: true, status: payment.status === "SUCCESS" ? "Placed" : "Pending/Failed" });
   } catch (err) {
-    console.error("Verify Error:", err.message);
-    res.status(500).json({ success: false, error: "Internal Server Error" });
+    return res.status(500).json({ success: false, error: "Internal Server Error" });
   }
 };
