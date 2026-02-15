@@ -48,8 +48,6 @@ exports.createWalletTopupSession = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
-
-// 2️⃣ டாப்-அப் வெற்றியா எனச் சரிபார்த்து பேலன்ஸ் ஏற்றுதல்
 exports.verifyWalletTopup = async (req, res) => {
   try {
     const { topup_id } = req.query;
@@ -72,15 +70,16 @@ exports.verifyWalletTopup = async (req, res) => {
       const user = await User.findById(userId);
       if (!user) return res.redirect("zhopingo://wallet-failed");
 
-      // ஒரே டிரான்ஸாக்ஷன் மீண்டும் ஆட் ஆகாமல் தடுக்க செக்
-      const alreadyAdded = user.walletTransactions.some(t => t.reason.includes(topup_id));
+      
+      const alreadyAdded = user.walletTransactions.some(t => t.txnId === topup_id);
 
       if (!alreadyAdded) {
         user.walletBalance += amount;
         user.walletTransactions.unshift({
           amount,
           type: "CREDIT",
-          reason: `Wallet Topup (${topup_id})`,
+          reason: "Wallet Topup", 
+          txnId: topup_id, 
           date: new Date()
         });
         await user.save();
@@ -95,7 +94,6 @@ exports.verifyWalletTopup = async (req, res) => {
     res.redirect("zhopingo://wallet-failed");
   }
 };
-
 // 3️⃣ வாலட் பேலன்ஸ் மற்றும் ஹிஸ்டரி பார்த்தல்
 exports.getWalletStatus = async (req, res) => {
   try {
