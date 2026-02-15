@@ -54,6 +54,9 @@ exports.createSession = async (req, res) => {
       amount: Number(amount),
       status: "PENDING"
     });
+      
+    // res.status(200).json-க்கு ஒரு வரி முன்னாடி இதை போடு
+     console.log("REAL_SESSION_ID_FROM_CASHFREE:", response.data.payment_session_id);
 
     return res.status(200).json({
       success: true,
@@ -115,16 +118,13 @@ exports.cashfreeReturn = async (req, res) => {
     return res.redirect("zhopingo://payment-failed");
   }
 };
-
-/**
- * 🌟 3. VERIFY PAYMENT
- */
+// verifyPayment பங்க்ஷனில் ஒரு சின்ன இம்ப்ரூவ்மென்ட்
 exports.verifyPayment = async (req, res) => {
   try {
     const { orderId } = req.params;
     const payment = await Payment.findOne({ orderId }).sort({ createdAt: -1 });
 
-    if (!payment) return res.json({ success: false, message: "Payment record not found" });
+    if (!payment) return res.status(404).json({ success: false, message: "No payment record found" });
 
     const response = await axios.get(
       `${CF_BASE_URL}/orders/${payment.transactionId}`,
@@ -137,15 +137,19 @@ exports.verifyPayment = async (req, res) => {
       }
     );
 
+    // 🌟 டாக்குமெண்ட் படி PAID அல்லது ACTIVE ஸ்டேட்டஸை செக் பண்ணுவோம்
     if (response.data.order_status === "PAID") {
       payment.status = "SUCCESS";
+      payment.rawResponse = response.data;
       await payment.save();
+      
       await Order.findByIdAndUpdate(orderId, { status: "Placed", paymentStatus: "Paid" });
-      return res.json({ success: true, status: "Placed" });
+      return res.json({ success: true, status: "SUCCESS" });
     }
 
     return res.json({ success: false, status: response.data.order_status });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    console.error("Verification Error:", err.response?.data || err.message);
+    return res.status(500).json({ success: false, error: "Internal Server Error" });
   }
 };
