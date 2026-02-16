@@ -7,6 +7,8 @@ const {
   registerSeller,
   loginSeller,
   addUserAddress,
+  toggleWishlist,
+  getWishlist,
   logout
 } = require('../controllers/authController');
 
@@ -16,7 +18,8 @@ router.post('/send-otp', sendOTP);
 router.post('/login-otp', loginWithOTP);
 
 
-
+router.post('/wishlist/toggle', protect, toggleWishlist);
+router.get('/wishlist/all', protect, getWishlist);
 router.put('/add-address/:userId', protect, addUserAddress);
 router.post('/logout', logout);
 

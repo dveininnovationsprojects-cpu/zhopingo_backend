@@ -1,49 +1,44 @@
 const mongoose = require('mongoose');
 
 const orderSchema = new mongoose.Schema({
-    customerId: { 
-        type: mongoose.Schema.Types.ObjectId, 
-        ref: 'User', 
-        required: true 
-    },
-    // 🌟 items-ஐ விரிவாகக் குறிப்பிடுவது நல்லது (Best Practice)
+    customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     items: [{
         productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
         name: { type: String, required: true },
         quantity: { type: Number, required: true },
-        price: { type: Number, required: true },
+        price: { type: Number, required: true }, 
+        mrp: { type: Number },
         sellerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Seller', required: true },
         image: { type: String }
     }],
-    sellerSplitData: { type: Array, default: [] }, 
+    sellerSplitData: { type: Array, default: [] },
+    
+  
+    billDetails: {
+        mrpTotal: { type: Number, default: 0 },
+        productDiscount: { type: Number, default: 0 },
+        itemTotal: { type: Number, default: 0 }, 
+        handlingCharge: { type: Number, default: 2 }, 
+        deliveryCharge: { type: Number, default: 0 }
+    },
+    
     totalAmount: { type: Number, required: true },
-    deliveryChargeApplied: { type: Number, default: 0 }, 
-    paymentMethod: { 
-        type: String, 
-        enum: ['COD', 'ONLINE', 'WALLET'], 
-        required: true 
-    },
-    // 🌟 paymentStatus சேர்த்துள்ளேன் - இது பேமெண்ட் முடிந்ததா இல்லையா என்பதைச் சொல்லும்
-    paymentStatus: {
-        type: String,
-        enum: ['Pending', 'Paid', 'Failed', 'Refunded'],
-        default: 'Pending'
-    },
+    paymentMethod: { type: String, enum: ['COD', 'ONLINE', 'WALLET', 'Paid via UPI'], required: true },
+    paymentStatus: { type: String, enum: ['Pending', 'Paid', 'Failed', 'Refunded'], default: 'Pending' },
     status: { 
         type: String, 
         default: 'Placed', 
         enum: ['Pending', 'Placed', 'Shipped', 'Delivered', 'Cancelled'] 
     },
-   
+    
     shippingAddress: {
+        receiverName: { type: String },
         flatNo: { type: String },
         addressLine: { type: String },
         pincode: { type: String },
-        label: { type: String, default: "Home" },
-        receiverName: { type: String }
+        label: { type: String }
     },
-    isArchived: { type: Boolean, default: false }
+    arrivedIn: { type: String, default: "15 mins" } 
 }, { timestamps: true });
 
-const Order = mongoose.model('Order', orderSchema);
-module.exports = Order;
+module.exports = mongoose.model('Order', orderSchema);

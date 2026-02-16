@@ -16,14 +16,20 @@ const userSchema = new mongoose.Schema({
     reason: String, 
     date: { type: Date, default: Date.now }
   }],
-
+wishlist: [{ 
+  type: mongoose.Schema.Types.ObjectId, 
+  ref: 'Product' 
+}],
  
-  addressBook: [{
-    label: { type: String, default: "Home" }, 
-    addressLine: String,
-    city: String,
-    state: String,
-    pincode: String,
+
+addressBook: [{
+    receiverName: { type: String, required: true },
+    addressType: { type: String, enum: ['Home', 'Work', 'Hotel', 'Other'], default: 'Home' }, 
+    flatNo: { type: String, required: true },      // House / Flat No
+    area: { type: String, required: true },        // Area / Street / Landmark
+    city: { type: String, default: "Chennai" },
+    state: { type: String, default: "Tamil Nadu" },
+    pincode: { type: String, required: true },
     isDefault: { type: Boolean, default: false }
   }]
 }, { timestamps: true });

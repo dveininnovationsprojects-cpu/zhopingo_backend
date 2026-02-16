@@ -131,18 +131,24 @@ exports.loginWithOTP = async (req, res) => {
 
 exports.addUserAddress = async (req, res) => {
   try {
-   
-    const userId = req.user.id; 
-    
+    const userId = req.user.id;
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-  
+    const { receiverName, flatNo, area, pincode, addressType, isDefault } = req.body;
+
+    // புதிய அட்ரஸை Default ஆக்கினால், மற்றவற்றை False ஆக்க வேண்டும்
+    if (isDefault) {
+      user.addressBook.forEach(addr => addr.isDefault = false);
+    }
+
     const newAddress = {
-      label: req.body.addressType || "Home",
-      addressLine: req.body.flatNo,
-      pincode: req.body.pincode,
-      isDefault: false
+      receiverName: receiverName || user.name || "Customer",
+      addressType: addressType || "Home",
+      flatNo,
+      area,
+      pincode,
+      isDefault: isDefault || false
     };
 
     user.addressBook.push(newAddress);
@@ -153,6 +159,39 @@ exports.addUserAddress = async (req, res) => {
       message: "Address saved successfully",
       addressBook: user.addressBook 
     });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+
+
+exports.toggleWishlist = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { productId } = req.body;
+    const user = await User.findById(userId);
+
+    const index = user.wishlist.indexOf(productId);
+    if (index === -1) {
+      user.wishlist.push(productId); // இல்லையென்றால் சேர்
+      await user.save();
+      return res.json({ success: true, message: "Added to wishlist", wishlist: user.wishlist });
+    } else {
+      user.wishlist.splice(index, 1); // இருந்தால் நீக்கு
+      await user.save();
+      return res.json({ success: true, message: "Removed from wishlist", wishlist: user.wishlist });
+    }
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+
+exports.getWishlist = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).populate('wishlist');
+    res.json({ success: true, data: user.wishlist });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
