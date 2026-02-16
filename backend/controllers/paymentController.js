@@ -2,25 +2,16 @@ const axios = require("axios");
 const Order = require("../models/Order");
 const Payment = require("../models/Payment");
 
-// Environment settings
-const CF_BASE_URL = process.env.NODE_ENV === "production" 
-  ? "https://api.cashfree.com/pg" 
-  : "https://sandbox.cashfree.com/pg";
+const CF_BASE_URL = "https://sandbox.cashfree.com/pg";
 
-const MY_BASE_URL = process.env.BASE_URL || "https://api.zhopingo.in";
-
-/**
- * 🌟 1. CREATE PAYMENT SESSION
- */
+// 1. CREATE PAYMENT SESSION
 exports.createSession = async (req, res) => {
   try {
     const { orderId, amount, customerId, customerPhone, customerName } = req.body;
-
     const order = await Order.findById(orderId);
     if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
-    const cleanPhone = String(customerPhone).replace(/\D/g, "").slice(-10);
-    const cfOrderId = `ORD_${orderId.toString().slice(-6)}_${Date.now()}`;
+    const cfOrderId = `ORD_${orderId}_${Date.now()}`;
 
     const response = await axios.post(
       `${CF_BASE_URL}/orders`,
@@ -30,12 +21,11 @@ exports.createSession = async (req, res) => {
         order_currency: "INR",
         customer_details: {
           customer_id: String(customerId),
-          customer_phone: cleanPhone, 
-          customer_name: customerName || "Zhopingo User"
+          customer_phone: String(customerPhone).slice(-10),
+          customer_name: customerName || "Customer"
         },
         order_meta: {
-          // 🔗 இதுதான் மிக முக்கியம்: பேமெண்ட் முடிஞ்சதும் இங்க தான் வரும்
-          return_url: `${MY_BASE_URL}/api/v1/payments/cashfree-return?cf_order_id=${cfOrderId}`
+          return_url: `https://api.zhopingo.in/api/v1/payments/cashfree-return?cf_order_id=${cfOrderId}`
         }
       },
       {
@@ -54,102 +44,83 @@ exports.createSession = async (req, res) => {
       amount: Number(amount),
       status: "PENDING"
     });
-      
-    // res.status(200).json-க்கு ஒரு வரி முன்னாடி இதை போடு
-     console.log("REAL_SESSION_ID_FROM_CASHFREE:", response.data.payment_session_id);
 
-    return res.status(200).json({
+    res.json({
       success: true,
       paymentSessionId: response.data.payment_session_id,
-      cfOrderId: response.data.order_id
+      cfOrderId
     });
-
   } catch (err) {
-    console.error("Cashfree API Error:", err.response?.data || err.message);
-    return res.status(500).json({ 
-      success: false, 
-      error: err.response?.data?.message || "Internal Server Error" 
-    });
+    console.error("Session Error:", err.response?.data || err.message);
+    res.status(500).json({ success: false, error: err.message });
   }
 };
 
-/**
- * 🌟 2. CASHFREE RETURN (The Missing Logic)
- * பேமெண்ட் முடிஞ்சதும் பிரவுசர் அல்லது SDK வழியா இங்க தான் வரும்.
- */
+// 2. CASHFREE RETURN HANDLER
 exports.cashfreeReturn = async (req, res) => {
   try {
     const { cf_order_id } = req.query;
-
-    // Cashfree-ல இருந்து அந்த ஆர்டரோட லேட்டஸ்ட் நிலையை எடுக்குறோம்
-    const response = await axios.get(
-      `${CF_BASE_URL}/orders/${cf_order_id}`,
-      {
-        headers: {
-          "x-client-id": process.env.CF_APP_ID,
-          "x-client-secret": process.env.CF_SECRET,
-          "x-api-version": "2023-08-01"
-        }
+    const response = await axios.get(`${CF_BASE_URL}/orders/${cf_order_id}`, {
+      headers: {
+        "x-client-id": process.env.CF_APP_ID,
+        "x-client-secret": process.env.CF_SECRET,
+        "x-api-version": "2023-08-01"
       }
-    );
+    });
 
     if (response.data.order_status === "PAID") {
       const payment = await Payment.findOne({ transactionId: cf_order_id });
-      
-      if (payment && payment.status !== "SUCCESS") {
+      if (payment) {
         payment.status = "SUCCESS";
-        payment.rawResponse = response.data;
         await payment.save();
-
-        // 🛍️ ஆர்டர் ஸ்டேட்டஸை மாத்துறோம்
-        await Order.findByIdAndUpdate(payment.orderId, { 
-            status: "Placed",
-            paymentStatus: "Paid" 
-        });
+        await Order.findByIdAndUpdate(payment.orderId, { status: "Placed", paymentStatus: "Paid" });
       }
-      // 📱 மொபைல் ஆப்பிற்கு சக்சஸ் மெசேஜ் அனுப்புவோம் (Deep Link)
-      return res.redirect("zhopingo://payment-success");
+      return res.redirect("zhopingo://order-success");
     }
-
-    // தோல்வியுற்றால்
-    return res.redirect("zhopingo://payment-failed");
+    res.redirect("zhopingo://order-failed");
   } catch (err) {
-    console.error("Return Error:", err.message);
-    return res.redirect("zhopingo://payment-failed");
+    res.redirect("zhopingo://order-failed");
   }
 };
-// verifyPayment பங்க்ஷனில் ஒரு சின்ன இம்ப்ரூவ்மென்ட்
-exports.verifyPayment = async (req, res) => {
+
+// 3. 🔔 WEBHOOK HANDLER (CRITICAL)
+exports.webhook = async (req, res) => {
   try {
-    const { orderId } = req.params;
-    const payment = await Payment.findOne({ orderId }).sort({ createdAt: -1 });
+    console.log("🔔 Webhook Received from Cashfree");
+    
+    // Cashfree அனுப்பும் Raw Body-யை JSON-ஆக மாற்றுகிறோம்
+    const rawBody = req.body.toString();
+    const payload = JSON.parse(rawBody);
+    
+    const cfOrderId = payload.data?.order?.order_id;
+    const paymentStatus = payload.data?.payment?.payment_status;
 
-    if (!payment) return res.status(404).json({ success: false, message: "No payment record found" });
-
-    const response = await axios.get(
-      `${CF_BASE_URL}/orders/${payment.transactionId}`,
-      {
-        headers: {
-          "x-client-id": process.env.CF_APP_ID,
-          "x-client-secret": process.env.CF_SECRET,
-          "x-api-version": "2023-08-01"
-        }
+    if (paymentStatus === "SUCCESS") {
+      const payment = await Payment.findOne({ transactionId: cfOrderId });
+      if (payment && payment.status !== "SUCCESS") {
+        payment.status = "SUCCESS";
+        await payment.save();
+        await Order.findByIdAndUpdate(payment.orderId, { status: "Placed", paymentStatus: "Paid" });
+        console.log("✅ Webhook: Order Updated Successfully");
       }
-    );
-
-    // 🌟 டாக்குமெண்ட் படி PAID அல்லது ACTIVE ஸ்டேட்டஸை செக் பண்ணுவோம்
-    if (response.data.order_status === "PAID") {
-      payment.status = "SUCCESS";
-      payment.rawResponse = response.data;
-      await payment.save();
-      
-      await Order.findByIdAndUpdate(orderId, { status: "Placed", paymentStatus: "Paid" });
-      return res.json({ success: true, status: "SUCCESS" });
     }
 
-    return res.json({ success: false, status: response.data.order_status });
+    // 🎯 Cashfree-க்கு பதில் அனுப்புதல் (கட்டாயம்)
+    res.status(200).send("OK");
   } catch (err) {
-    console.error("Verification Error:", err.response?.data || err.message);
-    return res.status(500).json({ success: false, error: "Internal Server Error" });
+    console.error("❌ Webhook Error:", err.message);
+    // எர்ரர் வந்தாலும் Cashfree-க்கு 200 அனுப்புவது நல்லது (Retry-யை தவிர்க்க)
+    res.status(200).send("Error Received");
+  }
+};
+
+// 4. MANUAL VERIFY
+exports.verifyPayment = async (req, res) => {
+  try {
+    const payment = await Payment.findOne({ orderId: req.params.orderId });
+    if (!payment) return res.json({ success: false, status: "Pending" });
+    res.json({ success: true, status: payment.status === "SUCCESS" ? "Paid" : "Pending" });
+  } catch {
+    res.status(500).json({ success: false });
   }
 };

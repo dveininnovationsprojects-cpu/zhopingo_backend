@@ -1,18 +1,29 @@
-// walletController.js
-exports.adminUpdateWallet = async (req, res) => {
-    const { userId, amount, reason, type } = req.body; // type = 'CREDIT' or 'DEBIT'
-    try {
-        const user = await User.findById(userId);
-        if (type === 'CREDIT') {
-            user.walletBalance += amount;
-        } else {
-            user.walletBalance -= amount;
-        }
+const mongoose = require('mongoose');
 
-      
-        user.walletTransactions.push({ amount, type, reason, date: new Date() });
-        await user.save();
-        
-        res.json({ success: true, newBalance: user.walletBalance });
-    } catch (err) { res.status(500).json({ error: "Wallet update failed" }); }
-};
+const walletSchema = new mongoose.Schema({
+    userId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true,
+        unique: true
+    },
+    balance: {
+        type: Number,
+        default: 0
+    },
+    transactions: [
+        {
+            amount: { type: Number, required: true },
+            type: { 
+                type: String, 
+                enum: ['CREDIT', 'DEBIT'], 
+                required: true 
+            },
+            reason: { type: String, default: 'Wallet Transaction' },
+            txnId: { type: String },
+            date: { type: Date, default: Date.now }
+        }
+    ]
+}, { timestamps: true });
+
+module.exports = mongoose.model('Wallet', walletSchema);
