@@ -165,28 +165,36 @@ exports.addUserAddress = async (req, res) => {
 };
 
 
-
 exports.toggleWishlist = async (req, res) => {
   try {
     const userId = req.user.id;
     const { productId } = req.body;
-    const user = await User.findById(userId);
 
+   
+    const user = await User.findById(userId); 
+    
+    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+    
+    if (!user.wishlist) user.wishlist = [];
+
+    
     const index = user.wishlist.indexOf(productId);
+
     if (index === -1) {
-      user.wishlist.push(productId); // இல்லையென்றால் சேர்
+      user.wishlist.push(productId); 
       await user.save();
       return res.json({ success: true, message: "Added to wishlist", wishlist: user.wishlist });
     } else {
-      user.wishlist.splice(index, 1); // இருந்தால் நீக்கு
+      user.wishlist.splice(index, 1); 
       await user.save();
       return res.json({ success: true, message: "Removed from wishlist", wishlist: user.wishlist });
     }
   } catch (err) {
+    console.error("Wishlist Toggle Error:", err);
     res.status(500).json({ success: false, error: err.message });
   }
 };
-
 
 exports.getWishlist = async (req, res) => {
   try {
