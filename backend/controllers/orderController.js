@@ -38,7 +38,7 @@ const createDelhiveryShipment = async (order, customerPhone) => {
 };
 
 /* =====================================================
-    1️⃣ CUSTOMER: Create Order (Blinkit Multi-Seller Logic)
+    1️⃣ CUSTOMER: Create Order (With Image & Multi-Seller Logic)
 ===================================================== */
 exports.createOrder = async (req, res) => {
   try {
@@ -67,13 +67,12 @@ exports.createOrder = async (req, res) => {
         sellerWiseSplit[sId] = {
           sellerId: sId,
           sellerSubtotal: 0,
-          actualShippingCost: BASE_SHIPPING_COST, // Admin paying to Delhivery
-          customerChargedShipping: 0 // What customer pays
+          actualShippingCost: BASE_SHIPPING_COST,
+          customerChargedShipping: 0 
         };
       }
       sellerWiseSplit[sId].sellerSubtotal += (price * qty);
 
-      // Image Path Fix
       let finalImg = item.image || (item.images && item.images[0]) || "";
       if (finalImg && !finalImg.startsWith('http')) {
           finalImg = `${DOMAIN}/uploads/products/${finalImg.split('/').pop()}`;
@@ -94,7 +93,7 @@ exports.createOrder = async (req, res) => {
         seller.customerChargedShipping = BASE_SHIPPING_COST;
         totalCustomerShippingCharge += BASE_SHIPPING_COST;
       } else {
-        seller.customerChargedShipping = 0; // FREE for Customer
+        seller.customerChargedShipping = 0; 
       }
     });
 
@@ -127,7 +126,7 @@ exports.createOrder = async (req, res) => {
 };
 
 /* =====================================================
-    2️⃣ BYPASS & UPDATE STATUS (Payout Logic Included)
+    2️⃣ STATUS UPDATES (Bypass & Manual)
 ===================================================== */
 exports.bypassPaymentAndShip = async (req, res) => {
     try {
@@ -161,12 +160,8 @@ exports.updateOrderStatus = async (req, res) => {
       order.arrivedIn = "Delivered";
       
       const ADMIN_COMMISSION_PERCENT = 10;
-
       for (let split of order.sellerSplitData) {
         const commission = (split.sellerSubtotal * ADMIN_COMMISSION_PERCENT) / 100;
-        
-        // 🌟 SELLER FUNDED LOGIC: 
-        // Seller gets = Subtotal - Commission - Admin's Shipping Cost + Customer's Paid Shipping
         const sellerSettlement = (split.sellerSubtotal - commission - split.actualShippingCost) + split.customerChargedShipping;
 
         await Payout.create({
@@ -187,10 +182,52 @@ exports.updateOrderStatus = async (req, res) => {
 };
 
 /* =====================================================
-    3️⃣ CANCEL, TRACK, GETTERS
+    3️⃣ 🌟 DEEP POPULATED GETTERS (Full Data Flow)
 ===================================================== */
 
-// 🚨 Missing cancelOrder function added back to fix the TypeError
+// Customer history with full product objects
+exports.getMyOrders = async (req, res) => {
+    try {
+        const orders = await Order.find({ customerId: req.params.userId })
+            .populate('items.productId') // Product details (image, desc, etc.)
+            .populate({
+                path: 'sellerSplitData.sellerId',
+                select: 'name shopName logo phone' // Seller details
+            })
+            .sort({ createdAt: -1 });
+        res.json({ success: true, data: orders });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+};
+
+// Admin Dashboard - Needs EVERYTHING
+exports.getOrders = async (req, res) => {
+    try {
+        const orders = await Order.find()
+            .populate('customerId', 'name phone email walletBalance') // Who ordered?
+            .populate('items.productId') // What did they order?
+            .populate({
+                path: 'sellerSplitData.sellerId',
+                select: 'shopName ownerName phone' // Who are the sellers?
+            })
+            .sort({ createdAt: -1 });
+        res.json({ success: true, data: orders });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+};
+
+// Seller Dashboard - Needs customer info for delivery
+exports.getSellerOrders = async (req, res) => {
+    try {
+        const orders = await Order.find({ "items.sellerId": req.params.sellerId, status: { $ne: 'Pending' } })
+            .populate('customerId', 'name phone addressBook')
+            .populate('items.productId')
+            .sort({ createdAt: -1 });
+        res.json({ success: true, data: orders });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+};
+
+/* =====================================================
+    4️⃣ CANCEL & TRACK
+===================================================== */
 exports.cancelOrder = async (req, res) => {
   try {
     const order = await Order.findById(req.params.orderId);
@@ -206,7 +243,7 @@ exports.cancelOrder = async (req, res) => {
     order.status = 'Cancelled';
     order.paymentStatus = 'Refunded';
     await order.save();
-    res.json({ success: true, message: "Order cancelled and refund processed" });
+    res.json({ success: true, message: "Order cancelled" });
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
@@ -217,25 +254,4 @@ exports.trackDelhivery = async (req, res) => {
         });
         res.json({ success: true, tracking: response.data });
     } catch (err) { res.status(500).json({ success: false, message: "Tracking failed" }); }
-};
-
-exports.getMyOrders = async (req, res) => {
-    try {
-        const orders = await Order.find({ customerId: req.params.userId }).populate('items.productId').sort({ createdAt: -1 });
-        res.json({ success: true, data: orders });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
-};
-
-exports.getOrders = async (req, res) => {
-    try {
-        const orders = await Order.find().populate('customerId', 'name phone').sort({ createdAt: -1 });
-        res.json({ success: true, data: orders });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
-};
-
-exports.getSellerOrders = async (req, res) => {
-    try {
-        const orders = await Order.find({ "items.sellerId": req.params.sellerId, status: { $ne: 'Pending' } }).sort({ createdAt: -1 });
-        res.json({ success: true, data: orders });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
