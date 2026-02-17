@@ -128,16 +128,26 @@ exports.loginWithOTP = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
-
 exports.addUserAddress = async (req, res) => {
   try {
-    const userId = req.user.id;
+    
+    const userId = req.params.userId || req.user?.id;
+    
+    if (!userId) {
+      return res.status(400).json({ success: false, message: "User identity missing" });
+    }
+
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-    const { receiverName, flatNo, area, pincode, addressType,phone, isDefault } = req.body;
+    const { receiverName, flatNo, area, pincode, addressType, phone, isDefault } = req.body;
 
-    // புதிய அட்ரஸை Default ஆக்கினால், மற்றவற்றை False ஆக்க வேண்டும்
+    
+    if (!flatNo || !area || !pincode) {
+      return res.status(400).json({ success: false, message: "Missing required fields" });
+    }
+
+   
     if (isDefault) {
       user.addressBook.forEach(addr => addr.isDefault = false);
     }
@@ -147,7 +157,7 @@ exports.addUserAddress = async (req, res) => {
       addressType: addressType || "Home",
       flatNo,
       area,
-      phone,
+      phone: phone || user.phone, 
       pincode,
       isDefault: isDefault || false
     };
@@ -161,6 +171,7 @@ exports.addUserAddress = async (req, res) => {
       addressBook: user.addressBook 
     });
   } catch (err) {
+    console.error("Address Save Error:", err.message); 
     res.status(500).json({ success: false, error: err.message });
   }
 };

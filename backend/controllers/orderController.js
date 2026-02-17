@@ -112,9 +112,7 @@ exports.createOrder = async (req, res) => {
   }
 };
 
-/* =====================================================
-    2️⃣ BYPASS: Payment Success & Logistics Trigger
-===================================================== */
+
 exports.bypassPaymentAndShip = async (req, res) => {
     try {
         const order = await Order.findById(req.params.orderId);
@@ -133,9 +131,7 @@ exports.bypassPaymentAndShip = async (req, res) => {
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
-/* =====================================================
-    3️⃣ UPDATE STATUS: Delivered & Seller Payout
-===================================================== */
+
 exports.updateOrderStatus = async (req, res) => {
   try {
     const { status } = req.body;
@@ -169,9 +165,7 @@ exports.updateOrderStatus = async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
-/* =====================================================
-    4️⃣ GETTERS: Populated Data
-===================================================== */
+
 exports.getMyOrders = async (req, res) => {
     try {
         const orders = await Order.find({ customerId: req.params.userId })
@@ -210,9 +204,7 @@ exports.getSellerOrders = async (req, res) => {
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
-/* =====================================================
-    5️⃣ COMMON: Cancel & Track
-===================================================== */
+
 exports.cancelOrder = async (req, res) => {
   try {
     const order = await Order.findById(req.params.orderId);
