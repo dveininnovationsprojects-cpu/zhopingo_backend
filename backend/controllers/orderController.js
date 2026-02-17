@@ -4,7 +4,6 @@ const DeliveryCharge = require('../models/DeliveryCharge');
 const Payout = require('../models/Payout');
 const axios = require('axios');
 
-// 🔑 Credentials & Config
 const DELHI_TOKEN = "9b44fee45422e3fe8073dee9cfe7d51f9fff7629";
 const DELHI_URL_CREATE = "https://track.delhivery.com/api/cmu/create.json";
 const DELHI_URL_TRACK = "https://track.delhivery.com/api/v1/packages/json/";
@@ -17,9 +16,9 @@ const createDelhiveryShipment = async (order, customerPhone) => {
     try {
         const payload = {
             "shipments": [{
-                "name": order.shippingAddress.receiverName || "Customer",
-                "add": `${order.shippingAddress.flatNo}, ${order.shippingAddress.area}`,
-                "pin": order.shippingAddress.pincode,
+                "name": order.shippingAddress?.receiverName || "Customer",
+                "add": `${order.shippingAddress?.flatNo || ""}, ${order.shippingAddress?.area || ""}`,
+                "pin": order.shippingAddress?.pincode,
                 "phone": customerPhone,
                 "order": order._id.toString(),
                 "payment_mode": order.paymentMethod === 'COD' ? 'Collect' : 'Prepaid',
@@ -32,13 +31,13 @@ const createDelhiveryShipment = async (order, customerPhone) => {
         });
         return response.data;
     } catch (error) {
-        console.error("Delhivery API Error:", error.message);
+        console.error("Delhivery API Error:", error.response?.data || error.message);
         return null;
     }
 };
 
 /* =====================================================
-    1️⃣ CUSTOMER: Create Order (With Image & Multi-Seller Logic)
+    1️⃣ CUSTOMER: Create Order (Multi-Seller Stable Logic)
 ===================================================== */
 exports.createOrder = async (req, res) => {
   try {
@@ -54,6 +53,7 @@ exports.createOrder = async (req, res) => {
     let sellingPriceTotal = 0;
     const handlingCharge = 2; 
 
+    // ✅ Step 1: Process and Group by Seller
     const processedItems = items.map(item => {
       const price = Number(item.price) || 0;
       const mrp = Number(item.mrp) || price;
@@ -61,7 +61,9 @@ exports.createOrder = async (req, res) => {
       
       mrpTotal += mrp * qty;
       sellingPriceTotal += price * qty;
-      const sId = (item.sellerId || item.seller || "admin_seller").toString();
+      
+      // Fallback ID if sellerId is missing to avoid 500 error
+      const sId = (item.sellerId || item.seller || "698089341dc4f60f934bb5eb").toString();
 
       if (!sellerWiseSplit[sId]) {
         sellerWiseSplit[sId] = {
@@ -73,9 +75,11 @@ exports.createOrder = async (req, res) => {
       }
       sellerWiseSplit[sId].sellerSubtotal += (price * qty);
 
+      // Image Handling
       let finalImg = item.image || (item.images && item.images[0]) || "";
       if (finalImg && !finalImg.startsWith('http')) {
-          finalImg = `${DOMAIN}/uploads/products/${finalImg.split('/').pop()}`;
+          const parts = finalImg.split('/');
+          finalImg = `${DOMAIN}/uploads/products/${parts[parts.length - 1]}`;
       }
 
       return {
@@ -87,8 +91,10 @@ exports.createOrder = async (req, res) => {
       };
     });
 
+    // ✅ Step 2: Calculate Delivery Charges (Fixed Calculation)
     let totalCustomerShippingCharge = 0;
-    Object.values(sellerWiseSplit).forEach(seller => {
+    Object.keys(sellerWiseSplit).forEach(sId => {
+      const seller = sellerWiseSplit[sId];
       if (seller.sellerSubtotal < FREE_DELIVERY_THRESHOLD) {
         seller.customerChargedShipping = BASE_SHIPPING_COST;
         totalCustomerShippingCharge += BASE_SHIPPING_COST;
@@ -118,33 +124,41 @@ exports.createOrder = async (req, res) => {
       arrivedIn: "Awaiting Payment"
     });
 
-    await newOrder.save();
-    res.status(201).json({ success: true, order: newOrder });
+    const savedOrder = await newOrder.save();
+    res.status(201).json({ success: true, order: savedOrder });
   } catch (err) {
+    console.error("Create Order Error:", err);
     res.status(500).json({ success: false, error: err.message });
   }
 };
 
 /* =====================================================
-    2️⃣ STATUS UPDATES (Bypass & Manual)
+    2️⃣ STATUS UPDATES (With Await Fix)
 ===================================================== */
 exports.bypassPaymentAndShip = async (req, res) => {
     try {
         const { orderId } = req.params;
         const order = await Order.findById(orderId);
-        const user = await User.findById(order.customerId);
         if(!order) return res.status(404).json({ success: false, message: "Order not found" });
+
+        const user = await User.findById(order.customerId);
 
         order.status = "Placed";
         order.paymentStatus = "Paid";
 
+        // ✅ Step: Register with Delhivery
         const delhiRes = await createDelhiveryShipment(order, user?.phone || "0000000000");
-        if (delhiRes?.packages?.[0]) {
+        if (delhiRes && delhiRes.packages && delhiRes.packages[0]) {
             order.awbNumber = delhiRes.packages[0].waybill;
+            order.arrivedIn = order.shippingAddress?.arrivedIn || "Fast Delivery";
         }
+        
         await order.save();
         res.json({ success: true, message: "Paid & Shipped", data: order });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+    } catch (err) { 
+        console.error("Bypass Error:", err);
+        res.status(500).json({ success: false, error: err.message }); 
+    }
 };
 
 exports.updateOrderStatus = async (req, res) => {
@@ -182,52 +196,39 @@ exports.updateOrderStatus = async (req, res) => {
 };
 
 /* =====================================================
-    3️⃣ 🌟 DEEP POPULATED GETTERS (Full Data Flow)
+    3️⃣ DEEP POPULATED GETTERS
 ===================================================== */
-
-// Customer history with full product objects
 exports.getMyOrders = async (req, res) => {
     try {
         const orders = await Order.find({ customerId: req.params.userId })
-            .populate('items.productId') // Product details (image, desc, etc.)
-            .populate({
-                path: 'sellerSplitData.sellerId',
-                select: 'name shopName logo phone' // Seller details
-            })
+            .populate('items.productId')
+            .populate({ path: 'sellerSplitData.sellerId', select: 'name shopName logo phone' })
             .sort({ createdAt: -1 });
         res.json({ success: true, data: orders });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
-// Admin Dashboard - Needs EVERYTHING
 exports.getOrders = async (req, res) => {
     try {
         const orders = await Order.find()
-            .populate('customerId', 'name phone email walletBalance') // Who ordered?
-            .populate('items.productId') // What did they order?
-            .populate({
-                path: 'sellerSplitData.sellerId',
-                select: 'shopName ownerName phone' // Who are the sellers?
-            })
+            .populate('customerId', 'name phone email')
+            .populate('items.productId')
+            .populate({ path: 'sellerSplitData.sellerId', select: 'shopName ownerName phone' })
             .sort({ createdAt: -1 });
         res.json({ success: true, data: orders });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
-// Seller Dashboard - Needs customer info for delivery
 exports.getSellerOrders = async (req, res) => {
     try {
         const orders = await Order.find({ "items.sellerId": req.params.sellerId, status: { $ne: 'Pending' } })
-            .populate('customerId', 'name phone addressBook')
+            .populate('customerId', 'name phone')
             .populate('items.productId')
             .sort({ createdAt: -1 });
         res.json({ success: true, data: orders });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
-/* =====================================================
-    4️⃣ CANCEL & TRACK
-===================================================== */
 exports.cancelOrder = async (req, res) => {
   try {
     const order = await Order.findById(req.params.orderId);
