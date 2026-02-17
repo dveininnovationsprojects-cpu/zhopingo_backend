@@ -23,16 +23,14 @@ wishlist: [{
  
 
 addressBook: [{
-    receiverName: { type: String, required: true },
-    addressType: { type: String, enum: ['Home', 'Work', 'Hotel', 'Other'], default: 'Home' }, 
-    flatNo: { type: String, required: true },      // House / Flat No
-    area: { type: String, required: true },        // Area / Street / Landmark
-    city: { type: String, default: "Chennai" },
-    state: { type: String, default: "Tamil Nadu" },
-    pincode: { type: String, required: true },
-    isDefault: { type: Boolean, default: false },
-    phone:{type:String, required:true}
-  }]
+  receiverName: String,
+  addressType: String,
+  flatNo: String,
+  area: String,
+  pincode: String,
+  phone: String, 
+  isDefault: { type: Boolean, default: false }
+}]
 }, { timestamps: true });
 
 userSchema.pre('save', async function() {
