@@ -18,7 +18,7 @@ const createDelhiveryShipment = async (order, customerPhone) => {
         const payload = {
             "shipments": [{
                 "name": order.shippingAddress?.receiverName || "Customer",
-                "add": `${order.shippingAddress?.flatNo || ""}, ${order.shippingAddress?.area || ""}`,
+                "add": `${order.shippingAddress?.flatNo || ""}, ${order.shippingAddress?.addressLine || ""}`,
                 "pin": order.shippingAddress?.pincode,
                 "phone": customerPhone,
                 "order": order._id.toString(),
@@ -38,7 +38,7 @@ const createDelhiveryShipment = async (order, customerPhone) => {
 };
 
 /* =====================================================
-    1️⃣ CUSTOMER: Create Order (Stable Multi-Seller Logic)
+    1️⃣ CUSTOMER: Create Order (Robust Multi-Seller Logic)
 ===================================================== */
 exports.createOrder = async (req, res) => {
   try {
@@ -54,6 +54,7 @@ exports.createOrder = async (req, res) => {
     let sellingPriceTotal = 0;
     const handlingCharge = 2; 
 
+    // ✅ Step 1: Process Items & Group by Seller
     const processedItems = items.map(item => {
       const price = Number(item.price) || 0;
       const mrp = Number(item.mrp) || price;
@@ -62,21 +63,21 @@ exports.createOrder = async (req, res) => {
       mrpTotal += mrp * qty;
       sellingPriceTotal += price * qty;
       
-      // ✅ Fallback Seller ID (500 Error தவிர்க்க)
+      // Fallback ID to prevent 500 server error
       const sId = (item.sellerId || item.seller || "698089341dc4f60f934bb5eb").toString();
 
       if (!sellerWiseSplit[sId]) {
         sellerWiseSplit[sId] = {
           sellerId: sId,
           sellerSubtotal: 0,
-          actualShippingCost: BASE_SHIPPING,
-          customerChargedShipping: 0 
+          actualShippingCost: BASE_SHIPPING, // Cost for delivery partner
+          customerChargedShipping: 0 // Cost charged to customer
         };
       }
       sellerWiseSplit[sId].sellerSubtotal += (price * qty);
 
-      // ✅ Image construction
-      let finalImg = item.image || (item.images && item.images[0]) || "";
+      // Image Path Construction
+      let finalImg = item.image || "";
       if (finalImg && !finalImg.startsWith('http')) {
           const parts = finalImg.split('/');
           finalImg = `${DOMAIN}/uploads/products/${parts[parts.length - 1]}`;
@@ -91,13 +92,18 @@ exports.createOrder = async (req, res) => {
       };
     });
 
+    // ✅ Step 2: Calculate Seller-wise Shipping (Free Delivery Logic)
     let totalCustomerShipping = 0;
     Object.keys(sellerWiseSplit).forEach(sId => {
       if (sellerWiseSplit[sId].sellerSubtotal < FREE_THRESHOLD) {
         sellerWiseSplit[sId].customerChargedShipping = BASE_SHIPPING;
         totalCustomerShipping += BASE_SHIPPING;
+      } else {
+        sellerWiseSplit[sId].customerChargedShipping = 0; // Seller Funded Free Delivery
       }
     });
+
+    const grandTotal = sellingPriceTotal + handlingCharge + totalCustomerShipping;
 
     const newOrder = new Order({
       customerId,
@@ -110,40 +116,40 @@ exports.createOrder = async (req, res) => {
         deliveryCharge: totalCustomerShipping,
         productDiscount: mrpTotal - sellingPriceTotal
       },
-      totalAmount: sellingPriceTotal + handlingCharge + totalCustomerShipping,
+      totalAmount: grandTotal,
       paymentMethod,
       shippingAddress,
-      status: 'Pending',
+      status: 'Placed', // Direct Placed after creation
       paymentStatus: 'Pending',
-      arrivedIn: shippingAddress.arrivedIn || "Scheduled"
+      arrivedIn: "12 mins"
     });
 
     await newOrder.save();
     res.status(201).json({ success: true, order: newOrder });
 
   } catch (err) {
-    console.error("Critical Backend Error:", err.message);
-    res.status(500).json({ success: false, error: "Order logic failed. Database sync error." });
+    console.error("Critical Order Error:", err);
+    res.status(500).json({ success: false, error: err.message });
   }
 };
 
 /* =====================================================
-    2️⃣ BYPASS & STATUS UPDATE
+    2️⃣ BYPASS: Payment Success & Logistics Trigger
 ===================================================== */
 exports.bypassPaymentAndShip = async (req, res) => {
     try {
-        const order = await Order.findById(req.params.orderId);
+        const { orderId } = req.params;
+        const order = await Order.findById(orderId);
         if(!order) return res.status(404).json({ success: false, message: "Order not found" });
 
         const user = await User.findById(order.customerId);
         order.status = "Placed";
         order.paymentStatus = "Paid";
 
-        // ✅ Delhivery Booking
+        // ✅ Book Shipment
         const delhiRes = await createDelhiveryShipment(order, user?.phone || "0000000000");
         if (delhiRes?.packages?.[0]) {
             order.awbNumber = delhiRes.packages[0].waybill;
-            order.arrivedIn = order.shippingAddress?.arrivedIn || "Fast Delivery";
         }
         
         await order.save();
@@ -151,6 +157,9 @@ exports.bypassPaymentAndShip = async (req, res) => {
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
+/* =====================================================
+    3️⃣ UPDATE STATUS: Delivered & Seller Payout
+===================================================== */
 exports.updateOrderStatus = async (req, res) => {
   try {
     const { status } = req.body;
@@ -166,6 +175,8 @@ exports.updateOrderStatus = async (req, res) => {
       const ADMIN_COMM_PERCENT = 10;
       for (let split of order.sellerSplitData) {
         const commission = (split.sellerSubtotal * ADMIN_COMM_PERCENT) / 100;
+        
+        // Settlement = Subtotal - Commission - (Admin Delivery Cost - Customer Delivery Charge)
         const sellerSettlement = (split.sellerSubtotal - commission - split.actualShippingCost) + split.customerChargedShipping;
 
         await Payout.create({
@@ -185,7 +196,7 @@ exports.updateOrderStatus = async (req, res) => {
 };
 
 /* =====================================================
-    3️⃣ DEEP DATA RETRIEVAL (Populated)
+    4️⃣ GETTERS: Deep Populated Data
 ===================================================== */
 exports.getMyOrders = async (req, res) => {
     try {
@@ -219,13 +230,11 @@ exports.getSellerOrders = async (req, res) => {
 };
 
 /* =====================================================
-    4️⃣ COMMON ACTIONS
+    5️⃣ COMMON: Cancel & Track
 ===================================================== */
 exports.cancelOrder = async (req, res) => {
   try {
     const order = await Order.findById(req.params.orderId);
-    if (!order) return res.status(404).json({ success: false, message: "Order not found" });
-
     if (order.paymentStatus === 'Paid') {
       const user = await User.findById(order.customerId);
       if (user) {
