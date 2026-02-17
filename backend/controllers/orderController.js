@@ -3,8 +3,9 @@ const User = require('../models/User');
 const DeliveryCharge = require('../models/DeliveryCharge');
 const Payout = require('../models/Payout');
 const axios = require('axios');
+const mongoose = require('mongoose');
 
-// 🔑 Credentials & Config
+// 🔑 Config
 const DELHI_TOKEN = "9b44fee45422e3fe8073dee9cfe7d51f9fff7629";
 const DELHI_URL_CREATE = "https://track.delhivery.com/api/cmu/create.json";
 const DELHI_URL_TRACK = "https://track.delhivery.com/api/v1/packages/json/";
@@ -38,124 +39,98 @@ const createDelhiveryShipment = async (order, customerPhone) => {
 };
 
 /* =====================================================
-    1️⃣ CUSTOMER: Create Order (Multi-Seller Stable Logic)
+    1️⃣ CUSTOMER: Create Order
 ===================================================== */
 exports.createOrder = async (req, res) => {
   try {
     const { items, customerId, shippingAddress, paymentMethod } = req.body;
-    if (!items?.length) return res.status(400).json({ success: false, error: "Cart is empty" });
-
     const deliveryConfig = await DeliveryCharge.findOne({ pincode: shippingAddress.pincode });
     const BASE_SHIPPING = deliveryConfig ? deliveryConfig.charge : 40;
-    const FREE_THRESHOLD = 500; 
 
     let sellerWiseSplit = {};
     let mrpTotal = 0;
     let sellingPriceTotal = 0;
-    const handlingCharge = 2; 
 
     const processedItems = items.map(item => {
-      const price = Number(item.price) || 0;
-      const mrp = Number(item.mrp) || price;
-      const qty = Number(item.quantity) || 1;
-      
-      mrpTotal += mrp * qty;
-      sellingPriceTotal += price * qty;
-      
-      // ✅ 100% FIX: sellerId "[object Object]" ஆகாமல் இருக்க ID-ஐ மட்டும் எடுக்கிறோம்
-      let rawSellerId = item.sellerId || item.seller || "698089341dc4f60f934bb5eb";
-      const sId = (typeof rawSellerId === 'object' ? (rawSellerId._id || rawSellerId.id) : rawSellerId).toString();
+      const rawId = item.sellerId || item.seller || "698089341dc4f60f934bb5eb";
+      const validSellerId = new mongoose.Types.ObjectId(rawId?._id || rawId);
 
-      if (!sellerWiseSplit[sId]) {
-        sellerWiseSplit[sId] = {
-          sellerId: sId,
+      mrpTotal += (Number(item.mrp) || Number(item.price)) * item.quantity;
+      sellingPriceTotal += Number(item.price) * item.quantity;
+
+      const sIdStr = validSellerId.toString();
+      if (!sellerWiseSplit[sIdStr]) {
+        sellerWiseSplit[sIdStr] = {
+          sellerId: validSellerId,
           sellerSubtotal: 0,
           actualShippingCost: BASE_SHIPPING,
-          customerChargedShipping: 0 
+          customerChargedShipping: 0
         };
       }
-      sellerWiseSplit[sId].sellerSubtotal += (price * qty);
-
-      // Image Path Handling
-      let finalImg = item.image || "";
-      if (finalImg && !finalImg.startsWith('http')) {
-          const parts = finalImg.split('/');
-          finalImg = `${DOMAIN}/uploads/products/${parts[parts.length - 1]}`;
-      }
+      sellerWiseSplit[sIdStr].sellerSubtotal += (Number(item.price) * item.quantity);
 
       return {
         productId: item.productId || item._id,
-        name: item.name || "Product",
-        quantity: qty, price, mrp,
-        sellerId: sId,
-        image: finalImg
+        name: item.name,
+        quantity: Number(item.quantity),
+        price: Number(item.price),
+        mrp: Number(item.mrp) || Number(item.price),
+        sellerId: validSellerId,
+        image: item.image || ""
       };
     });
 
-    let totalCustomerShipping = 0;
+    let totalShipping = 0;
     Object.keys(sellerWiseSplit).forEach(sId => {
-      if (sellerWiseSplit[sId].sellerSubtotal < FREE_THRESHOLD) {
-        sellerWiseSplit[sId].customerChargedShipping = BASE_SHIPPING;
-        totalCustomerShipping += BASE_SHIPPING;
-      }
+        if(sellerWiseSplit[sId].sellerSubtotal < 500) {
+            sellerWiseSplit[sId].customerChargedShipping = BASE_SHIPPING;
+            totalShipping += BASE_SHIPPING;
+        }
     });
 
     const newOrder = new Order({
       customerId,
       items: processedItems,
       sellerSplitData: Object.values(sellerWiseSplit),
-      billDetails: { 
-        mrpTotal, 
-        itemTotal: sellingPriceTotal, 
-        handlingCharge, 
-        deliveryCharge: totalCustomerShipping,
+      billDetails: {
+        mrpTotal,
+        itemTotal: sellingPriceTotal,
+        handlingCharge: 2,
+        deliveryCharge: totalShipping,
         productDiscount: mrpTotal - sellingPriceTotal
       },
-      totalAmount: sellingPriceTotal + handlingCharge + totalCustomerShipping,
+      totalAmount: sellingPriceTotal + 2 + totalShipping,
       paymentMethod,
       shippingAddress,
-      status: 'Placed',
-      paymentStatus: 'Pending',
-      arrivedIn: "12 mins"
+      status: 'Placed'
     });
 
     await newOrder.save();
     res.status(201).json({ success: true, order: newOrder });
-
   } catch (err) {
-    console.error("Create Order Logic Error:", err);
     res.status(500).json({ success: false, error: err.message });
   }
 };
 
 /* =====================================================
-    2️⃣ BYPASS: Payment Success & AWB Trigger
+    2️⃣ BYPASS: Payment Success & Logistics Trigger
 ===================================================== */
 exports.bypassPaymentAndShip = async (req, res) => {
     try {
-        const { orderId } = req.params;
-        const order = await Order.findById(orderId);
+        const order = await Order.findById(req.params.orderId);
         if(!order) return res.status(404).json({ success: false, message: "Order not found" });
-
+        
         const user = await User.findById(order.customerId);
-        order.status = "Placed";
         order.paymentStatus = "Paid";
 
-        // ✅ Book Shipment & Generate AWB
         const delhiRes = await createDelhiveryShipment(order, user?.phone || "0000000000");
-        
-        if (delhiRes && delhiRes.packages && delhiRes.packages[0]) {
-            order.awbNumber = delhiRes.packages[0].waybill; 
-            console.log("AWB Generated:", order.awbNumber);
-        } else {
-            console.log("Delhivery API failed to give AWB.");
+        if (delhiRes?.packages?.[0]) {
+            order.awbNumber = delhiRes.packages[0].waybill;
         }
         
         await order.save();
         res.json({ success: true, message: "Success", data: order });
-    } catch (err) { 
-        res.status(500).json({ success: false, error: err.message }); 
-    }
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
 /* =====================================================
@@ -195,16 +170,16 @@ exports.updateOrderStatus = async (req, res) => {
 };
 
 /* =====================================================
-    4️⃣ GETTERS: Populated Data for Customer/Admin/Seller
+    4️⃣ GETTERS: Populated Data
 ===================================================== */
 exports.getMyOrders = async (req, res) => {
     try {
         const orders = await Order.find({ customerId: req.params.userId })
             .populate('items.productId')
             .populate({
-                path: 'items.sellerId', 
-                model: 'Seller', 
-                select: 'shopName ownerName phone logo' 
+                path: 'items.sellerId',
+                model: 'Seller',
+                select: 'shopName ownerName phone logo'
             })
             .sort({ createdAt: -1 });
         res.json({ success: true, data: orders });
@@ -216,11 +191,7 @@ exports.getOrders = async (req, res) => {
         const orders = await Order.find()
             .populate('customerId', 'name phone email')
             .populate('items.productId')
-            .populate({ 
-                path: 'items.sellerId', 
-                model: 'Seller',
-                select: 'shopName phone' 
-            })
+            .populate({ path: 'items.sellerId', select: 'shopName' })
             .sort({ createdAt: -1 });
         res.json({ success: true, data: orders });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
@@ -228,7 +199,6 @@ exports.getOrders = async (req, res) => {
 
 exports.getSellerOrders = async (req, res) => {
     try {
-        // ✅ Seller-க்கு மட்டும் ஆர்டர் காட்ட Filter
         const orders = await Order.find({ 
             "items.sellerId": req.params.sellerId, 
             status: { $ne: 'Pending' } 
@@ -241,11 +211,13 @@ exports.getSellerOrders = async (req, res) => {
 };
 
 /* =====================================================
-    5️⃣ ACTIONS: Cancel & Track
+    5️⃣ COMMON: Cancel & Track
 ===================================================== */
 exports.cancelOrder = async (req, res) => {
   try {
     const order = await Order.findById(req.params.orderId);
+    if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+
     if (order.paymentStatus === 'Paid') {
       const user = await User.findById(order.customerId);
       if (user) {
@@ -266,5 +238,5 @@ exports.trackDelhivery = async (req, res) => {
             headers: { 'Authorization': `Token ${DELHI_TOKEN}` }
         });
         res.json({ success: true, tracking: response.data });
-    } catch (err) { res.status(500).json({ success: false, message: "Tracking failed" }); }
+    } catch (err) { res.status(500).json({ success: false, message: "Failed" }); }
 };

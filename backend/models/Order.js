@@ -8,10 +8,16 @@ const orderSchema = new mongoose.Schema({
         quantity: { type: Number, required: true },
         price: { type: Number, required: true }, 
         mrp: { type: Number },
-        sellerId: { type: String, required: true }, // Seller ID-ஐ String-ஆக வைப்பது பாதுகாப்பானது
+        // 🔥 இங்கதான் மஜாவே இருக்கு: ref குடுத்தா தான் shopName வரும்
+        sellerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Seller', required: true }, 
         image: { type: String }
     }],
-    sellerSplitData: { type: Array, default: [] },
+    sellerSplitData: [{
+        sellerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Seller' },
+        sellerSubtotal: Number,
+        actualShippingCost: Number,
+        customerChargedShipping: Number
+    }],
     billDetails: {
         mrpTotal: { type: Number, default: 0 },
         productDiscount: { type: Number, default: 0 },
@@ -20,11 +26,12 @@ const orderSchema = new mongoose.Schema({
         deliveryCharge: { type: Number, default: 0 }
     },
     totalAmount: { type: Number, required: true },
-    paymentMethod: { type: String, required: true }, // Enum தற்காலிகமாக நீக்கப்பட்டுள்ளது (Bypass Error தவிர்க்க)
-    paymentStatus: { type: String, default: 'Pending' },
+    paymentMethod: { type: String, required: true }, 
+    paymentStatus: { type: String, enum: ['Pending', 'Paid', 'Failed', 'Refunded'], default: 'Pending' },
     status: { 
         type: String, 
-        default: 'Placed'
+        default: 'Placed',
+        enum: ['Pending', 'Placed', 'Shipped', 'Delivered', 'Cancelled'] 
     },
     shippingAddress: {
         receiverName: { type: String },
