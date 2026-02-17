@@ -3,43 +3,48 @@ const router = express.Router();
 const orderCtrl = require('../controllers/orderController');
 const { protect } = require('../middleware/authMiddleware');
 
+/**
+ * @route   /api/v1/orders
+ * @desc    Professional E-commerce Order Management (Blinkit Style)
+ */
+
 // ==========================================
-// 🛒 CUSTOMER ROUTES
+// 🛒 CUSTOMER ROUTES (Mobile App)
 // ==========================================
 
-// 1. Order create panna
+// 1. Initial-a Order create panna (Status: Pending)
 router.post('/create', protect, orderCtrl.createOrder); 
 
-// 2. User-oda ella order-sum paaka
+// 2. Customer-oda total order history paaka
 router.get("/my/:userId", protect, orderCtrl.getMyOrders); 
 
-// 3. Order-a cancel panna
+// 3. Customer order-a cancel panna (Auto-wallet refund logic included)
 router.put('/cancel/:orderId', protect, orderCtrl.cancelOrder); 
 
-// 4. 🚀 NEW: Delhivery Live Tracking (AWB Number vachu track panna)
+// 4. 🚚 Real-time Delhivery Tracking (AWB vachu live status fetch pannum)
 router.get('/track/:awb', protect, orderCtrl.trackDelhivery);
 
-// 5. 🛠️ NEW: Bypass Payment (Testing-kaga direct-a Order-a "Placed" aaka)
-// Idhai mobile app-la "Select Payment" apuram koopdunum
+// 5. 🛠️ Payment Bypass - Idhu dhaan Payment Success-ah mimic panni Delhivery-a trigger pannum
+// Status: Placed, Payment: Paid nu maarum.
 router.put('/bypass-pay/:orderId', protect, orderCtrl.bypassPaymentAndShip);
 
 
 // ==========================================
-// 🏪 SELLER ROUTES
+// 🏪 SELLER ROUTES (Seller Dashboard)
 // ==========================================
 
-// Seller-ku vandha orders-a paaka
+// 6. Seller thandudaiya products ulla orders-a mattum paaka
 router.get("/seller/:sellerId", protect, orderCtrl.getSellerOrders); 
 
 
 // ==========================================
-// 🔑 ADMIN ROUTES
+// 🔑 ADMIN & COMMON ROUTES (Admin Dashboard)
 // ==========================================
 
-// Ella orders-aiyum paaka (Admin Dashboard)
+// 7. System-la irukura ella orders-aiyum list panna (Admin only)
 router.get('/all', protect, orderCtrl.getOrders);
 
-// Order status-a update panna (Example: Shipped, Delivered)
+// 8. Status update - Delivered nu mathum podhu Seller Payout trigger aagum
 router.put('/update-status/:orderId', protect, orderCtrl.updateOrderStatus);
 
 module.exports = router;
