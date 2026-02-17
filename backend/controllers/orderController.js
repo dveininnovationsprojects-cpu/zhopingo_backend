@@ -1,24 +1,25 @@
 const Order = require('../models/Order');
 const User = require('../models/User');
 const DeliveryCharge = require('../models/DeliveryCharge');
+const Payout = require('../models/Payout');
 const axios = require('axios');
 const mongoose = require('mongoose');
 
 // 🔑 Config
 const DELHI_TOKEN = "9b44fee45422e3fe8073dee9cfe7d51f9fff7629";
 const DELHI_URL_CREATE = "https://staging-express.delhivery.com/api/cmu/create.json";
-const DELHI_URL_TRACK = "https://staging-express.delhivery.com/api/v1/packages/json/";
+const DELHI_URL_TRACK = "https://track.delhivery.com/api/v1/packages/json/";
 
 /* =====================================================
-    HELPER: Delhivery Shipment Creation (Real-Time)
+    HELPER: Delhivery Shipment Creation (TEST MODE)
 ===================================================== */
 const createDelhiveryShipment = async (order, customerPhone) => {
     try {
         const shipmentData = {
             "shipments": [{
                 "name": order.shippingAddress?.receiverName || "Customer",
-                "add": `${order.shippingAddress?.flatNo || ""}, ${order.shippingAddress?.area || ""}`,
-                "pin": order.shippingAddress?.pincode,
+                "add": `${order.shippingAddress?.flatNo || ""}, ${order.shippingAddress?.area || "Testing Street"}`,
+                "pin": order.shippingAddress?.pincode || "110001",
                 "phone": customerPhone,
                 "order": order._id.toString(),
                 "payment_mode": "Pre-paid", 
@@ -45,32 +46,79 @@ const createDelhiveryShipment = async (order, customerPhone) => {
     }
 };
 
+/* =====================================================
+    1️⃣ CUSTOMER: Create Order
+===================================================== */
 exports.createOrder = async (req, res) => {
   try {
     const { items, customerId, shippingAddress, paymentMethod } = req.body;
 
-    // 🌟 முக்கியமானது: String IDs-ஐ Mongoose ObjectId-ஆக மாற்றுகிறோம்
-    const processedItems = items.map(item => ({
-      productId: new mongoose.Types.ObjectId(item.productId),
-      name: item.name,
-      quantity: Number(item.quantity),
-      price: Number(item.price),
-      mrp: Number(item.mrp || item.price),
-      sellerId: new mongoose.Types.ObjectId(item.sellerId),
-      image: item.image || ""
-    }));
+    // 🌟 Delivery Config செக் பண்றோம்
+    const deliveryConfig = await DeliveryCharge.findOne({ pincode: shippingAddress.pincode });
+    const BASE_SHIPPING = deliveryConfig ? deliveryConfig.charge : 40;
+
+    let sellerWiseSplit = {};
+    let mrpTotal = 0;
+    let sellingPriceTotal = 0;
+
+    const processedItems = items.map(item => {
+      // 🌟 ID-ஐ முறையாக ObjectId ஆக மாற்றுகிறோம்
+      const rawId = item.sellerId || item.seller || "698089341dc4f60f934bb5eb";
+      const validSellerId = new mongoose.Types.ObjectId(rawId?._id || rawId);
+
+      mrpTotal += (Number(item.mrp) || Number(item.price)) * item.quantity;
+      sellingPriceTotal += Number(item.price) * item.quantity;
+
+      const sIdStr = validSellerId.toString();
+      if (!sellerWiseSplit[sIdStr]) {
+        sellerWiseSplit[sIdStr] = {
+          sellerId: validSellerId,
+          sellerSubtotal: 0,
+          actualShippingCost: BASE_SHIPPING,
+          customerChargedShipping: 0
+        };
+      }
+      sellerWiseSplit[sIdStr].sellerSubtotal += (Number(item.price) * item.quantity);
+
+      return {
+        productId: new mongoose.Types.ObjectId(item.productId || item._id),
+        name: item.name,
+        quantity: Number(item.quantity),
+        price: Number(item.price),
+        mrp: Number(item.mrp) || Number(item.price),
+        sellerId: validSellerId,
+        image: item.image || ""
+      };
+    });
+
+    let totalShipping = 0;
+    Object.keys(sellerWiseSplit).forEach(sId => {
+        if(sellerWiseSplit[sId].sellerSubtotal < 500) {
+            sellerWiseSplit[sId].customerChargedShipping = BASE_SHIPPING;
+            totalShipping += BASE_SHIPPING;
+        }
+    });
 
     const newOrder = new Order({
-      customerId: new mongoose.Types.ObjectId(customerId), // 👈 இங்கே தான் 500 எர்ரர் வருகிறது
+      customerId: new mongoose.Types.ObjectId(customerId), // 👈 ID Conversion
       items: processedItems,
+      sellerSplitData: Object.values(sellerWiseSplit),
       billDetails: {
-        itemTotal: items.reduce((total, i) => total + (i.price * i.quantity), 0),
-        deliveryCharge: 40,
-        handlingCharge: 2
+        mrpTotal,
+        itemTotal: sellingPriceTotal,
+        handlingCharge: 2,
+        deliveryCharge: totalShipping,
+        productDiscount: mrpTotal - sellingPriceTotal
       },
-      totalAmount: items.reduce((total, i) => total + (i.price * i.quantity), 0) + 42,
+      totalAmount: sellingPriceTotal + 2 + totalShipping,
       paymentMethod,
-      shippingAddress,
+      shippingAddress: {
+        receiverName: shippingAddress.receiverName,
+        flatNo: shippingAddress.flatNo,
+        addressLine: shippingAddress.addressLine, // Schema match
+        pincode: shippingAddress.pincode,
+        label: shippingAddress.label // Schema match
+      },
       status: 'Placed'
     });
 
@@ -81,9 +129,8 @@ exports.createOrder = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
-
 /* =====================================================
-    2️⃣ BYPASS/VERIFY: Update Payment & Book Shipment
+    2️⃣ BYPASS: Test Payment Success & AWB Assign
 ===================================================== */
 exports.bypassPaymentAndShip = async (req, res) => {
     try {
@@ -97,23 +144,22 @@ exports.bypassPaymentAndShip = async (req, res) => {
 
         const delhiRes = await createDelhiveryShipment(order, user?.phone || "9876543210");
         
-        // 🌟 நிஜமான AWB எண்ணைச் சேமிக்கிறோம்
-        if (delhiRes && delhiRes.packages && delhiRes.packages.length > 0) {
-            order.awbNumber = delhiRes.packages[0].waybill;
-            console.log("SUCCESS: Real AWB Assigned:", order.awbNumber);
+        if (delhiRes && (delhiRes.success === true || delhiRes.packages)) {
+            order.awbNumber = delhiRes.packages?.[0]?.waybill || `TEST-${Date.now()}`;
+            console.log("SUCCESS: AWB Assigned:", order.awbNumber);
         } else {
-            order.awbNumber = `TEST-${Date.now()}`;
+            console.log("FAILED: Delhivery Error:", delhiRes?.rmk || "Check terminal logs");
         }
         
         await order.save();
-        return res.json({ success: true, message: "Payment Verified & Shipment Booked", data: order });
+        return res.json({ success: true, message: "Test Payment Success & AWB Assigned", data: order });
     } catch (err) { 
         res.status(500).json({ success: false, error: err.message }); 
     }
 };
 
 /* =====================================================
-    3️⃣ GETTERS: My Orders & Admin
+    3️⃣ GETTERS: My Orders, All Orders, Seller Orders
 ===================================================== */
 exports.getMyOrders = async (req, res) => {
     try {
@@ -145,7 +191,7 @@ exports.getSellerOrders = async (req, res) => {
 };
 
 /* =====================================================
-    4️⃣ ACTIONS: Status, Cancel, Track
+    4️⃣ ACTIONS: Update Status, Cancel, Track
 ===================================================== */
 exports.updateOrderStatus = async (req, res) => {
   try {
@@ -166,8 +212,6 @@ exports.cancelOrder = async (req, res) => {
   try {
     const order = await Order.findById(req.params.orderId);
     if (!order) return res.status(404).json({ success: false, message: "Order not found" });
-    
-    // வாலட் ரீஃபண்ட் லாஜிக் தேவைப்பட்டால் இங்கே சேர்க்கலாம்
     order.status = 'Cancelled';
     order.paymentStatus = 'Refunded';
     await order.save();
