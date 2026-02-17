@@ -8,7 +8,7 @@ const mongoose = require('mongoose');
 // 🔑 Config
 const DELHI_TOKEN = "9b44fee45422e3fe8073dee9cfe7d51f9fff7629";
 const DELHI_URL_CREATE = "https://staging-express.delhivery.com/api/cmu/create.json";
-const DELHI_URL_TRACK = "https://track.delhivery.com/api/v1/packages/json/";
+const DELHI_URL_TRACK = "https://staging-express.delhivery.com/api/v1/packages/json/";
 
 /* =====================================================
     HELPER: Delhivery Shipment Creation (TEST MODE)
