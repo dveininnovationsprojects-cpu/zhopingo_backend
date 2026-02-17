@@ -30,7 +30,7 @@ router.put('/bypass-pay/:orderId', protect, orderCtrl.bypassPaymentAndShip);
 // Seller orders - இங்கதான் நீ தப்பு பண்ணிருக்க வாய்ப்பு இருக்கு
 // உன் Controller-ல் 'getSellerOrders' இருக்கிறதா என்று உறுதி செய்து கொள்
 // இல்லையென்றால் இதை தற்காலிகமாக கமெண்ட் செய்.
-// router.get("/seller/:sellerId", protect, orderCtrl.getSellerOrders); 
+router.get("/seller/:sellerId", protect, orderCtrl.getSellerOrders); 
 
 
 // ==========================================
