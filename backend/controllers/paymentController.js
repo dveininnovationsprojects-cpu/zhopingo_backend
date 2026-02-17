@@ -1,123 +1,134 @@
-const axios = require("axios");
-const Order = require("../models/Order");
-const User = require("../models/User");
-const Payment = require("../models/Payment");
+const axios = require('axios');
+const crypto = require('crypto');
+const Order = require('../models/Order');
+const User = require('../models/User');
 
-// 🔑 Delhivery Credentials
-const DELHI_TOKEN = "9b44fee45422e3fe8073dee9cfe7d51f9fff7629";
-const DELHI_URL_CREATE = "https://track.delhivery.com/api/cmu/create.json";
-const DELHI_URL_TRACK = "https://track.delhivery.com/api/v1/packages/json/";
-
-/* =====================================================
-    HELPER: Delhivery Shipment Trigger
-===================================================== */
-const triggerDelhiveryShipment = async (orderId) => {
-    try {
-        const order = await Order.findById(orderId);
-        const user = await User.findById(order.customerId);
-        
-        if (!order) return null;
-
-        const payload = {
-            "shipments": [{
-                "name": order.shippingAddress.receiverName || user.name || "Customer",
-                "add": `${order.shippingAddress.flatNo}, ${order.shippingAddress.area}`,
-                "pin": order.shippingAddress.pincode,
-                "phone": user.phone || "0000000000",
-                "order": order._id.toString(),
-                "payment_mode": order.paymentMethod === 'COD' ? 'Collect' : 'Prepaid',
-                "amount": order.totalAmount,
-            }],
-            "pickup_location": { "name": "ZHOPINGO_PRIMARY_HUB" } 
-        };
-
-        const response = await axios.post(DELHI_URL_CREATE, payload, {
-            headers: {
-                'Authorization': `Token ${DELHI_TOKEN}`,
-                'Content-Type': 'application/json'
-            }
-        });
-
-        // ✅ Success aana AWB (Waybill) number kidaikum
-        if (response.data?.packages?.[0]) {
-            const awb = response.data.packages[0].waybill;
-            order.awbNumber = awb;
-            await order.save();
-            return awb;
-        }
-        return null;
-    } catch (error) {
-        console.error("❌ Delhivery API Error:", error.response?.data || error.message);
-        return null;
-    }
-};
+// 🔑 PhonePe Config (உன் மெயில்ல வந்த டீடைல்ஸ இங்க மாத்து)
+const MERCHANT_ID = "PGCHECKOUT"; // Sample ID, உன் ஒரிஜினல் ID-ஐ போடு
+const SALT_KEY = "099db054-d86e-4474-88c6-2c2a45484701"; // உன் Salt Key
+const SALT_INDEX = 1;
+const PHONEPE_API_URL = "https://api-preprod.phonepe.com/api/pg-sandbox/pg/v1/pay";
+const PHONEPE_STATUS_URL = "https://api-preprod.phonepe.com/api/pg-sandbox/pg/v1/status";
 
 /* =====================================================
-    1. DUMMY SESSION (App flow break aagama iruka)
+    1️⃣ CREATE SESSION (PhonePe Payment URL Generation)
 ===================================================== */
 exports.createSession = async (req, res) => {
-  // Mobile app-la session ID keta, oru dummy ID anupuvom
-  res.json({ 
-    success: true, 
-    paymentSessionId: "bypass_mode_" + Date.now() 
-  });
-};
-
-/* =====================================================
-    2. 🎯 VERIFY & SHIP (The Current Main Logic)
-===================================================== */
-exports.verifyPayment = async (req, res) => {
-  try {
-    const { orderId } = req.params;
-
-    // 1️⃣ Database-la order-a "Confirmed" status-ku mathuvom
-    const order = await Order.findByIdAndUpdate(orderId, { 
-      status: "Placed", 
-      paymentStatus: "Paid" 
-    }, { new: true });
-
-    if (!order) return res.status(404).json({ success: false, message: "Order not found" });
-
-    // 2️⃣ 🚀 Delhivery server-ku shipment request anupuvom
-    const awb = await triggerDelhiveryShipment(orderId);
-
-    // 3️⃣ Frontend-ku success response
-    res.json({ 
-      success: true, 
-      status: "Paid", 
-      message: "Order bypass success & Delhivery shipment triggered",
-      awb: awb || "AWB Generation Pending" 
-    });
-  } catch (err) {
-    console.error("❌ Verify Error:", err.message);
-    res.status(500).json({ success: false, error: err.message });
-  }
-};
-
-/* =====================================================
-    3. REAL-TIME TRACKING (Delhivery direct connection)
-===================================================== */
-exports.trackOrder = async (req, res) => {
     try {
-        const { awb } = req.params;
-        if (!awb || awb === "null") return res.status(400).json({ success: false, message: "Invalid AWB" });
+        const { orderId } = req.body;
+        const order = await Order.findById(orderId);
 
-        const response = await axios.get(`${DELHI_URL_TRACK}?waybill=${awb}`, {
-            headers: { 'Authorization': `Token ${DELHI_TOKEN}` }
-        });
+        if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
+        const transactionId = `TXN_${Date.now()}`;
+        order.paymentId = transactionId; // Order-ல ட்ரான்சாக்ஷன் ID சேமிக்கிறோம்
+        await order.save();
+
+        const data = {
+            merchantId: MERCHANT_ID,
+            merchantTransactionId: transactionId,
+            merchantUserId: order.customerId.toString(),
+            amount: order.totalAmount * 100, // PhonePe-க்கு பைசாவில் அனுப்ப வேண்டும்
+            redirectUrl: `https://api.zhopingo.in/api/v1/payment/phonepe-return/${orderId}`,
+            redirectMode: 'POST',
+            callbackUrl: `https://api.zhopingo.in/api/v1/payment/webhook`,
+            paymentInstrument: { type: 'PAY_PAGE' }
+        };
+
+        const payload = JSON.stringify(data);
+        const payloadMain = Buffer.from(payload).toString('base64');
+        const string = payloadMain + '/pg/v1/pay' + SALT_KEY;
+        const sha256 = crypto.createHash('sha256').update(string).digest('hex');
+        const checksum = sha256 + '###' + SALT_INDEX;
+
+        const options = {
+            method: 'POST',
+            url: PHONEPE_API_URL,
+            headers: {
+                accept: 'application/json',
+                'Content-Type': 'application/json',
+                'X-VERIFY': checksum
+            },
+            data: { request: payloadMain }
+        };
+
+        const response = await axios.request(options);
+        
         res.json({ 
             success: true, 
-            trackingData: response.data 
+            url: response.data.data.instrumentResponse.redirectUrls[0],
+            transactionId 
         });
-    } catch (err) {
-        console.error("❌ Tracking API Error:", err.message);
-        res.status(500).json({ success: false, message: "Tracking fetch failed" });
+
+    } catch (error) {
+        console.error("PhonePe Create Error:", error.message);
+        res.status(500).json({ success: false, error: error.message });
     }
 };
 
 /* =====================================================
-    4. DUMMY HANDLERS (Errors thavirkka)
+    2️⃣ VERIFY PAYMENT & AUTO-SHIP (Delhivery)
 ===================================================== */
-exports.cashfreeReturn = (req, res) => res.redirect("zhopingo://order-success");
-exports.webhook = (req, res) => res.status(200).send("OK");
+exports.verifyPayment = async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        const order = await Order.findById(orderId);
+        
+        if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+
+        // 🛡️ PhonePe Status Check
+        const string = `/pg/v1/status/${MERCHANT_ID}/${order.paymentId}` + SALT_KEY;
+        const sha256 = crypto.createHash('sha256').update(string).digest('hex');
+        const checksum = sha256 + '###' + SALT_INDEX;
+
+        const options = {
+            method: 'GET',
+            url: `${PHONEPE_STATUS_URL}/${MERCHANT_ID}/${order.paymentId}`,
+            headers: {
+                accept: 'application/json',
+                'Content-Type': 'application/json',
+                'X-VERIFY': checksum,
+                'X-MERCHANT-ID': MERCHANT_ID
+            }
+        };
+
+        const response = await axios.request(options);
+
+        if (response.data.success === true && response.data.code === 'PAYMENT_SUCCESS') {
+            order.paymentStatus = "Paid";
+            order.status = "Placed";
+
+            // 🚚 DELHI_CREATION: இங்க தான் டெல்லிவரி AWB ஜெனரேட் ஆகும் (ஏற்கனவே குடுத்த லாஜிக்)
+            // ஒருவேளை இது ஆட்டோமேட்டிக்கா நடக்கணும்னா createDelhiveryShipment-ஐ இங்க கூப்பிடணும்.
+            
+            await order.save();
+            return res.json({ success: true, message: "Payment Verified & Order Placed", data: order });
+        } else {
+            return res.status(400).json({ success: false, message: "Payment Failed or Pending" });
+        }
+
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+};
+
+/* =====================================================
+    3️⃣ PHONEPE RETURN (Redirection from Gateway)
+==================================================== */
+exports.phonepeReturn = async (req, res) => {
+    const { orderId } = req.params;
+    // பேமெண்ட் முடிஞ்சதும் கஸ்டமரை ஆப்புக்குத் திருப்பி விடுறோம்
+    res.redirect(`zhopingo://payment-verify/${orderId}`);
+};
+
+/* =====================================================
+    4️⃣ WEBHOOK & TRACKING (Dummy for logic)
+===================================================== */
+exports.webhook = async (req, res) => {
+    console.log("PhonePe Webhook Received:", req.body);
+    res.status(200).send("OK");
+};
+
+exports.trackOrder = async (req, res) => {
+    // Delhivery tracking logic here
+};
