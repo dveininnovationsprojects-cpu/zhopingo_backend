@@ -32,10 +32,14 @@ const createDelhiveryShipment = async (order, customerPhone) => {
         });
         return response.data;
     } catch (error) {
-        console.error("Delhivery API Error:", error.response?.data || error.message);
+        console.error("Logistics API Error:", error.response?.data || error.message);
         return null;
     }
 };
+
+/* =====================================================
+    1️⃣ CUSTOMER: Create Order (Multi-Seller Stable Logic)
+===================================================== */
 exports.createOrder = async (req, res) => {
   try {
     const { items, customerId, shippingAddress, paymentMethod } = req.body;
@@ -58,14 +62,13 @@ exports.createOrder = async (req, res) => {
       mrpTotal += mrp * qty;
       sellingPriceTotal += price * qty;
       
-      // 🔥 CRITICAL FIX: இங்க தான் தப்பு நடக்குது. 
-      // ஒருவேளை sellerId ஆப்ஜெக்ட்டா வந்தா அதோட _id-ஐ மட்டும் எடுக்கணும்.
+      // ✅ 100% FIX: sellerId "[object Object]" ஆகாமல் இருக்க ID-ஐ மட்டும் எடுக்கிறோம்
       let rawSellerId = item.sellerId || item.seller || "698089341dc4f60f934bb5eb";
-      const sId = (typeof rawSellerId === 'object' ? rawSellerId._id : rawSellerId).toString();
+      const sId = (typeof rawSellerId === 'object' ? (rawSellerId._id || rawSellerId.id) : rawSellerId).toString();
 
       if (!sellerWiseSplit[sId]) {
         sellerWiseSplit[sId] = {
-          sellerId: sId, // இப்போ இது "[object Object]" ஆகாது, சரியான ID-ஆ இருக்கும்
+          sellerId: sId,
           sellerSubtotal: 0,
           actualShippingCost: BASE_SHIPPING,
           customerChargedShipping: 0 
@@ -73,6 +76,7 @@ exports.createOrder = async (req, res) => {
       }
       sellerWiseSplit[sId].sellerSubtotal += (price * qty);
 
+      // Image Path Handling
       let finalImg = item.image || "";
       if (finalImg && !finalImg.startsWith('http')) {
           const parts = finalImg.split('/');
@@ -119,10 +123,14 @@ exports.createOrder = async (req, res) => {
     res.status(201).json({ success: true, order: newOrder });
 
   } catch (err) {
-    console.error("Order Fail Detail:", err);
+    console.error("Create Order Logic Error:", err);
     res.status(500).json({ success: false, error: err.message });
   }
 };
+
+/* =====================================================
+    2️⃣ BYPASS: Payment Success & AWB Trigger
+===================================================== */
 exports.bypassPaymentAndShip = async (req, res) => {
     try {
         const { orderId } = req.params;
@@ -133,23 +141,23 @@ exports.bypassPaymentAndShip = async (req, res) => {
         order.status = "Placed";
         order.paymentStatus = "Paid";
 
-        // 🚚 டெல்லிவரிக்கு ஆர்டரை அனுப்புறோம்
+        // ✅ Book Shipment & Generate AWB
         const delhiRes = await createDelhiveryShipment(order, user?.phone || "0000000000");
         
-        // இங்கதான் செக் பண்ணனும் - டெல்லிவரி Response வருதான்னு
         if (delhiRes && delhiRes.packages && delhiRes.packages[0]) {
             order.awbNumber = delhiRes.packages[0].waybill; 
             console.log("AWB Generated:", order.awbNumber);
         } else {
-            console.log("Delhivery API failed to give AWB. Check Delhivery Token/Balance.");
+            console.log("Delhivery API failed to give AWB.");
         }
         
         await order.save();
-        res.json({ success: true, message: "Payment Success & AWB Updated", data: order });
+        res.json({ success: true, message: "Success", data: order });
     } catch (err) { 
         res.status(500).json({ success: false, error: err.message }); 
     }
 };
+
 /* =====================================================
     3️⃣ UPDATE STATUS: Delivered & Seller Payout
 ===================================================== */
@@ -168,8 +176,6 @@ exports.updateOrderStatus = async (req, res) => {
       const ADMIN_COMM_PERCENT = 10;
       for (let split of order.sellerSplitData) {
         const commission = (split.sellerSubtotal * ADMIN_COMM_PERCENT) / 100;
-        
-        // Settlement = Subtotal - Commission - (Admin Delivery Cost - Customer Delivery Charge)
         const sellerSettlement = (split.sellerSubtotal - commission - split.actualShippingCost) + split.customerChargedShipping;
 
         await Payout.create({
@@ -189,7 +195,7 @@ exports.updateOrderStatus = async (req, res) => {
 };
 
 /* =====================================================
-    4️⃣ GETTERS: Deep Populated Data
+    4️⃣ GETTERS: Populated Data for Customer/Admin/Seller
 ===================================================== */
 exports.getMyOrders = async (req, res) => {
     try {
@@ -198,7 +204,7 @@ exports.getMyOrders = async (req, res) => {
             .populate({
                 path: 'items.sellerId', 
                 model: 'Seller', 
-                select: 'shopName ownerName phone' 
+                select: 'shopName ownerName phone logo' 
             })
             .sort({ createdAt: -1 });
         res.json({ success: true, data: orders });
@@ -210,7 +216,11 @@ exports.getOrders = async (req, res) => {
         const orders = await Order.find()
             .populate('customerId', 'name phone email')
             .populate('items.productId')
-            .populate({ path: 'sellerSplitData.sellerId', select: 'shopName phone' })
+            .populate({ 
+                path: 'items.sellerId', 
+                model: 'Seller',
+                select: 'shopName phone' 
+            })
             .sort({ createdAt: -1 });
         res.json({ success: true, data: orders });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
@@ -218,16 +228,20 @@ exports.getOrders = async (req, res) => {
 
 exports.getSellerOrders = async (req, res) => {
     try {
-        const orders = await Order.find({ "items.sellerId": req.params.sellerId, status: { $ne: 'Pending' } })
-            .populate('customerId', 'name phone')
-            .populate('items.productId')
-            .sort({ createdAt: -1 });
+        // ✅ Seller-க்கு மட்டும் ஆர்டர் காட்ட Filter
+        const orders = await Order.find({ 
+            "items.sellerId": req.params.sellerId, 
+            status: { $ne: 'Pending' } 
+        })
+        .populate('customerId', 'name phone')
+        .populate('items.productId')
+        .sort({ createdAt: -1 });
         res.json({ success: true, data: orders });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
 /* =====================================================
-    5️⃣ COMMON: Cancel & Track
+    5️⃣ ACTIONS: Cancel & Track
 ===================================================== */
 exports.cancelOrder = async (req, res) => {
   try {
@@ -252,5 +266,5 @@ exports.trackDelhivery = async (req, res) => {
             headers: { 'Authorization': `Token ${DELHI_TOKEN}` }
         });
         res.json({ success: true, tracking: response.data });
-    } catch (err) { res.status(500).json({ success: false, message: "Failed" }); }
+    } catch (err) { res.status(500).json({ success: false, message: "Tracking failed" }); }
 };
