@@ -4,10 +4,14 @@ const DeliveryCharge = require('../models/DeliveryCharge');
 const axios = require('axios');
 const mongoose = require('mongoose');
 
+// 🔑 Config
 const DELHI_TOKEN = "9b44fee45422e3fe8073dee9cfe7d51f9fff7629";
 const DELHI_URL_CREATE = "https://staging-express.delhivery.com/api/cmu/create.json";
+const DELHI_URL_TRACK = "https://staging-express.delhivery.com/api/v1/packages/json/";
 
-// Helper for Delhivery
+/* =====================================================
+    HELPER: Delhivery Shipment Creation (Real-Time)
+===================================================== */
 const createDelhiveryShipment = async (order, customerPhone) => {
     try {
         const shipmentData = {
@@ -19,72 +23,204 @@ const createDelhiveryShipment = async (order, customerPhone) => {
                 "order": order._id.toString(),
                 "payment_mode": "Pre-paid", 
                 "amount": order.totalAmount,
-                "weight": 0.5
+                "weight": 0.5,
+                "hsn_code": "6109"
             }],
             "pickup_location": { "name": "benjamin" } 
         };
+
         const finalData = `format=json&data=${JSON.stringify(shipmentData)}`;
         const response = await axios.post(DELHI_URL_CREATE, finalData, {
-            headers: { 'Authorization': `Token ${DELHI_TOKEN}`, 'Content-Type': 'application/x-www-form-urlencoded' }
+            headers: { 
+                'Authorization': `Token ${DELHI_TOKEN}`, 
+                'Content-Type': 'application/x-www-form-urlencoded'
+            }
         });
+
+        console.log("--- Delhivery Response ---", JSON.stringify(response.data, null, 2));
         return response.data;
-    } catch (error) { return null; }
+    } catch (error) {
+        console.error("Delhivery API Error Log:", error.response?.data || error.message);
+        return null;
+    }
 };
 
-// --- API Functions ---
-
+/* =====================================================
+    1️⃣ CUSTOMER: Create Order (Fixed 500 Error)
+===================================================== */
 exports.createOrder = async (req, res) => {
+  try {
+    const { items, customerId, shippingAddress, paymentMethod } = req.body;
+
+    // 🌟 பின்கோடு வைத்து டெலிவரி சார்ஜ் எடுக்கிறோம்
+    const deliveryConfig = await DeliveryCharge.findOne({ pincode: shippingAddress.pincode });
+    const BASE_SHIPPING = deliveryConfig ? deliveryConfig.charge : 40;
+
+    let sellerWiseSplit = {};
+    let mrpTotal = 0;
+    let sellingPriceTotal = 0;
+
+    // 🌟 Items-ஐ முறைப்படி மேப் செய்கிறோம் (Validation-உடன்)
+    const processedItems = items.map(item => {
+      const rawSellerId = item.sellerId || item.seller || "698089341dc4f60f934bb5eb";
+      const validSellerId = new mongoose.Types.ObjectId(rawSellerId);
+
+      mrpTotal += (Number(item.mrp) || Number(item.price)) * item.quantity;
+      sellingPriceTotal += Number(item.price) * item.quantity;
+
+      const sIdStr = validSellerId.toString();
+      if (!sellerWiseSplit[sIdStr]) {
+        sellerWiseSplit[sIdStr] = {
+          sellerId: validSellerId,
+          sellerSubtotal: 0,
+          actualShippingCost: BASE_SHIPPING,
+          customerChargedShipping: 0
+        };
+      }
+      sellerWiseSplit[sIdStr].sellerSubtotal += (Number(item.price) * item.quantity);
+
+      return {
+        productId: new mongoose.Types.ObjectId(item.productId || item._id),
+        name: item.name,
+        quantity: Number(item.quantity),
+        price: Number(item.price),
+        mrp: Number(item.mrp) || Number(item.price),
+        sellerId: validSellerId,
+        image: item.image || ""
+      };
+    });
+
+    let totalShipping = 0;
+    Object.keys(sellerWiseSplit).forEach(sId => {
+        if(sellerWiseSplit[sId].sellerSubtotal < 500) {
+            sellerWiseSplit[sId].customerChargedShipping = BASE_SHIPPING;
+            totalShipping += BASE_SHIPPING;
+        }
+    });
+
+    const newOrder = new Order({
+      customerId: new mongoose.Types.ObjectId(customerId),
+      items: processedItems,
+      sellerSplitData: Object.values(sellerWiseSplit),
+      billDetails: {
+        mrpTotal,
+        itemTotal: sellingPriceTotal,
+        handlingCharge: 2,
+        deliveryCharge: totalShipping,
+        productDiscount: mrpTotal - sellingPriceTotal
+      },
+      totalAmount: sellingPriceTotal + 2 + totalShipping,
+      paymentMethod,
+      shippingAddress,
+      status: 'Placed'
+    });
+
+    await newOrder.save();
+    res.status(201).json({ success: true, order: newOrder });
+  } catch (err) {
+    console.error("Order Creation Error:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+/* =====================================================
+    2️⃣ BYPASS/VERIFY: Update Payment & Book Shipment
+===================================================== */
+exports.bypassPaymentAndShip = async (req, res) => {
     try {
-        const { items, customerId, shippingAddress, paymentMethod } = req.body;
-        const newOrder = new Order({ customerId, items, shippingAddress, paymentMethod, status: 'Placed' });
-        await newOrder.save();
-        res.status(201).json({ success: true, order: newOrder });
+        const { orderId } = req.params;
+        const order = await Order.findById(orderId);
+        if(!order) return res.status(404).json({ success: false, message: "Order not found" });
+
+        const user = await User.findById(order.customerId);
+        order.paymentStatus = "Paid";
+        order.status = "Placed";
+
+        const delhiRes = await createDelhiveryShipment(order, user?.phone || "9876543210");
+        
+        // 🌟 நிஜமான AWB எண்ணைச் சேமிக்கிறோம்
+        if (delhiRes && delhiRes.packages && delhiRes.packages.length > 0) {
+            order.awbNumber = delhiRes.packages[0].waybill;
+            console.log("SUCCESS: Real AWB Assigned:", order.awbNumber);
+        } else {
+            order.awbNumber = `TEST-${Date.now()}`;
+        }
+        
+        await order.save();
+        return res.json({ success: true, message: "Payment Verified & Shipment Booked", data: order });
+    } catch (err) { 
+        res.status(500).json({ success: false, error: err.message }); 
+    }
+};
+
+/* =====================================================
+    3️⃣ GETTERS: My Orders & Admin
+===================================================== */
+exports.getMyOrders = async (req, res) => {
+    try {
+        const orders = await Order.find({ customerId: req.params.userId })
+            .populate('items.productId')
+            .sort({ createdAt: -1 });
+        res.json({ success: true, data: orders });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
 exports.getOrders = async (req, res) => {
     try {
-        const orders = await Order.find().populate('customerId', 'name phone').sort({ createdAt: -1 });
-        res.json({ success: true, data: orders });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
-};
-
-exports.getMyOrders = async (req, res) => {
-    try {
-        const orders = await Order.find({ customerId: req.params.userId }).sort({ createdAt: -1 });
+        const orders = await Order.find()
+            .populate('customerId', 'name phone email')
+            .populate('items.productId')
+            .sort({ createdAt: -1 });
         res.json({ success: true, data: orders });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
 exports.getSellerOrders = async (req, res) => {
     try {
-        const orders = await Order.find({ "items.sellerId": req.params.sellerId }).sort({ createdAt: -1 });
+        const orders = await Order.find({ "items.sellerId": req.params.sellerId })
+            .populate('customerId', 'name phone')
+            .populate('items.productId')
+            .sort({ createdAt: -1 });
         res.json({ success: true, data: orders });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
+/* =====================================================
+    4️⃣ ACTIONS: Status, Cancel, Track
+===================================================== */
 exports.updateOrderStatus = async (req, res) => {
-    try {
-        const order = await Order.findByIdAndUpdate(req.params.orderId, { status: req.body.status }, { new: true });
-        res.json({ success: true, data: order });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
-};
+  try {
+    const { status } = req.body;
+    const order = await Order.findById(req.params.orderId);
+    if (!order) return res.status(404).json({ success: false, message: "Not found" });
 
-exports.bypassPaymentAndShip = async (req, res) => {
-    try {
-        const order = await Order.findById(req.params.orderId);
-        const user = await User.findById(order.customerId);
-        order.paymentStatus = "Paid";
-        const delhiRes = await createDelhiveryShipment(order, user?.phone || "9876543210");
-        if (delhiRes?.packages) order.awbNumber = delhiRes.packages[0].waybill;
-        await order.save();
-        res.json({ success: true, data: order });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+    order.status = status;
+    if (status === 'Delivered') {
+      order.paymentStatus = 'Paid';
+    }
+    await order.save();
+    res.json({ success: true, data: order });
+  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
 exports.cancelOrder = async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.orderId);
+    if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+    
+    // வாலட் ரீஃபண்ட் லாஜிக் தேவைப்பட்டால் இங்கே சேர்க்கலாம்
+    order.status = 'Cancelled';
+    order.paymentStatus = 'Refunded';
+    await order.save();
+    res.json({ success: true, message: "Order Cancelled Successfully" });
+  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+};
+
+exports.trackDelhivery = async (req, res) => {
     try {
-        const order = await Order.findByIdAndUpdate(req.params.orderId, { status: 'Cancelled' }, { new: true });
-        res.json({ success: true, message: "Order Cancelled" });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+        const response = await axios.get(`${DELHI_URL_TRACK}?waybill=${req.params.awb}`, {
+            headers: { 'Authorization': `Token ${DELHI_TOKEN}` }
+        });
+        res.json({ success: true, tracking: response.data });
+    } catch (err) { res.status(500).json({ success: false, message: "Tracking API failed" }); }
 };
