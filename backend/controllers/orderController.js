@@ -49,6 +49,7 @@ exports.createOrder = async (req, res) => {
     const { items, customerId, shippingAddress, paymentMethod } = req.body;
     if (!items?.length) return res.status(400).json({ success: false, message: "Cart is empty" });
 
+    const userObj = await User.findById(customerId);
     const deliveryConfig = await DeliveryCharge.findOne({ pincode: shippingAddress.pincode });
     const baseDeliveryCharge = deliveryConfig ? deliveryConfig.charge : 40;
 
@@ -78,8 +79,9 @@ exports.createOrder = async (req, res) => {
       sellerWiseSplit[actualSellerId].sellerSubtotal += (price * quantity);
       sellerWiseSplit[actualSellerId].items.push(item);
 
-      // 🖼️ Image Path Fix
-      let finalImg = item.image || (item.images && item.images[0]) || "";
+      // 🖼️ 100% IMAGE FIX: (ஆர்டர் போடும்போதே இமேஜ் பாத்-ஐ சேவ் பண்றோம்)
+      let finalImg = item.image || (item.images && item.images[0]) || (item.productId?.images && item.productId.images[0]) || "";
+      
       if (finalImg && !finalImg.startsWith('http')) {
           const fileName = finalImg.split('/').pop();
           finalImg = `${DOMAIN}/uploads/products/${fileName}`;
@@ -90,14 +92,13 @@ exports.createOrder = async (req, res) => {
         name: item.name,
         quantity, price, mrp,
         sellerId: actualSellerId,
-        image: finalImg
+        image: finalImg // 🌟 இங்க தான் இமேஜ் சேவ் ஆகுது
       };
     });
 
     const totalDeliveryCharge = Object.values(sellerWiseSplit).reduce((acc, curr) => acc + curr.deliveryChargeApplied, 0);
     const grandTotal = sellingPriceTotal + handlingCharge + totalDeliveryCharge;
 
-    // 🌟 Blinkit Flow: Always 'Pending' initially
     const newOrder = new Order({
       customerId,
       items: processedItems,
@@ -129,7 +130,7 @@ exports.bypassPaymentAndShip = async (req, res) => {
 
         const user = await User.findById(order.customerId);
 
-        // 🌟 Update to Success state
+        // 🌟 Update state to Placed (Paid)
         order.status = "Placed";
         order.paymentStatus = "Paid";
 
@@ -174,7 +175,6 @@ exports.updateOrderStatus = async (req, res) => {
       order.paymentStatus = 'Paid';
       order.arrivedIn = "Delivered";
       
-      // 💰 Payout Logic
       const adminCommPercent = 10;
       for (let split of order.sellerSplitData) {
         const commission = (split.sellerSubtotal * adminCommPercent) / 100;
@@ -214,8 +214,8 @@ exports.trackDelhivery = async (req, res) => {
 
 exports.getMyOrders = async (req, res) => {
   try {
-    // Show orders that are at least 'Placed' (Paid) or 'Pending'
-    const orders = await Order.find({ customerId: req.params.userId }).sort({ createdAt: -1 });
+    // 🌟 Product இமேஜ் வர productId-ஐ populate செய்கிறோம்
+    const orders = await Order.find({ customerId: req.params.userId }).populate('items.productId').sort({ createdAt: -1 });
     res.json({ success: true, data: orders });
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
