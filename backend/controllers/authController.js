@@ -135,7 +135,7 @@ exports.addUserAddress = async (req, res) => {
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-    const { receiverName, flatNo, area, pincode, addressType, isDefault } = req.body;
+    const { receiverName, flatNo, area, pincode, addressType,phone, isDefault } = req.body;
 
     // புதிய அட்ரஸை Default ஆக்கினால், மற்றவற்றை False ஆக்க வேண்டும்
     if (isDefault) {
@@ -147,6 +147,7 @@ exports.addUserAddress = async (req, res) => {
       addressType: addressType || "Home",
       flatNo,
       area,
+      phone,
       pincode,
       isDefault: isDefault || false
     };

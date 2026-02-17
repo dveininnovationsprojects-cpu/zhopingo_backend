@@ -30,7 +30,8 @@ addressBook: [{
     city: { type: String, default: "Chennai" },
     state: { type: String, default: "Tamil Nadu" },
     pincode: { type: String, required: true },
-    isDefault: { type: Boolean, default: false }
+    isDefault: { type: Boolean, default: false },
+    phone:{type:String, required:true}
   }]
 }, { timestamps: true });
 
