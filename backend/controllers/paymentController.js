@@ -1,126 +1,123 @@
 const axios = require("axios");
 const Order = require("../models/Order");
+const User = require("../models/User");
 const Payment = require("../models/Payment");
 
-const CF_BASE_URL = "https://sandbox.cashfree.com/pg";
+// 🔑 Delhivery Credentials
+const DELHI_TOKEN = "9b44fee45422e3fe8073dee9cfe7d51f9fff7629";
+const DELHI_URL_CREATE = "https://track.delhivery.com/api/cmu/create.json";
+const DELHI_URL_TRACK = "https://track.delhivery.com/api/v1/packages/json/";
 
-// 1. CREATE PAYMENT SESSION
+/* =====================================================
+    HELPER: Delhivery Shipment Trigger
+===================================================== */
+const triggerDelhiveryShipment = async (orderId) => {
+    try {
+        const order = await Order.findById(orderId);
+        const user = await User.findById(order.customerId);
+        
+        if (!order) return null;
+
+        const payload = {
+            "shipments": [{
+                "name": order.shippingAddress.receiverName || user.name || "Customer",
+                "add": `${order.shippingAddress.flatNo}, ${order.shippingAddress.area}`,
+                "pin": order.shippingAddress.pincode,
+                "phone": user.phone || "0000000000",
+                "order": order._id.toString(),
+                "payment_mode": order.paymentMethod === 'COD' ? 'Collect' : 'Prepaid',
+                "amount": order.totalAmount,
+            }],
+            "pickup_location": { "name": "ZHOPINGO_PRIMARY_HUB" } 
+        };
+
+        const response = await axios.post(DELHI_URL_CREATE, payload, {
+            headers: {
+                'Authorization': `Token ${DELHI_TOKEN}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        // ✅ Success aana AWB (Waybill) number kidaikum
+        if (response.data?.packages?.[0]) {
+            const awb = response.data.packages[0].waybill;
+            order.awbNumber = awb;
+            await order.save();
+            return awb;
+        }
+        return null;
+    } catch (error) {
+        console.error("❌ Delhivery API Error:", error.response?.data || error.message);
+        return null;
+    }
+};
+
+/* =====================================================
+    1. DUMMY SESSION (App flow break aagama iruka)
+===================================================== */
 exports.createSession = async (req, res) => {
+  // Mobile app-la session ID keta, oru dummy ID anupuvom
+  res.json({ 
+    success: true, 
+    paymentSessionId: "bypass_mode_" + Date.now() 
+  });
+};
+
+/* =====================================================
+    2. 🎯 VERIFY & SHIP (The Current Main Logic)
+===================================================== */
+exports.verifyPayment = async (req, res) => {
   try {
-    const { orderId, amount, customerId, customerPhone, customerName } = req.body;
-    const order = await Order.findById(orderId);
+    const { orderId } = req.params;
+
+    // 1️⃣ Database-la order-a "Confirmed" status-ku mathuvom
+    const order = await Order.findByIdAndUpdate(orderId, { 
+      status: "Placed", 
+      paymentStatus: "Paid" 
+    }, { new: true });
+
     if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
-    const cfOrderId = `ORD_${orderId}_${Date.now()}`;
+    // 2️⃣ 🚀 Delhivery server-ku shipment request anupuvom
+    const awb = await triggerDelhiveryShipment(orderId);
 
-    const response = await axios.post(
-      `${CF_BASE_URL}/orders`,
-      {
-        order_id: cfOrderId,
-        order_amount: Number(amount),
-        order_currency: "INR",
-        customer_details: {
-          customer_id: String(customerId),
-          customer_phone: String(customerPhone).slice(-10),
-          customer_name: customerName || "Customer"
-        },
-        order_meta: {
-          return_url: `https://api.zhopingo.in/api/v1/payments/cashfree-return?cf_order_id=${cfOrderId}`
-        }
-      },
-      {
-        headers: {
-          "x-client-id": process.env.CF_APP_ID,
-          "x-client-secret": process.env.CF_SECRET,
-          "x-api-version": "2023-08-01",
-          "Content-Type": "application/json"
-        }
-      }
-    );
-
-    await Payment.create({
-      orderId,
-      transactionId: cfOrderId,
-      amount: Number(amount),
-      status: "PENDING"
-    });
-
-    res.json({
-      success: true,
-      paymentSessionId: response.data.payment_session_id,
-      cfOrderId
+    // 3️⃣ Frontend-ku success response
+    res.json({ 
+      success: true, 
+      status: "Paid", 
+      message: "Order bypass success & Delhivery shipment triggered",
+      awb: awb || "AWB Generation Pending" 
     });
   } catch (err) {
-    console.error("Session Error:", err.response?.data || err.message);
+    console.error("❌ Verify Error:", err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 };
 
-// 2. CASHFREE RETURN HANDLER
-exports.cashfreeReturn = async (req, res) => {
-  try {
-    const { cf_order_id } = req.query;
-    const response = await axios.get(`${CF_BASE_URL}/orders/${cf_order_id}`, {
-      headers: {
-        "x-client-id": process.env.CF_APP_ID,
-        "x-client-secret": process.env.CF_SECRET,
-        "x-api-version": "2023-08-01"
-      }
-    });
+/* =====================================================
+    3. REAL-TIME TRACKING (Delhivery direct connection)
+===================================================== */
+exports.trackOrder = async (req, res) => {
+    try {
+        const { awb } = req.params;
+        if (!awb || awb === "null") return res.status(400).json({ success: false, message: "Invalid AWB" });
 
-    if (response.data.order_status === "PAID") {
-      const payment = await Payment.findOne({ transactionId: cf_order_id });
-      if (payment) {
-        payment.status = "SUCCESS";
-        await payment.save();
-        await Order.findByIdAndUpdate(payment.orderId, { status: "Placed", paymentStatus: "Paid" });
-      }
-      return res.redirect("zhopingo://order-success");
+        const response = await axios.get(`${DELHI_URL_TRACK}?waybill=${awb}`, {
+            headers: { 'Authorization': `Token ${DELHI_TOKEN}` }
+        });
+
+        res.json({ 
+            success: true, 
+            trackingData: response.data 
+        });
+    } catch (err) {
+        console.error("❌ Tracking API Error:", err.message);
+        res.status(500).json({ success: false, message: "Tracking fetch failed" });
     }
-    res.redirect("zhopingo://order-failed");
-  } catch (err) {
-    res.redirect("zhopingo://order-failed");
-  }
 };
 
-// 3. 🔔 WEBHOOK HANDLER (CRITICAL)
-exports.webhook = async (req, res) => {
-  try {
-    console.log("🔔 Webhook Received from Cashfree");
-    
-    // Cashfree அனுப்பும் Raw Body-யை JSON-ஆக மாற்றுகிறோம்
-    const rawBody = req.body.toString();
-    const payload = JSON.parse(rawBody);
-    
-    const cfOrderId = payload.data?.order?.order_id;
-    const paymentStatus = payload.data?.payment?.payment_status;
-
-    if (paymentStatus === "SUCCESS") {
-      const payment = await Payment.findOne({ transactionId: cfOrderId });
-      if (payment && payment.status !== "SUCCESS") {
-        payment.status = "SUCCESS";
-        await payment.save();
-        await Order.findByIdAndUpdate(payment.orderId, { status: "Placed", paymentStatus: "Paid" });
-        console.log("✅ Webhook: Order Updated Successfully");
-      }
-    }
-
-    // 🎯 Cashfree-க்கு பதில் அனுப்புதல் (கட்டாயம்)
-    res.status(200).send("OK");
-  } catch (err) {
-    console.error("❌ Webhook Error:", err.message);
-    // எர்ரர் வந்தாலும் Cashfree-க்கு 200 அனுப்புவது நல்லது (Retry-யை தவிர்க்க)
-    res.status(200).send("Error Received");
-  }
-};
-
-// 4. MANUAL VERIFY
-exports.verifyPayment = async (req, res) => {
-  try {
-    const payment = await Payment.findOne({ orderId: req.params.orderId });
-    if (!payment) return res.json({ success: false, status: "Pending" });
-    res.json({ success: true, status: payment.status === "SUCCESS" ? "Paid" : "Pending" });
-  } catch {
-    res.status(500).json({ success: false });
-  }
-};
+/* =====================================================
+    4. DUMMY HANDLERS (Errors thavirkka)
+===================================================== */
+exports.cashfreeReturn = (req, res) => res.redirect("zhopingo://order-success");
+exports.webhook = (req, res) => res.status(200).send("OK");
