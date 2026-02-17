@@ -32,18 +32,18 @@ const createDelhiveryShipment = async (order, customerPhone) => {
         });
         return response.data;
     } catch (error) {
-        console.error("Logistics API Error:", error.message);
+        console.error("Delhivery API Error:", error.response?.data || error.message);
         return null;
     }
 };
 
 /* =====================================================
-    1️⃣ CUSTOMER: Create Order (Blinkit Multi-Seller Architecture)
+    1️⃣ CUSTOMER: Create Order (Stable Multi-Seller Logic)
 ===================================================== */
 exports.createOrder = async (req, res) => {
   try {
     const { items, customerId, shippingAddress, paymentMethod } = req.body;
-    if (!items?.length) return res.status(400).json({ success: false, message: "Cart is empty" });
+    if (!items?.length) return res.status(400).json({ success: false, error: "Cart is empty" });
 
     const deliveryConfig = await DeliveryCharge.findOne({ pincode: shippingAddress.pincode });
     const BASE_SHIPPING = deliveryConfig ? deliveryConfig.charge : 40;
@@ -54,7 +54,6 @@ exports.createOrder = async (req, res) => {
     let sellingPriceTotal = 0;
     const handlingCharge = 2; 
 
-    // 🔄 Grouping Items by Seller to prevent duplicate shipping counts
     const processedItems = items.map(item => {
       const price = Number(item.price) || 0;
       const mrp = Number(item.mrp) || price;
@@ -63,7 +62,7 @@ exports.createOrder = async (req, res) => {
       mrpTotal += mrp * qty;
       sellingPriceTotal += price * qty;
       
-      // ✅ Fallback Seller ID (Ensures no 500 error if sellerId is missing)
+      // ✅ Fallback Seller ID (500 Error தவிர்க்க)
       const sId = (item.sellerId || item.seller || "698089341dc4f60f934bb5eb").toString();
 
       if (!sellerWiseSplit[sId]) {
@@ -76,8 +75,8 @@ exports.createOrder = async (req, res) => {
       }
       sellerWiseSplit[sId].sellerSubtotal += (price * qty);
 
-      // ✅ Safe Image URL construction
-      let finalImg = item.image || "";
+      // ✅ Image construction
+      let finalImg = item.image || (item.images && item.images[0]) || "";
       if (finalImg && !finalImg.startsWith('http')) {
           const parts = finalImg.split('/');
           finalImg = `${DOMAIN}/uploads/products/${parts[parts.length - 1]}`;
@@ -92,7 +91,6 @@ exports.createOrder = async (req, res) => {
       };
     });
 
-    // 🚚 Logic: Seller wise free delivery check
     let totalCustomerShipping = 0;
     Object.keys(sellerWiseSplit).forEach(sId => {
       if (sellerWiseSplit[sId].sellerSubtotal < FREE_THRESHOLD) {
@@ -117,19 +115,20 @@ exports.createOrder = async (req, res) => {
       shippingAddress,
       status: 'Pending',
       paymentStatus: 'Pending',
-      arrivedIn: "Awaiting Payment"
+      arrivedIn: shippingAddress.arrivedIn || "Scheduled"
     });
 
     await newOrder.save();
     res.status(201).json({ success: true, order: newOrder });
+
   } catch (err) {
-    console.error("Critical: Order Creation Failed:", err.message);
-    res.status(500).json({ success: false, error: "Database Sync Error" });
+    console.error("Critical Backend Error:", err.message);
+    res.status(500).json({ success: false, error: "Order logic failed. Database sync error." });
   }
 };
 
 /* =====================================================
-    2️⃣ BYPASS: Payment Success & Delhivery Trigger
+    2️⃣ BYPASS & STATUS UPDATE
 ===================================================== */
 exports.bypassPaymentAndShip = async (req, res) => {
     try {
@@ -140,56 +139,18 @@ exports.bypassPaymentAndShip = async (req, res) => {
         order.status = "Placed";
         order.paymentStatus = "Paid";
 
+        // ✅ Delhivery Booking
         const delhiRes = await createDelhiveryShipment(order, user?.phone || "0000000000");
         if (delhiRes?.packages?.[0]) {
             order.awbNumber = delhiRes.packages[0].waybill;
-            order.arrivedIn = order.shippingAddress?.arrivedIn || "Scheduled";
+            order.arrivedIn = order.shippingAddress?.arrivedIn || "Fast Delivery";
         }
         
         await order.save();
         res.json({ success: true, message: "Success", data: order });
-    } catch (err) { 
-        res.status(500).json({ success: false, error: err.message }); 
-    }
-};
-
-/* =====================================================
-    3️⃣ DEEP POPULATED GETTERS (Seller + Product + Customer)
-===================================================== */
-exports.getMyOrders = async (req, res) => {
-    try {
-        const orders = await Order.find({ customerId: req.params.userId })
-            .populate('items.productId') 
-            .populate({ path: 'sellerSplitData.sellerId', select: 'shopName logo phone' })
-            .sort({ createdAt: -1 });
-        res.json({ success: true, data: orders });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
-exports.getOrders = async (req, res) => {
-    try {
-        const orders = await Order.find()
-            .populate('customerId', 'name phone email')
-            .populate('items.productId')
-            .populate({ path: 'sellerSplitData.sellerId', select: 'shopName phone' })
-            .sort({ createdAt: -1 });
-        res.json({ success: true, data: orders });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
-};
-
-exports.getSellerOrders = async (req, res) => {
-    try {
-        const orders = await Order.find({ "items.sellerId": req.params.sellerId, status: { $ne: 'Pending' } })
-            .populate('customerId', 'name phone')
-            .populate('items.productId')
-            .sort({ createdAt: -1 });
-        res.json({ success: true, data: orders });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
-};
-
-/* =====================================================
-    4️⃣ COMMON ACTIONS
-===================================================== */
 exports.updateOrderStatus = async (req, res) => {
   try {
     const { status } = req.body;
@@ -223,9 +184,48 @@ exports.updateOrderStatus = async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
+/* =====================================================
+    3️⃣ DEEP DATA RETRIEVAL (Populated)
+===================================================== */
+exports.getMyOrders = async (req, res) => {
+    try {
+        const orders = await Order.find({ customerId: req.params.userId })
+            .populate('items.productId')
+            .populate({ path: 'sellerSplitData.sellerId', select: 'shopName phone logo' })
+            .sort({ createdAt: -1 });
+        res.json({ success: true, data: orders });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+};
+
+exports.getOrders = async (req, res) => {
+    try {
+        const orders = await Order.find()
+            .populate('customerId', 'name phone email')
+            .populate('items.productId')
+            .populate({ path: 'sellerSplitData.sellerId', select: 'shopName phone' })
+            .sort({ createdAt: -1 });
+        res.json({ success: true, data: orders });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+};
+
+exports.getSellerOrders = async (req, res) => {
+    try {
+        const orders = await Order.find({ "items.sellerId": req.params.sellerId, status: { $ne: 'Pending' } })
+            .populate('customerId', 'name phone')
+            .populate('items.productId')
+            .sort({ createdAt: -1 });
+        res.json({ success: true, data: orders });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+};
+
+/* =====================================================
+    4️⃣ COMMON ACTIONS
+===================================================== */
 exports.cancelOrder = async (req, res) => {
   try {
     const order = await Order.findById(req.params.orderId);
+    if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+
     if (order.paymentStatus === 'Paid') {
       const user = await User.findById(order.customerId);
       if (user) {
