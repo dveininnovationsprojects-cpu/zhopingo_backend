@@ -36,10 +36,6 @@ const createDelhiveryShipment = async (order, customerPhone) => {
         return null;
     }
 };
-
-/* =====================================================
-    1️⃣ CUSTOMER: Create Order (Robust Multi-Seller Logic)
-===================================================== */
 exports.createOrder = async (req, res) => {
   try {
     const { items, customerId, shippingAddress, paymentMethod } = req.body;
@@ -54,7 +50,6 @@ exports.createOrder = async (req, res) => {
     let sellingPriceTotal = 0;
     const handlingCharge = 2; 
 
-    // ✅ Step 1: Process Items & Group by Seller
     const processedItems = items.map(item => {
       const price = Number(item.price) || 0;
       const mrp = Number(item.mrp) || price;
@@ -63,20 +58,21 @@ exports.createOrder = async (req, res) => {
       mrpTotal += mrp * qty;
       sellingPriceTotal += price * qty;
       
-      // Fallback ID to prevent 500 server error
-      const sId = (item.sellerId || item.seller || "698089341dc4f60f934bb5eb").toString();
+      // 🔥 CRITICAL FIX: இங்க தான் தப்பு நடக்குது. 
+      // ஒருவேளை sellerId ஆப்ஜெக்ட்டா வந்தா அதோட _id-ஐ மட்டும் எடுக்கணும்.
+      let rawSellerId = item.sellerId || item.seller || "698089341dc4f60f934bb5eb";
+      const sId = (typeof rawSellerId === 'object' ? rawSellerId._id : rawSellerId).toString();
 
       if (!sellerWiseSplit[sId]) {
         sellerWiseSplit[sId] = {
-          sellerId: sId,
+          sellerId: sId, // இப்போ இது "[object Object]" ஆகாது, சரியான ID-ஆ இருக்கும்
           sellerSubtotal: 0,
-          actualShippingCost: BASE_SHIPPING, // Cost for delivery partner
-          customerChargedShipping: 0 // Cost charged to customer
+          actualShippingCost: BASE_SHIPPING,
+          customerChargedShipping: 0 
         };
       }
       sellerWiseSplit[sId].sellerSubtotal += (price * qty);
 
-      // Image Path Construction
       let finalImg = item.image || "";
       if (finalImg && !finalImg.startsWith('http')) {
           const parts = finalImg.split('/');
@@ -92,18 +88,13 @@ exports.createOrder = async (req, res) => {
       };
     });
 
-    // ✅ Step 2: Calculate Seller-wise Shipping (Free Delivery Logic)
     let totalCustomerShipping = 0;
     Object.keys(sellerWiseSplit).forEach(sId => {
       if (sellerWiseSplit[sId].sellerSubtotal < FREE_THRESHOLD) {
         sellerWiseSplit[sId].customerChargedShipping = BASE_SHIPPING;
         totalCustomerShipping += BASE_SHIPPING;
-      } else {
-        sellerWiseSplit[sId].customerChargedShipping = 0; // Seller Funded Free Delivery
       }
     });
-
-    const grandTotal = sellingPriceTotal + handlingCharge + totalCustomerShipping;
 
     const newOrder = new Order({
       customerId,
@@ -116,10 +107,10 @@ exports.createOrder = async (req, res) => {
         deliveryCharge: totalCustomerShipping,
         productDiscount: mrpTotal - sellingPriceTotal
       },
-      totalAmount: grandTotal,
+      totalAmount: sellingPriceTotal + handlingCharge + totalCustomerShipping,
       paymentMethod,
       shippingAddress,
-      status: 'Placed', // Direct Placed after creation
+      status: 'Placed',
       paymentStatus: 'Pending',
       arrivedIn: "12 mins"
     });
@@ -128,11 +119,10 @@ exports.createOrder = async (req, res) => {
     res.status(201).json({ success: true, order: newOrder });
 
   } catch (err) {
-    console.error("Critical Order Error:", err);
+    console.error("Order Fail Detail:", err);
     res.status(500).json({ success: false, error: err.message });
   }
 };
-
 /* =====================================================
     2️⃣ BYPASS: Payment Success & Logistics Trigger
 ===================================================== */
