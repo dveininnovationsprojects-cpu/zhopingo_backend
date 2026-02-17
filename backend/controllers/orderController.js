@@ -123,9 +123,6 @@ exports.createOrder = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
-/* =====================================================
-    2️⃣ BYPASS: Payment Success & Logistics Trigger
-===================================================== */
 exports.bypassPaymentAndShip = async (req, res) => {
     try {
         const { orderId } = req.params;
@@ -136,17 +133,23 @@ exports.bypassPaymentAndShip = async (req, res) => {
         order.status = "Placed";
         order.paymentStatus = "Paid";
 
-        // ✅ Book Shipment
+        // 🚚 டெல்லிவரிக்கு ஆர்டரை அனுப்புறோம்
         const delhiRes = await createDelhiveryShipment(order, user?.phone || "0000000000");
-        if (delhiRes?.packages?.[0]) {
-            order.awbNumber = delhiRes.packages[0].waybill;
+        
+        // இங்கதான் செக் பண்ணனும் - டெல்லிவரி Response வருதான்னு
+        if (delhiRes && delhiRes.packages && delhiRes.packages[0]) {
+            order.awbNumber = delhiRes.packages[0].waybill; 
+            console.log("AWB Generated:", order.awbNumber);
+        } else {
+            console.log("Delhivery API failed to give AWB. Check Delhivery Token/Balance.");
         }
         
         await order.save();
-        res.json({ success: true, message: "Success", data: order });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+        res.json({ success: true, message: "Payment Success & AWB Updated", data: order });
+    } catch (err) { 
+        res.status(500).json({ success: false, error: err.message }); 
+    }
 };
-
 /* =====================================================
     3️⃣ UPDATE STATUS: Delivered & Seller Payout
 ===================================================== */
@@ -192,7 +195,11 @@ exports.getMyOrders = async (req, res) => {
     try {
         const orders = await Order.find({ customerId: req.params.userId })
             .populate('items.productId')
-            .populate({ path: 'sellerSplitData.sellerId', select: 'shopName phone logo' })
+            .populate({
+                path: 'items.sellerId', 
+                model: 'Seller', 
+                select: 'shopName ownerName phone' 
+            })
             .sort({ createdAt: -1 });
         res.json({ success: true, data: orders });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
