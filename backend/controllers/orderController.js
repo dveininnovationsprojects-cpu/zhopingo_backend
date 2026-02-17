@@ -45,71 +45,30 @@ const createDelhiveryShipment = async (order, customerPhone) => {
     }
 };
 
-/* =====================================================
-    1️⃣ CUSTOMER: Create Order (Fixed 500 Error)
-===================================================== */
 exports.createOrder = async (req, res) => {
   try {
     const { items, customerId, shippingAddress, paymentMethod } = req.body;
 
-    // 🌟 பின்கோடு வைத்து டெலிவரி சார்ஜ் எடுக்கிறோம்
-    const deliveryConfig = await DeliveryCharge.findOne({ pincode: shippingAddress.pincode });
-    const BASE_SHIPPING = deliveryConfig ? deliveryConfig.charge : 40;
-
-    let sellerWiseSplit = {};
-    let mrpTotal = 0;
-    let sellingPriceTotal = 0;
-
-    // 🌟 Items-ஐ முறைப்படி மேப் செய்கிறோம் (Validation-உடன்)
-    const processedItems = items.map(item => {
-      const rawSellerId = item.sellerId || item.seller || "698089341dc4f60f934bb5eb";
-      const validSellerId = new mongoose.Types.ObjectId(rawSellerId);
-
-      mrpTotal += (Number(item.mrp) || Number(item.price)) * item.quantity;
-      sellingPriceTotal += Number(item.price) * item.quantity;
-
-      const sIdStr = validSellerId.toString();
-      if (!sellerWiseSplit[sIdStr]) {
-        sellerWiseSplit[sIdStr] = {
-          sellerId: validSellerId,
-          sellerSubtotal: 0,
-          actualShippingCost: BASE_SHIPPING,
-          customerChargedShipping: 0
-        };
-      }
-      sellerWiseSplit[sIdStr].sellerSubtotal += (Number(item.price) * item.quantity);
-
-      return {
-        productId: new mongoose.Types.ObjectId(item.productId || item._id),
-        name: item.name,
-        quantity: Number(item.quantity),
-        price: Number(item.price),
-        mrp: Number(item.mrp) || Number(item.price),
-        sellerId: validSellerId,
-        image: item.image || ""
-      };
-    });
-
-    let totalShipping = 0;
-    Object.keys(sellerWiseSplit).forEach(sId => {
-        if(sellerWiseSplit[sId].sellerSubtotal < 500) {
-            sellerWiseSplit[sId].customerChargedShipping = BASE_SHIPPING;
-            totalShipping += BASE_SHIPPING;
-        }
-    });
+    // 🌟 முக்கியமானது: String IDs-ஐ Mongoose ObjectId-ஆக மாற்றுகிறோம்
+    const processedItems = items.map(item => ({
+      productId: new mongoose.Types.ObjectId(item.productId),
+      name: item.name,
+      quantity: Number(item.quantity),
+      price: Number(item.price),
+      mrp: Number(item.mrp || item.price),
+      sellerId: new mongoose.Types.ObjectId(item.sellerId),
+      image: item.image || ""
+    }));
 
     const newOrder = new Order({
-      customerId: new mongoose.Types.ObjectId(customerId),
+      customerId: new mongoose.Types.ObjectId(customerId), // 👈 இங்கே தான் 500 எர்ரர் வருகிறது
       items: processedItems,
-      sellerSplitData: Object.values(sellerWiseSplit),
       billDetails: {
-        mrpTotal,
-        itemTotal: sellingPriceTotal,
-        handlingCharge: 2,
-        deliveryCharge: totalShipping,
-        productDiscount: mrpTotal - sellingPriceTotal
+        itemTotal: items.reduce((total, i) => total + (i.price * i.quantity), 0),
+        deliveryCharge: 40,
+        handlingCharge: 2
       },
-      totalAmount: sellingPriceTotal + 2 + totalShipping,
+      totalAmount: items.reduce((total, i) => total + (i.price * i.quantity), 0) + 42,
       paymentMethod,
       shippingAddress,
       status: 'Placed'
@@ -118,7 +77,7 @@ exports.createOrder = async (req, res) => {
     await newOrder.save();
     res.status(201).json({ success: true, order: newOrder });
   } catch (err) {
-    console.error("Order Creation Error:", err.message);
+    console.error("Order Create Error:", err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 };
