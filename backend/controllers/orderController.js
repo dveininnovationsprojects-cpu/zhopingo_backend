@@ -5,14 +5,11 @@ const Payout = require('../models/Payout');
 const axios = require('axios');
 const mongoose = require('mongoose');
 
-// 🔑 Config
 const DELHI_TOKEN = "9b44fee45422e3fe8073dee9cfe7d51f9fff7629";
 const DELHI_URL_CREATE = "https://staging-express.delhivery.com/api/cmu/create.json";
 const DELHI_URL_TRACK = "https://track.delhivery.com/api/v1/packages/json/";
 
-/* =====================================================
-    HELPER: Delhivery Shipment Creation (TEST MODE)
-===================================================== */
+
 const createDelhiveryShipment = async (order, customerPhone) => {
     try {
         const shipmentData = {
@@ -46,9 +43,7 @@ const createDelhiveryShipment = async (order, customerPhone) => {
     }
 };
 
-/* =====================================================
-    1️⃣ CUSTOMER: Create Order
-===================================================== */
+
 exports.createOrder = async (req, res) => {
   try {
     const { items, customerId, shippingAddress, paymentMethod } = req.body;
@@ -62,7 +57,7 @@ exports.createOrder = async (req, res) => {
     let sellingPriceTotal = 0;
 
     const processedItems = items.map(item => {
-      // 🌟 ID-ஐ முறையாக ObjectId ஆக மாற்றுகிறோம்
+    
       const rawId = item.sellerId || item.seller || "698089341dc4f60f934bb5eb";
       const validSellerId = new mongoose.Types.ObjectId(rawId?._id || rawId);
 
@@ -100,7 +95,7 @@ exports.createOrder = async (req, res) => {
     });
 
     const newOrder = new Order({
-      customerId: new mongoose.Types.ObjectId(customerId), // 👈 ID Conversion
+      customerId: new mongoose.Types.ObjectId(customerId), 
       items: processedItems,
       sellerSplitData: Object.values(sellerWiseSplit),
       billDetails: {
@@ -115,9 +110,9 @@ exports.createOrder = async (req, res) => {
       shippingAddress: {
         receiverName: shippingAddress.receiverName,
         flatNo: shippingAddress.flatNo,
-        addressLine: shippingAddress.addressLine, // Schema match
+        addressLine: shippingAddress.addressLine, 
         pincode: shippingAddress.pincode,
-        label: shippingAddress.label // Schema match
+        label: shippingAddress.label 
       },
       status: 'Placed'
     });
@@ -129,9 +124,7 @@ exports.createOrder = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
-/* =====================================================
-    2️⃣ BYPASS: Test Payment Success & AWB Assign
-===================================================== */
+
 exports.bypassPaymentAndShip = async (req, res) => {
     try {
         const { orderId } = req.params;
@@ -158,9 +151,7 @@ exports.bypassPaymentAndShip = async (req, res) => {
     }
 };
 
-/* =====================================================
-    3️⃣ GETTERS: My Orders, All Orders, Seller Orders
-===================================================== */
+
 exports.getMyOrders = async (req, res) => {
     try {
         const orders = await Order.find({ customerId: req.params.userId })
@@ -190,9 +181,6 @@ exports.getSellerOrders = async (req, res) => {
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
-/* =====================================================
-    4️⃣ ACTIONS: Update Status, Cancel, Track
-===================================================== */
 exports.updateOrderStatus = async (req, res) => {
   try {
     const { status } = req.body;

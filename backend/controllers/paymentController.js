@@ -1,44 +1,20 @@
 const axios = require("axios");
+const crypto = require("crypto");
 const Order = require("../models/Order");
 const User = require("../models/User");
 
-/* =====================================================
-   🔐 PHONEPE CONFIG (OAUTH VERSION)
-===================================================== */
 
-const CLIENT_ID = "M237ACUYGH2JB_2602171705";
-const CLIENT_SECRET = "YzU3YTRiNWItMDUxMC00YTIwLWI1MTctZmQyNzQzZmZjMDEw";
-const CLIENT_VERSION = 1;
 
-// Sandbox Base URL
-const PHONEPE_BASE_URL = "https://api-preprod.phonepe.com/apis/pg-sandbox";
 
-/* =====================================================
-   🔑 GENERATE ACCESS TOKEN
-===================================================== */
+const MERCHANT_ID = "M237ACUYGH2JB_2602171705";
+const SALT_KEY = "c57a4b5e-0510-4a20-b517-fd2743ffc010";
 
-const generateAccessToken = async () => {
-  try {
-    const response = await axios.post(
-      `${PHONEPE_BASE_URL}/v1/oauth/token`,
-      {
-        client_id: CLIENT_ID,
-        client_secret: CLIENT_SECRET,
-        client_version: CLIENT_VERSION,
-        grant_type: "client_credentials",
-      }
-    );
+const SALT_INDEX = 1;
 
-    return response.data.access_token;
-  } catch (error) {
-    console.error("❌ TOKEN ERROR:", error.response?.data || error.message);
-    throw error;
-  }
-};
+const PHONEPE_BASE_URL =
+  "https://api-preprod.phonepe.com/apis/pg-sandbox";
 
-/* =====================================================
-   🚚 DELHIVERY CONFIG
-===================================================== */
+
 
 const DELHI_TOKEN = "9b44fee45422e3fe8073dee9cfe7d51f9fff7629";
 const DELHI_URL_CREATE =
@@ -46,9 +22,7 @@ const DELHI_URL_CREATE =
 const DELHI_URL_TRACK =
   "https://staging-express.delhivery.com/api/v1/packages/json/";
 
-/* =====================================================
-   🚚 CREATE DELHIVERY SHIPMENT
-===================================================== */
+
 
 const createDelhiveryShipment = async (order, customerPhone) => {
   try {
@@ -82,14 +56,14 @@ const createDelhiveryShipment = async (order, customerPhone) => {
 
     return response.data;
   } catch (error) {
-    console.error("❌ Delhivery Error:", error.response?.data || error.message);
+    console.error(
+     
+      error.response?.data || error.message
+    );
     return null;
   }
 };
 
-/* =====================================================
-   1️⃣ CREATE PAYMENT SESSION (OAUTH)
-===================================================== */
 
 exports.createSession = async (req, res) => {
   try {
@@ -102,14 +76,12 @@ exports.createSession = async (req, res) => {
         message: "Order not found",
       });
 
-    const accessToken = await generateAccessToken();
-
     const transactionId = `TXN_${Date.now()}`;
     order.paymentId = transactionId;
     await order.save();
 
     const payload = {
-      merchantId: CLIENT_ID,
+      merchantId: MERCHANT_ID,
       merchantTransactionId: transactionId,
       merchantUserId: order.customerId.toString(),
       amount: Math.round(order.totalAmount * 100),
@@ -121,13 +93,26 @@ exports.createSession = async (req, res) => {
       },
     };
 
+    const base64Payload = Buffer.from(
+      JSON.stringify(payload)
+    ).toString("base64");
+
+
+    const checksum =
+      crypto
+        .createHash("sha256")
+        .update(base64Payload + "/pg/v1/pay" + SALT_KEY)
+        .digest("hex") +
+      "###" +
+      SALT_INDEX;
+
     const response = await axios.post(
       `${PHONEPE_BASE_URL}/pg/v1/pay`,
-      payload,
+      { request: base64Payload },
       {
         headers: {
-          Authorization: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
+          "X-VERIFY": checksum,
         },
       }
     );
@@ -136,8 +121,12 @@ exports.createSession = async (req, res) => {
       success: true,
       url: response.data.data.instrumentResponse.redirectInfo.url,
     });
+
   } catch (error) {
-    console.error("❌ CREATE SESSION ERROR:", error.response?.data || error.message);
+    console.error(
+      " CREATE SESSION ERROR:",
+      error.response?.data || error.message
+    );
 
     return res.status(500).json({
       success: false,
@@ -146,9 +135,6 @@ exports.createSession = async (req, res) => {
   }
 };
 
-/* =====================================================
-   2️⃣ VERIFY PAYMENT
-===================================================== */
 
 exports.verifyPayment = async (req, res) => {
   try {
@@ -161,24 +147,35 @@ exports.verifyPayment = async (req, res) => {
         message: "Order not found",
       });
 
-    const accessToken = await generateAccessToken();
+    const statusPath = `/pg/v1/status/${MERCHANT_ID}/${order.paymentId}`;
+
+    const checksum =
+      crypto
+        .createHash("sha256")
+        .update(statusPath + SALT_KEY)
+        .digest("hex") +
+      "###" +
+      SALT_INDEX;
 
     const response = await axios.get(
-      `${PHONEPE_BASE_URL}/pg/v1/status/${CLIENT_ID}/${order.paymentId}`,
+      `${PHONEPE_BASE_URL}${statusPath}`,
       {
         headers: {
-          Authorization: `Bearer ${accessToken}`,
+          "X-VERIFY": checksum,
+          "X-MERCHANT-ID": MERCHANT_ID,
         },
       }
     );
 
-    if (response.data.success && response.data.code === "PAYMENT_SUCCESS") {
+    if (
+      response.data.success &&
+      response.data.code === "PAYMENT_SUCCESS"
+    ) {
       const user = await User.findById(order.customerId);
 
       order.paymentStatus = "Paid";
       order.status = "Placed";
 
-      // 🚚 Auto Ship
       const delhiRes = await createDelhiveryShipment(
         order,
         user?.phone || "9876543210"
@@ -201,8 +198,12 @@ exports.verifyPayment = async (req, res) => {
       success: false,
       message: "Payment incomplete",
     });
+
   } catch (error) {
-    console.error("❌ VERIFY ERROR:", error.response?.data || error.message);
+    console.error(
+      " VERIFY ERROR:",
+      error.response?.data || error.message
+    );
 
     return res.status(500).json({
       success: false,
@@ -211,9 +212,6 @@ exports.verifyPayment = async (req, res) => {
   }
 };
 
-/* =====================================================
-   3️⃣ TRACK ORDER
-===================================================== */
 
 exports.trackOrder = async (req, res) => {
   try {
@@ -232,6 +230,7 @@ exports.trackOrder = async (req, res) => {
       success: true,
       tracking: response.data,
     });
+
   } catch (error) {
     res.status(500).json({
       success: false,
@@ -240,20 +239,14 @@ exports.trackOrder = async (req, res) => {
   }
 };
 
-/* =====================================================
-   4️⃣ PHONEPE RETURN
-===================================================== */
-
 exports.phonepeReturn = async (req, res) => {
   const { orderId } = req.params;
   res.redirect(`zhopingo://payment-verify/${orderId}`);
 };
 
-/* =====================================================
-   5️⃣ WEBHOOK
-===================================================== */
+
 
 exports.webhook = async (req, res) => {
-  console.log("📩 PhonePe Webhook:", req.body);
+  console.log(" PhonePe Webhook:", req.body);
   res.status(200).send("OK");
 };

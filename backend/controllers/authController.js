@@ -74,36 +74,94 @@ exports.sendOTP = async (req, res) => {
 
 
 
+// exports.loginWithOTP = async (req, res) => {
+//   try {
+//     const { phone, otp } = req.body;
+    
+//     const cleanPhone = phone.replace("+", "");
+
+//     const storedOtp = otpStore.get(cleanPhone);
+
+  
+//     const isCorrectOtp = (storedOtp && storedOtp === otp);
+
+//     if (!isCorrectOtp) {
+//       return res.status(400).json({ success: false, message: "Invalid OTP" });
+//     }
+
+//     otpStore.delete(cleanPhone);
+
+   
+//     let user = await User.findOne({ phone: cleanPhone });
+//     if (!user) {
+//       user = await User.create({ phone: cleanPhone, role: "customer" });
+//     }
+
+   
+//     const token = jwt.sign(
+//       { id: user._id, role: user.role },
+//       JWT_SECRET,
+//       { expiresIn: "7d" }
+//     );
+
+
+//     const cookieOptions = {
+//       expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+//       httpOnly: true, 
+//       secure: process.env.NODE_ENV === "production", 
+//       sameSite: "Lax" 
+//     };
+
+ 
+//     res.status(200).cookie("token", token, cookieOptions).json({
+//       success: true,
+//       token: token, 
+//       user: {
+//         id: user._id,
+//         phone: user.phone,
+//         role: user.role,
+//         addressBook: user.addressBook || []
+//       }
+//     });
+
+//   } catch (err) {
+//     res.status(500).json({ success: false, error: err.message });
+//   }
+// };
+
+
 exports.loginWithOTP = async (req, res) => {
   try {
     const { phone, otp } = req.body;
     
     const cleanPhone = phone.replace("+", "");
 
+    // 🌟 டெஸ்டிங்கிற்காக மட்டும்: 0123 என்று கொடுத்தால் லாகின் ஆகும்
+    const isTestOtp = (otp === "0123"); 
+    
+    // பழையபடி வாட்ஸ்அப் மூலம் வந்த OTP-யையும் செக் செய்கிறோம்
     const storedOtp = otpStore.get(cleanPhone);
-
-  
-    const isCorrectOtp = (storedOtp && storedOtp === otp);
+    const isCorrectOtp = isTestOtp || (storedOtp && storedOtp === otp);
 
     if (!isCorrectOtp) {
       return res.status(400).json({ success: false, message: "Invalid OTP" });
     }
 
+    // OTP சரியாக இருந்தால், ஸ்டோரில் இருந்து நீக்கிவிடலாம்
     otpStore.delete(cleanPhone);
 
-   
+    // பயனர் இருக்கிறாரா எனப் பார்த்து, இல்லையென்றால் உருவாக்குகிறோம்
     let user = await User.findOne({ phone: cleanPhone });
     if (!user) {
       user = await User.create({ phone: cleanPhone, role: "customer" });
     }
 
-   
+    // JWT Token உருவாக்குகிறோம்
     const token = jwt.sign(
       { id: user._id, role: user.role },
       JWT_SECRET,
       { expiresIn: "7d" }
     );
-
 
     const cookieOptions = {
       expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
@@ -112,7 +170,6 @@ exports.loginWithOTP = async (req, res) => {
       sameSite: "Lax" 
     };
 
- 
     res.status(200).cookie("token", token, cookieOptions).json({
       success: true,
       token: token, 
