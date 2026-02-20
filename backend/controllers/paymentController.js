@@ -1,252 +1,163 @@
-const axios = require("axios");
-const crypto = require("crypto");
+const {
+  StandardCheckoutClient,
+  Env,
+  StandardCheckoutPayRequest
+} = require("pg-sdk-node");
+
 const Order = require("../models/Order");
 const User = require("../models/User");
+const axios = require("axios");
 
+/* =====================================================
+   🔑 SDK INITIALIZATION
+===================================================== */
+const client = StandardCheckoutClient.getInstance(
+  process.env.PHONEPE_CLIENT_ID,
+  process.env.PHONEPE_CLIENT_SECRET,
+  parseInt(process.env.PHONEPE_CLIENT_VERSION),
+  process.env.PHONEPE_ENV === "PRODUCTION" ? Env.PRODUCTION : Env.SANDBOX
+);
 
-
-
-const MERCHANT_ID = "M237ACUYGH2JB_2602171705";
-const SALT_KEY = "c57a4b5e-0510-4a20-b517-fd2743ffc010";
-
-const SALT_INDEX = 1;
-
-const PHONEPE_BASE_URL =
-  "https://api-preprod.phonepe.com/apis/pg-sandbox";
-
-
-
-const DELHI_TOKEN = "9b44fee45422e3fe8073dee9cfe7d51f9fff7629";
-const DELHI_URL_CREATE =
-  "https://staging-express.delhivery.com/api/cmu/create.json";
-const DELHI_URL_TRACK =
-  "https://staging-express.delhivery.com/api/v1/packages/json/";
-
-
-
+/* =====================================================
+   🚚 DELHIVERY HELPER
+===================================================== */
 const createDelhiveryShipment = async (order, customerPhone) => {
   try {
     const shipmentData = {
-      shipments: [
-        {
-          name: order.shippingAddress?.receiverName || "Customer",
-          add: `${order.shippingAddress?.flatNo || ""}, ${
-            order.shippingAddress?.addressLine || ""
-          }`,
-          pin: order.shippingAddress?.pincode,
-          phone: customerPhone,
-          order: order._id.toString(),
-          payment_mode: "Pre-paid",
-          amount: order.totalAmount,
-          weight: 0.5,
-          hsn_code: "6109",
-        },
-      ],
+      shipments: [{
+        name: order.shippingAddress?.receiverName || "Customer",
+        add: `${order.shippingAddress?.flatNo || ""}, ${order.shippingAddress?.addressLine || ""}`,
+        pin: order.shippingAddress?.pincode,
+        phone: customerPhone,
+        order: order._id.toString(),
+        payment_mode: "Pre-paid",
+        amount: order.totalAmount,
+        weight: 0.5,
+        hsn_code: "6109",
+      }],
       pickup_location: { name: "benjamin" },
     };
 
-    const finalData = `format=json&data=${JSON.stringify(shipmentData)}`;
-
-    const response = await axios.post(DELHI_URL_CREATE, finalData, {
-      headers: {
-        Authorization: `Token ${DELHI_TOKEN}`,
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-    });
-
+    const response = await axios.post(
+      "https://staging-express.delhivery.com/api/cmu/create.json",
+      `format=json&data=${JSON.stringify(shipmentData)}`,
+      {
+        headers: {
+          Authorization: `Token ${process.env.DELHIVERY_TOKEN}`,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+      }
+    );
     return response.data;
   } catch (error) {
-    console.error(
-     
-      error.response?.data || error.message
-    );
+    console.error("❌ Delhivery Error:", error.message);
     return null;
   }
 };
 
-
+/* =====================================================
+   1️⃣ CREATE SESSION (URL-ஐக் கண்டுபிடிப்பதற்கான Final Code)
+===================================================== */
 exports.createSession = async (req, res) => {
   try {
     const { orderId } = req.body;
-
     const order = await Order.findById(orderId);
-    if (!order)
-      return res.status(404).json({
-        success: false,
-        message: "Order not found",
-      });
+    if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
-    const transactionId = `TXN_${Date.now()}`;
-    order.paymentId = transactionId;
-    await order.save();
+    // 🌟 டாக்குமெண்ட் படி Builder Pattern
+    const request = StandardCheckoutPayRequest.builder()
+      .merchantOrderId(order._id.toString())
+      .amount(Math.round(order.totalAmount * 100))
+      .redirectUrl(`${process.env.BASE_URL}/api/v1/payments/phonepe-return/${orderId}`)
+      .build();
 
-    const payload = {
-      merchantId: MERCHANT_ID,
-      merchantTransactionId: transactionId,
-      merchantUserId: order.customerId.toString(),
-      amount: Math.round(order.totalAmount * 100),
-      redirectUrl: `https://api.zhopingo.in/api/v1/payments/phonepe-return/${orderId}`,
-      redirectMode: "POST",
-      callbackUrl: `https://api.zhopingo.in/api/v1/payments/webhook`,
-      paymentInstrument: {
-        type: "PAY_PAGE",
-      },
-    };
+    const response = await client.pay(request);
 
-    const base64Payload = Buffer.from(
-      JSON.stringify(payload)
-    ).toString("base64");
+    // 🔍 Debugging: உன் கன்சோலில் செக் பண்ணு என்ன டேட்டா வருதுன்னு
+    console.log("FULL SDK RESPONSE:", JSON.stringify(response, null, 2));
 
+    // 🛑 SDK வெர்ஷன் பொறுத்து URL இந்த 3 இடங்களில் ஏதோ ஒன்றில் இருக்கும்
+    const checkoutUrl = response.redirect_url || 
+                        response.redirectUrl || 
+                        (response.data && response.data.instrumentResponse && response.data.instrumentResponse.redirectInfo.url);
 
-    const checksum =
-      crypto
-        .createHash("sha256")
-        .update(base64Payload + "/pg/v1/pay" + SALT_KEY)
-        .digest("hex") +
-      "###" +
-      SALT_INDEX;
+    // ஆர்டர் ஐடியையும் அதேபோல் எடுக்கிறோம்
+    const phonepeOrderId = response.order_id || response.orderId;
 
-    const response = await axios.post(
-      `${PHONEPE_BASE_URL}/pg/v1/pay`,
-      { request: base64Payload },
-      {
-        headers: {
-          "Content-Type": "application/json",
-          "X-VERIFY": checksum,
-        },
-      }
-    );
+    if (phonepeOrderId) {
+        order.paymentId = phonepeOrderId;
+        await order.save();
+    }
 
-    return res.json({
+    // 🚀 இப்போ Postman-ல் செக் பண்ணு, URL கண்டிப்பாக வரும்!
+    res.json({
       success: true,
-      url: response.data.data.instrumentResponse.redirectInfo.url,
+      url: checkoutUrl, 
+      phonepeOrderId: phonepeOrderId,
+      state: response.state || "PENDING"
     });
 
   } catch (error) {
-    console.error(
-      " CREATE SESSION ERROR:",
-      error.response?.data || error.message
-    );
-
-    return res.status(500).json({
-      success: false,
-      error: error.response?.data || error.message,
-    });
+    console.error("❌ CREATE SESSION ERROR:", error.message);
+    res.status(500).json({ success: false, error: error.message });
   }
 };
 
-
+/* =====================================================
+   2️⃣ VERIFY PAYMENT (Status Check)
+===================================================== */
 exports.verifyPayment = async (req, res) => {
   try {
     const { orderId } = req.params;
-
     const order = await Order.findById(orderId);
-    if (!order)
-      return res.status(404).json({
-        success: false,
-        message: "Order not found",
-      });
+    if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
-    const statusPath = `/pg/v1/status/${MERCHANT_ID}/${order.paymentId}`;
+    const response = await client.getOrderStatus(order._id.toString());
 
-    const checksum =
-      crypto
-        .createHash("sha256")
-        .update(statusPath + SALT_KEY)
-        .digest("hex") +
-      "###" +
-      SALT_INDEX;
+    if (response.state === "COMPLETED") {
+      if (order.paymentStatus !== "Paid") {
+        const user = await User.findById(order.customerId);
+        order.paymentStatus = "Paid";
+        order.status = "Placed";
 
-    const response = await axios.get(
-      `${PHONEPE_BASE_URL}${statusPath}`,
-      {
-        headers: {
-          "X-VERIFY": checksum,
-          "X-MERCHANT-ID": MERCHANT_ID,
-        },
+        // 🚚 Delhivery Shipment Auto-Creation
+        const delhiRes = await createDelhiveryShipment(order, user?.phone || "9876543210");
+        if (delhiRes?.packages?.length > 0) {
+          order.awbNumber = delhiRes.packages[0].waybill;
+        }
+        await order.save();
       }
-    );
-
-    if (
-      response.data.success &&
-      response.data.code === "PAYMENT_SUCCESS"
-    ) {
-      const user = await User.findById(order.customerId);
-
-      order.paymentStatus = "Paid";
-      order.status = "Placed";
-
-      const delhiRes = await createDelhiveryShipment(
-        order,
-        user?.phone || "9876543210"
-      );
-
-      if (delhiRes?.packages?.length > 0) {
-        order.awbNumber = delhiRes.packages[0].waybill;
-      }
-
-      await order.save();
-
-      return res.json({
-        success: true,
-        message: "Payment Successful & Shipment Created",
-        data: order,
-      });
+      return res.json({ success: true, message: "Payment Verified Successfully", data: order });
     }
 
-    return res.status(400).json({
-      success: false,
-      message: "Payment incomplete",
-    });
+    res.status(400).json({ success: false, message: "Payment Failed or Pending", state: response.state });
 
   } catch (error) {
-    console.error(
-      " VERIFY ERROR:",
-      error.response?.data || error.message
-    );
-
-    return res.status(500).json({
-      success: false,
-      error: error.response?.data || error.message,
-    });
+    console.error("❌ VERIFY ERROR:", error.message);
+    res.status(500).json({ success: false, error: error.message });
   }
 };
 
+/* =====================================================
+   3️⃣ CALLBACK HANDLERS
+===================================================== */
+exports.phonepeReturn = (req, res) => {
+  // மொபைல் ஆப்பில் ரீடைரக்ட் செய்ய Deep Linking
+  res.redirect(`zhopingo://payment-verify/${req.params.orderId}`);
+};
+
+exports.webhook = (req, res) => {
+  console.log("📩 Webhook Received:", req.body);
+  res.status(200).send("OK");
+};
 
 exports.trackOrder = async (req, res) => {
   try {
-    const { awb } = req.params;
-
-    const response = await axios.get(
-      `${DELHI_URL_TRACK}?waybill=${awb}`,
-      {
-        headers: {
-          Authorization: `Token ${DELHI_TOKEN}`,
-        },
-      }
-    );
-
-    res.json({
-      success: true,
-      tracking: response.data,
+    const response = await axios.get(`https://staging-express.delhivery.com/api/v1/packages/json/?waybill=${req.params.awb}`, {
+      headers: { Authorization: `Token ${process.env.DELHIVERY_TOKEN}` },
     });
-
+    res.json({ success: true, tracking: response.data });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: "Tracking failed",
-    });
+    res.status(500).json({ success: false, error: "Tracking failed" });
   }
-};
-
-exports.phonepeReturn = async (req, res) => {
-  const { orderId } = req.params;
-  res.redirect(`zhopingo://payment-verify/${orderId}`);
-};
-
-
-
-exports.webhook = async (req, res) => {
-  console.log(" PhonePe Webhook:", req.body);
-  res.status(200).send("OK");
 };

@@ -1,20 +1,18 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const paymentCtrl = require('../controllers/paymentController');
-const { protect } = require('../middleware/authMiddleware');
 
+const paymentController = require("../controllers/paymentController");
 
-router.post('/create-session', protect, paymentCtrl.createSession);
+// CREATE SESSION
+router.post("/create-session", paymentController.createSession);
 
-router.get('/verify/:orderId', protect, paymentCtrl.verifyPayment);
+// VERIFY PAYMENT
+router.get("/verify/:orderId", paymentController.verifyPayment);
 
+// RETURN URL
+router.get("/phonepe-return/:orderId", paymentController.phonepeReturn);
 
-router.get('/track/:awb', protect, paymentCtrl.trackOrder);
-
-
-router.post('/phonepe-return/:orderId', paymentCtrl.phonepeReturn);
-
-
-router.post('/webhook', paymentCtrl.webhook);
+// WEBHOOK
+router.post("/webhook", paymentController.webhook);
 
 module.exports = router;
