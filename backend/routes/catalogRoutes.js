@@ -78,6 +78,7 @@ router.get('/hsn-master', catalogController.getAllHsnForAdmin);
 router.get('/hsn-master/active', catalogController.getActiveHsnOnly);
 router.put('/hsn-master/:id', catalogController.updateHsnStatus);
 router.delete('/hsn-master/:id', catalogController.deleteHsnCode);
+router.put('/hsn/update/:id', catalogController.updateHsnCode);
 
 // --- Categories ---
 // 🌟 நிலையான ரூட்டை ஐடிக்கு (/permanent) முன்பே வைக்க வேண்டும்

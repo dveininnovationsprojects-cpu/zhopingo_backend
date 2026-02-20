@@ -136,10 +136,10 @@ exports.loginWithOTP = async (req, res) => {
     
     const cleanPhone = phone.replace("+", "");
 
-    // 🌟 டெஸ்டிங்கிற்காக மட்டும்: 0123 என்று கொடுத்தால் லாகின் ஆகும்
+   
     const isTestOtp = (otp === "0123"); 
     
-    // பழையபடி வாட்ஸ்அப் மூலம் வந்த OTP-யையும் செக் செய்கிறோம்
+    
     const storedOtp = otpStore.get(cleanPhone);
     const isCorrectOtp = isTestOtp || (storedOtp && storedOtp === otp);
 
@@ -147,16 +147,16 @@ exports.loginWithOTP = async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid OTP" });
     }
 
-    // OTP சரியாக இருந்தால், ஸ்டோரில் இருந்து நீக்கிவிடலாம்
+    
     otpStore.delete(cleanPhone);
 
-    // பயனர் இருக்கிறாரா எனப் பார்த்து, இல்லையென்றால் உருவாக்குகிறோம்
+    
     let user = await User.findOne({ phone: cleanPhone });
     if (!user) {
       user = await User.create({ phone: cleanPhone, role: "customer" });
     }
 
-    // JWT Token உருவாக்குகிறோம்
+   
     const token = jwt.sign(
       { id: user._id, role: user.role },
       JWT_SECRET,
@@ -186,17 +186,17 @@ exports.loginWithOTP = async (req, res) => {
   }
 };
 
-/* -------- UPDATE PROFILE (NAME & EMAIL) -------- */
+
 exports.updateProfile = async (req, res) => {
   try {
-    const userId = req.user.id; // மிடில்வேரில் இருந்து வரும் பயனர் ஐடி
+    const userId = req.user.id; 
     const { name, email } = req.body;
 
     if (!name) {
       return res.status(400).json({ success: false, message: "Name is required" });
     }
 
-    // ஈமெயில் ஏற்கனவே வேறொரு பயனர் வைத்துள்ளாரா என செக் செய்கிறோம்
+    
     if (email) {
       const existingUser = await User.findOne({ email, _id: { $ne: userId } });
       if (existingUser) {

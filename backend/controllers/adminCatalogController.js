@@ -233,6 +233,27 @@ exports.updateHsnStatus = async (req, res) => {
     } catch (err) { res.status(400).json({ error: err.message }); }
 };
 
+// ================= 🌟 UPDATE HSN CODE =================
+exports.updateHsnCode = async (req, res) => {
+    try {
+        const { hsnCode, description, gstRate, status } = req.body;
+        
+        const hsn = await HsnMaster.findByIdAndUpdate(
+            req.params.id, 
+            { hsnCode, description, gstRate, status }, 
+            { new: true, runValidators: true }
+        );
+
+        if (!hsn) {
+            return res.status(404).json({ success: false, message: "HSN Code not found" });
+        }
+
+        res.json({ success: true, message: "HSN Code updated successfully", data: hsn });
+    } catch (err) { 
+        res.status(400).json({ success: false, error: err.message }); 
+    }
+};
+
 // ================= 🌟 CATEGORY FEATURES =================
 exports.createCategory = async (req, res) => {
   try {
@@ -280,9 +301,33 @@ exports.updateCategory = async (req, res) => {
     try {
         const updateData = { ...req.body };
         if (req.file) updateData.image = `categories/${req.file.filename}`;
+        
+        // 1. முதலில் Category-யை அப்டேட் செய்கிறோம்
         const category = await Category.findByIdAndUpdate(req.params.id, updateData, { new: true });
-        res.json({ success: true, data: category });
-    } catch (err) { res.status(400).json({ error: err.message }); }
+
+        if (!category) {
+            return res.status(404).json({ success: false, message: "Category not found" });
+        }
+
+        // 🌟 2. மிக முக்கியம்: Category-ல் HSN அல்லது GST மாறினால், 
+        // அதன் கீழ் உள்ள எல்லா Sub-Categories-க்கும் அப்டேட் செய்கிறோம்
+        if (req.body.hsnCode || req.body.gstRate) {
+            await SubCategory.updateMany(
+                { category: req.params.id },
+                { 
+                    $set: { 
+                        hsnCode: category.hsnCode, 
+                        gstRate: category.gstRate 
+                    } 
+                }
+            );
+            console.log(`Updated HSN for Sub-categories under ${category.name}`);
+        }
+
+        res.json({ success: true, message: "Category and Sub-categories updated", data: category });
+    } catch (err) { 
+        res.status(400).json({ success: false, error: err.message }); 
+    }
 };
 
 exports.deleteCategory = async (req, res) => {
