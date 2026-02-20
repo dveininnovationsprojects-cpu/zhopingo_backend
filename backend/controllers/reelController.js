@@ -159,42 +159,36 @@ exports.uploadReel = async (req, res) => {
     res.status(400).json({ success: false, error: err.message });
   }
 };
-
+// 3. GET ALL REELS (வியூவர்ஸ் லிஸ்டை மட்டும் கூடுதலாக எடுக்கிறது)
 exports.getAllReels = async (req, res) => {
   try {
-    
     const userId = req.user ? (req.user.id || req.user._id) : null;
     const baseUrl = `https://${req.get('host')}/uploads/`;
 
     const reels = await Reel.find({ isBlocked: false })
       .populate('sellerId', 'shopName')
       .populate('productId')
+      .populate('viewers', 'name phone') // 🌟 வியூவர்ஸ் பெயரை அட்மினுக்கு காட்ட
       .sort({ createdAt: -1 });
 
     const formatted = reels.map((reel) => {
-      
-      const likedByClean = Array.isArray(reel.likedBy)
-        ? reel.likedBy.filter(Boolean)
-        : [];
-
+      // 🌟 உன்னுடைய பழைய Like Logic அப்படியே இருக்கிறது
+      const likedByClean = Array.isArray(reel.likedBy) ? reel.likedBy.filter(Boolean) : [];
       const likesCount = likedByClean.length;
-
-      const isLiked =
-        userId && likedByClean.length > 0
-          ? likedByClean.some((id) => id.toString() === userId.toString())
-          : false;
+      const isLiked = userId && likedByClean.length > 0 ? likedByClean.some((id) => id.toString() === userId.toString()) : false;
 
       return {
         ...reel._doc,
         videoUrl: baseUrl + reel.videoUrl, 
         likes: likesCount,
         isLiked,
+        views: reel.views || 0, // வியூஸ் எண்ணிக்கை
+        viewers: reel.viewers || [] // பார்த்தவர்களின் பட்டியல்
       };
     });
 
     res.json({ success: true, data: formatted });
   } catch (err) {
-    console.error("GET REELS ERROR:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -270,6 +264,37 @@ exports.updateReel = async (req, res) => {
   } catch (err) {
     console.error("UPDATE REEL ERROR:", err);
     res.status(400).json({ success: false, error: err.message });
+  }
+};
+
+/* =====================================================
+    🌟 2. ADD REEL VIEW (புதிய ஃபங்க்ஷன் - Like-ஐ பாதிக்காது)
+===================================================== */
+exports.addReelView = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user ? (req.user.id || req.user._id) : null;
+
+    const reel = await Reel.findById(id);
+    if (!reel) return res.status(404).json({ success: false, message: "Reel not found" });
+
+    // வியூ கவுண்ட் மட்டும் ஏற்றுகிறோம்
+    reel.views = (reel.views || 0) + 1;
+
+    // லாகின் செய்த பயனர் பார்த்தால் மட்டும் viewers லிஸ்டில் சேர்க்கிறோம்
+    if (userId) {
+      const userObjectId = new mongoose.Types.ObjectId(userId);
+      if (!reel.viewers) reel.viewers = []; // viewers array இல்லை என்றால் உருவாக்குகிறது
+      
+      if (!reel.viewers.includes(userObjectId)) {
+        reel.viewers.push(userObjectId);
+      }
+    }
+
+    await reel.save();
+    res.json({ success: true, views: reel.views });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 };
 
