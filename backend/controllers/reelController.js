@@ -256,51 +256,77 @@ exports.getAllReels = async (req, res) => {
 //   }
 // };
 
+// exports.toggleLike = async (req, res) => {
+//   try {
+//     // login check
+//     if (!req.user) {
+//       return res.status(401).json({ success: false, message: "Please login to like" });
+//     }
+
+//     const userId = req.user.id || req.user._id;
+//     const reel = await Reel.findById(req.params.id);
+
+//     if (!reel) {
+//       return res.status(404).json({ success: false, message: "Reel not found" });
+//     }
+
+//     // likedBy array normalize – remove null values
+//     reel.likedBy = Array.isArray(reel.likedBy)
+//       ? reel.likedBy.filter(Boolean)
+//       : [];
+
+//     const userObjectId = new mongoose.Types.ObjectId(userId);
+//     const index = reel.likedBy.findIndex(
+//       (id) => id.toString() === userObjectId.toString()
+//     );
+
+//     let isLiked;
+//     if (index === -1) {
+//       // not liked yet -> like
+//       reel.likedBy.push(userObjectId);
+//       isLiked = true;
+//     } else {
+//       // already liked -> unlike
+//       reel.likedBy.splice(index, 1);
+//       isLiked = false;
+//     }
+
+//     await reel.save();
+
+//     return res.json({
+//       success: true,
+//       likes: reel.likedBy.length,
+//       isLiked,
+//     });
+//   } catch (err) {
+//     console.error("TOGGLE LIKE ERROR:", err);
+//     return res.status(500).json({ success: false, message: err.message });
+//   }
+// };
+
+// 4. TOGGLE LIKE
 exports.toggleLike = async (req, res) => {
   try {
-    // login check
-    if (!req.user) {
-      return res.status(401).json({ success: false, message: "Please login to like" });
-    }
-
+    if (!req.user) return res.status(401).json({ success: false, message: "Please login to like" });
     const userId = req.user.id || req.user._id;
     const reel = await Reel.findById(req.params.id);
-
-    if (!reel) {
-      return res.status(404).json({ success: false, message: "Reel not found" });
-    }
-
-    // likedBy array normalize – remove null values
-    reel.likedBy = Array.isArray(reel.likedBy)
-      ? reel.likedBy.filter(Boolean)
-      : [];
+    if (!reel) return res.status(404).json({ success: false, message: "Reel not found" });
 
     const userObjectId = new mongoose.Types.ObjectId(userId);
-    const index = reel.likedBy.findIndex(
-      (id) => id.toString() === userObjectId.toString()
-    );
+    const index = reel.likedBy.indexOf(userObjectId);
 
     let isLiked;
     if (index === -1) {
-      // not liked yet -> like
       reel.likedBy.push(userObjectId);
       isLiked = true;
     } else {
-      // already liked -> unlike
       reel.likedBy.splice(index, 1);
       isLiked = false;
     }
-
     await reel.save();
-
-    return res.json({
-      success: true,
-      likes: reel.likedBy.length,
-      isLiked,
-    });
+    res.json({ success: true, likes: reel.likedBy.length, isLiked });
   } catch (err) {
-    console.error("TOGGLE LIKE ERROR:", err);
-    return res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: err.message });
   }
 };
 
