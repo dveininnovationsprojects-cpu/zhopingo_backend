@@ -12,5 +12,7 @@ router.delete('/:id', protect, reelCtrl.deleteReel);
 
 router.post('/like/:id', protect, reelCtrl.toggleLike); 
 router.post('/report', protect, reelCtrl.reportReel);
+// கஸ்டமர் ரீலைப் பார்க்கும்போது வியூ கவுண்ட் ஏற...
+router.post('/view/:id', protectOptional, reelCtrl.addReelView);
 
 module.exports = router;

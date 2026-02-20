@@ -35,6 +35,9 @@ const reelSchema = new mongoose.Schema(
         ref: 'User'
       }
     ],
+    // 🌟 புதிய ஃபீல்டுகள்
+  viewers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }], // பார்த்தவர்களின் ஐடி
+  views: { type: Number, default: 0 },
 
     isBlocked: {
       type: Boolean,
