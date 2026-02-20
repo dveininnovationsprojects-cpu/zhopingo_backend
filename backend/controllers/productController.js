@@ -276,17 +276,17 @@ const formatProductMedia = (product, req) => {
     };
 };
 
-// 🌟 1. CREATE PRODUCT (Supporting Variants, Media up to 5 images)
+
 exports.createProduct = async (req, res) => {
     try {
-        const sellerId = req.user?.id || req.body.seller;
+        const sellerId = req.body.seller|| req.user?.id ;
         const seller = await Seller.findById(sellerId);
         if (!seller) return res.status(404).json({ success: false, message: "Seller not found" });
 
         const subCat = await SubCategory.findById(req.body.subCategory);
         if (!subCat) return res.status(400).json({ success: false, message: "Invalid SubCategory" });
 
-        // 🌟 Media Handling (0-5 Images & 1 Video)
+      
         const images = req.files && req.files['images'] ? req.files['images'].map(f => f.filename) : [];
         const video = req.files && req.files['video'] ? req.files['video'][0].filename : "";
 
