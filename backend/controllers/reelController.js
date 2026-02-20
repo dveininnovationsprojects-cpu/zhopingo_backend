@@ -189,72 +189,72 @@ exports.addReelView = async (req, res) => {
   }
 };
 
-// /* =====================================================
-//     🌟 GET ALL REELS (Updated for Admin/Seller)
-// ===================================================== */
-// exports.getAllReels = async (req, res) => {
-//   try {
-//     const baseUrl = `https://${req.get('host')}/uploads/`;
-
-//     // .populate('viewers', 'name phone') -> இதுதான் அட்மினுக்கு பெயரைக் காட்டும்
-//     const reels = await Reel.find({ isBlocked: false })
-//       .populate('sellerId', 'shopName')
-//       .populate('productId')
-//       .populate('viewers', 'name phone') // 🌟 வியூவர்ஸ் லிஸ்ட்டை எடுக்கிறோம்
-//       .sort({ createdAt: -1 });
-
-//     const formatted = reels.map((reel) => ({
-//       ...reel._doc,
-//       videoUrl: baseUrl + reel.videoUrl,
-//       likes: reel.likedBy ? reel.likedBy.length : 0,
-//       views: reel.views || 0,
-//       viewers: reel.viewers // இதில் பெயர்கள் இருக்கும்
-//     }));
-
-//     res.json({ success: true, data: formatted });
-//   } catch (err) {
-//     res.status(500).json({ success: false, message: err.message });
-//   }
-// };
-
+/* =====================================================
+    🌟 GET ALL REELS (Updated for Admin/Seller)
+===================================================== */
 exports.getAllReels = async (req, res) => {
   try {
-    
-    const userId = req.user ? (req.user.id || req.user._id) : null;
     const baseUrl = `https://${req.get('host')}/uploads/`;
 
+    // .populate('viewers', 'name phone') -> இதுதான் அட்மினுக்கு பெயரைக் காட்டும்
     const reels = await Reel.find({ isBlocked: false })
       .populate('sellerId', 'shopName')
       .populate('productId')
+      .populate('viewers', 'name phone') // 🌟 வியூவர்ஸ் லிஸ்ட்டை எடுக்கிறோம்
       .sort({ createdAt: -1 });
 
-    const formatted = reels.map((reel) => {
-      
-      const likedByClean = Array.isArray(reel.likedBy)
-        ? reel.likedBy.filter(Boolean)
-        : [];
-
-      const likesCount = likedByClean.length;
-
-      const isLiked =
-        userId && likedByClean.length > 0
-          ? likedByClean.some((id) => id.toString() === userId.toString())
-          : false;
-
-      return {
-        ...reel._doc,
-        videoUrl: baseUrl + reel.videoUrl, 
-        likes: likesCount,
-        isLiked,
-      };
-    });
+    const formatted = reels.map((reel) => ({
+      ...reel._doc,
+      videoUrl: baseUrl + reel.videoUrl,
+      likes: reel.likedBy ? reel.likedBy.length : 0,
+      views: reel.views || 0,
+      viewers: reel.viewers // இதில் பெயர்கள் இருக்கும்
+    }));
 
     res.json({ success: true, data: formatted });
   } catch (err) {
-    console.error("GET REELS ERROR:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
+
+// exports.getAllReels = async (req, res) => {
+//   try {
+    
+//     const userId = req.user ? (req.user.id || req.user._id) : null;
+//     const baseUrl = `https://${req.get('host')}/uploads/`;
+
+//     const reels = await Reel.find({ isBlocked: false })
+//       .populate('sellerId', 'shopName')
+//       .populate('productId')
+//       .sort({ createdAt: -1 });
+
+//     const formatted = reels.map((reel) => {
+      
+//       const likedByClean = Array.isArray(reel.likedBy)
+//         ? reel.likedBy.filter(Boolean)
+//         : [];
+
+//       const likesCount = likedByClean.length;
+
+//       const isLiked =
+//         userId && likedByClean.length > 0
+//           ? likedByClean.some((id) => id.toString() === userId.toString())
+//           : false;
+
+//       return {
+//         ...reel._doc,
+//         videoUrl: baseUrl + reel.videoUrl, 
+//         likes: likesCount,
+//         isLiked,
+//       };
+//     });
+
+//     res.json({ success: true, data: formatted });
+//   } catch (err) {
+//     console.error("GET REELS ERROR:", err);
+//     res.status(500).json({ success: false, message: err.message });
+//   }
+// };
 
 exports.toggleLike = async (req, res) => {
   try {
