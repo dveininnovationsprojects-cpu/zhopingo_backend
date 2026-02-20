@@ -74,76 +74,16 @@ exports.sendOTP = async (req, res) => {
 
 
 
-// exports.loginWithOTP = async (req, res) => {
-//   try {
-//     const { phone, otp } = req.body;
-    
-//     const cleanPhone = phone.replace("+", "");
-
-//     const storedOtp = otpStore.get(cleanPhone);
-
-  
-//     const isCorrectOtp = (storedOtp && storedOtp === otp);
-
-//     if (!isCorrectOtp) {
-//       return res.status(400).json({ success: false, message: "Invalid OTP" });
-//     }
-
-//     otpStore.delete(cleanPhone);
-
-   
-//     let user = await User.findOne({ phone: cleanPhone });
-//     if (!user) {
-//       user = await User.create({ phone: cleanPhone, role: "customer" });
-//     }
-
-   
-//     const token = jwt.sign(
-//       { id: user._id, role: user.role },
-//       JWT_SECRET,
-//       { expiresIn: "7d" }
-//     );
-
-
-//     const cookieOptions = {
-//       expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-//       httpOnly: true, 
-//       secure: process.env.NODE_ENV === "production", 
-//       sameSite: "Lax" 
-//     };
-
- 
-//     res.status(200).cookie("token", token, cookieOptions).json({
-//       success: true,
-//       token: token, 
-//       user: {
-//         id: user._id,
-//         phone: user.phone,
-//         role: user.role,
-//         addressBook: user.addressBook || []
-//       }
-//     });
-
-//   } catch (err) {
-//     res.status(500).json({ success: false, error: err.message });
-//   }
-// };
-
 exports.loginWithOTP = async (req, res) => {
   try {
-    let { phone, otp } = req.body;
+    const { phone, otp } = req.body;
     
-    // 🌟 1. போன் நம்பரைச் சுத்தம் செய்கிறோம் (எல்லா ஸ்பெஷல் கேரக்டரையும் நீக்குகிறது)
-    let cleanPhone = phone.replace(/\D/g, ""); // இது "+", "-", " " எல்லாத்தையும் நீக்கி வெறும் நம்பரை மட்டும் தரும்
+    const cleanPhone = phone.replace("+", "");
 
-    // 🌟 2. இந்திய நம்பராக இருந்தால் முன்னால் இருக்கும் '91'-ஐ நீக்குகிறோம் (Consistency-க்காக)
-    if (cleanPhone.startsWith("91") && cleanPhone.length > 10) {
-      cleanPhone = cleanPhone.slice(-10);
-    }
-
-    const isTestOtp = (otp === "0123"); 
     const storedOtp = otpStore.get(cleanPhone);
-    const isCorrectOtp = isTestOtp || (storedOtp && storedOtp === otp);
+
+  
+    const isCorrectOtp = (storedOtp && storedOtp === otp);
 
     if (!isCorrectOtp) {
       return res.status(400).json({ success: false, message: "Invalid OTP" });
@@ -151,25 +91,85 @@ exports.loginWithOTP = async (req, res) => {
 
     otpStore.delete(cleanPhone);
 
-    // 🌟 3. இப்போ தேடும்போது 10 டிஜிட் நம்பரை மட்டும் வைத்துத் தேடும்
+   
     let user = await User.findOne({ phone: cleanPhone });
-    
     if (!user) {
       user = await User.create({ phone: cleanPhone, role: "customer" });
     }
 
-    const token = jwt.sign({ id: user._id, role: user.role }, JWT_SECRET, { expiresIn: "7d" });
+   
+    const token = jwt.sign(
+      { id: user._id, role: user.role },
+      JWT_SECRET,
+      { expiresIn: "7d" }
+    );
 
-    res.status(200).json({
+
+    const cookieOptions = {
+      expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      httpOnly: true, 
+      secure: process.env.NODE_ENV === "production", 
+      sameSite: "Lax" 
+    };
+
+ 
+    res.status(200).cookie("token", token, cookieOptions).json({
       success: true,
-      token, 
-      user: { id: user._id, name: user.name, phone: user.phone, role: user.role, addressBook: user.addressBook || [] }
+      token: token, 
+      user: {
+        id: user._id,
+        phone: user.phone,
+        role: user.role,
+        addressBook: user.addressBook || []
+      }
     });
 
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 };
+
+// exports.loginWithOTP = async (req, res) => {
+//   try {
+//     let { phone, otp } = req.body;
+    
+//     // 🌟 1. போன் நம்பரைச் சுத்தம் செய்கிறோம் (எல்லா ஸ்பெஷல் கேரக்டரையும் நீக்குகிறது)
+//     let cleanPhone = phone.replace(/\D/g, ""); // இது "+", "-", " " எல்லாத்தையும் நீக்கி வெறும் நம்பரை மட்டும் தரும்
+
+//     // 🌟 2. இந்திய நம்பராக இருந்தால் முன்னால் இருக்கும் '91'-ஐ நீக்குகிறோம் (Consistency-க்காக)
+//     if (cleanPhone.startsWith("91") && cleanPhone.length > 10) {
+//       cleanPhone = cleanPhone.slice(-10);
+//     }
+
+//     const isTestOtp = (otp === "0123"); 
+//     const storedOtp = otpStore.get(cleanPhone);
+//     const isCorrectOtp = isTestOtp || (storedOtp && storedOtp === otp);
+
+//     if (!isCorrectOtp) {
+//       return res.status(400).json({ success: false, message: "Invalid OTP" });
+//     }
+
+//     otpStore.delete(cleanPhone);
+
+//     // 🌟 3. இப்போ தேடும்போது 10 டிஜிட் நம்பரை மட்டும் வைத்துத் தேடும்
+//     let user = await User.findOne({ phone: cleanPhone });
+    
+//     if (!user) {
+//       user = await User.create({ phone: cleanPhone, role: "customer" });
+//     }
+
+//     const token = jwt.sign({ id: user._id, role: user.role }, JWT_SECRET, { expiresIn: "7d" });
+
+//     res.status(200).json({
+//       success: true,
+//       token, 
+//       user: { id: user._id, name: user.name, phone: user.phone, role: user.role, addressBook: user.addressBook || [] }
+//     });
+
+//   } catch (err) {
+//     res.status(500).json({ success: false, error: err.message });
+//   }
+// };
 
 exports.updateProfile = async (req, res) => {
   try {
