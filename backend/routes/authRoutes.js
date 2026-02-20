@@ -6,6 +6,7 @@ const {
   loginWithOTP,
   registerSeller,
   loginSeller,
+  updateProfile,
   addUserAddress,
   toggleWishlist,
   getWishlist,
@@ -21,6 +22,7 @@ router.post('/login-otp', loginWithOTP);
 router.post('/wishlist/toggle', protect, toggleWishlist);
 router.get('/wishlist/all', protect, getWishlist);
 router.put('/add-address/:userId', protect, addUserAddress);
+router.put('/update-profile', protect, updateProfile);
 router.post('/logout', logout);
 
 module.exports = router;

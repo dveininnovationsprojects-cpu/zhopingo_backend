@@ -185,6 +185,52 @@ exports.loginWithOTP = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
+
+/* -------- UPDATE PROFILE (NAME & EMAIL) -------- */
+exports.updateProfile = async (req, res) => {
+  try {
+    const userId = req.user.id; // மிடில்வேரில் இருந்து வரும் பயனர் ஐடி
+    const { name, email } = req.body;
+
+    if (!name) {
+      return res.status(400).json({ success: false, message: "Name is required" });
+    }
+
+    // ஈமெயில் ஏற்கனவே வேறொரு பயனர் வைத்துள்ளாரா என செக் செய்கிறோம்
+    if (email) {
+      const existingUser = await User.findOne({ email, _id: { $ne: userId } });
+      if (existingUser) {
+        return res.status(400).json({ success: false, message: "Email already in use" });
+      }
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      { $set: { name, email } },
+      { new: true, runValidators: true }
+    );
+
+    if (!updatedUser) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    res.json({
+      success: true,
+      message: "Profile updated successfully",
+      user: {
+        id: updatedUser._id,
+        name: updatedUser.name,
+        email: updatedUser.email,
+        phone: updatedUser.phone,
+        role: updatedUser.role
+      }
+    });
+  } catch (err) {
+    console.error("Profile Update Error:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
 exports.addUserAddress = async (req, res) => {
   try {
     
