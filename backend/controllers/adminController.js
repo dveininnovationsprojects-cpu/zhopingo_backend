@@ -6,8 +6,6 @@ const { sendReelBlockNotification } = require("../utils/emailService");
 const bcrypt = require("bcryptjs");
 
 const JWT_SECRET = process.env.JWT_SECRET || "secret123";
-
-// 1️⃣ அட்மின் லாகின் (டேட்டாபேஸ்ல ஆள் இல்லனா கிரியேட் பண்ணி நிஜமான ID-யை கொடுக்கும்)
 exports.adminLogin = async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -15,24 +13,24 @@ exports.adminLogin = async (req, res) => {
         const DEFAULT_PASS = "admin@123";
 
         if (email === DEFAULT_EMAIL && password === DEFAULT_PASS) {
-            // 🔥 அட்மின் இல்லையென்றால் டேட்டாபேஸில் உருவாக்கும் (Upsert)
-            let admin = await User.findOne({ email: DEFAULT_EMAIL });
+            // 1. அட்மின் இருக்காரான்னு பாரு
+            let admin = await User.findOne({ role: 'admin' });
 
             if (!admin) {
-                const salt = await bcrypt.genSalt(10);
-                const hashedPassword = await bcrypt.hash(DEFAULT_PASS, salt);
+                // 2. ஒருவேளை அதே போன் நம்பர்ல கஸ்டமர் இருந்தா, அந்த 'unique' எர்ரரை தவிர்க்க
+                // தற்காலிகமா அட்மினுக்கு வேற ஒரு நம்பர் கொடுத்துட்டு, அப்புறம் நீ ப்ரொபைல்ல மாத்திக்கலாம்.
+                // அல்லது, டேட்டாபேஸ்ல 'Admin'னு ஒருத்தரை மட்டும் மேனுவலா கிரியேட் பண்ணிடு.
                 
                 admin = new User({
                     name: "Admin da amala",
                     email: DEFAULT_EMAIL,
-                    password: hashedPassword,
+                    password: DEFAULT_PASS,
                     role: "admin",
-                    phone: "9876543210"
+                    phone: "0000000000" // 👈 இத முதல்ல குடு, அப்புறம் அப்டேட் பண்ணிக்கலாம்
                 });
                 await admin.save();
             }
 
-            // 🌟 டோக்கனில் நிஜமான டேட்டாபேஸ் _id-யை வைக்கிறோம்
             const token = jwt.sign(
                 { id: admin._id, role: "admin" },
                 JWT_SECRET,
@@ -42,16 +40,10 @@ exports.adminLogin = async (req, res) => {
             return res.json({
                 success: true,
                 token,
-                user: {
-                    id: admin._id,
-                    name: admin.name,
-                    email: admin.email,
-                    role: admin.role
-                }
+                user: admin
             });
-        } else {
-            return res.status(401).json({ success: false, message: "Invalid Credentials" });
         }
+        return res.status(401).json({ success: false, message: "Invalid Admin" });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
@@ -200,26 +192,21 @@ exports.updateSellerStatus = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
-// 2️⃣ அட்மின் ப்ரொபைல் அப்டேட் (Real DB Update)
+// 🌟 அட்மின் ப்ரொபைல் அப்டேட் (இங்க தான் நீ கேட்ட City, State வரும்)
 exports.updateAdminProfile = async (req, res) => {
     try {
-        // protect middleware-ல் இருந்து வரும் அட்மின் ID
-        const adminId = req.user.id; 
-
+        const adminId = req.user.id;
         const updatedAdmin = await User.findByIdAndUpdate(
             adminId,
-            { $set: req.body },
+            { $set: req.body }, // இங்க நீ City, State, Country எது அனுப்பினாலும் அப்டேட் ஆகும்
             { new: true, runValidators: true }
         ).select("-password");
-
-        if (!updatedAdmin) return res.status(404).json({ success: false, message: "Admin not found" });
 
         res.json({ success: true, message: "Profile Updated!", data: updatedAdmin });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
 };
-
 // 3️⃣ அட்மின் ப்ரொபைல் விவரங்களை எடுக்க
 exports.getAdminProfile = async (req, res) => {
     try {

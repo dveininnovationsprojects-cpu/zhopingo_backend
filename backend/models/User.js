@@ -7,6 +7,9 @@ const userSchema = new mongoose.Schema({
   phone: { type: String, required: true, unique: true }, 
   password: { type: String }, 
   role: { type: String, enum: ['customer', 'admin','seller'], default: 'customer' },
+  city: { type: String, default: "" },
+  state: { type: String, default: "" },
+  country: { type: String, default: "India" },
   
  
   walletBalance: { type: Number, default: 0 },
