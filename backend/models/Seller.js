@@ -114,8 +114,13 @@ const sellerSchema = new mongoose.Schema(
     description: { type: String, trim: true },
     isBrand: { 
       type: Boolean, 
-      default: false // அட்மின் 'true' ஆக்கினால் மட்டுமே User App Home-ல் வரும்
+      default: false 
     },
+    status: {
+    type: String,
+    enum: ['active', 'inactive'],
+    default: 'inactive' 
+  },
 
     /* ================= KYC NUMBERS ================= */
     panNumber: { type: String, trim: true },

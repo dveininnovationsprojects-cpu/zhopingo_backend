@@ -160,27 +160,26 @@ exports.blockReelByAdmin = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
-
-// Seller status (Active/Inactive) toggle செய்ய
+// Seller Status Toggle (Active/Inactive)
 exports.updateSellerStatus = async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { status } = req.body; // 'active' or 'inactive'
+  try {
+    const { id } = req.params;
+    const { status } = req.body; // Frontend-ல் இருந்து 'active' அல்லது 'inactive' வரும்
 
-        const seller = await Seller.findById(id);
-        if (!seller) {
-            return res.status(404).json({ success: false, message: "Seller not found" });
-        }
-
-        seller.status = status;
-        await seller.save();
-
-        res.json({ 
-            success: true, 
-            message: `Seller is now ${status}`, 
-            data: seller 
-        });
-    } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+    const seller = await Seller.findById(id);
+    if (!seller) {
+      return res.status(404).json({ success: false, message: "Seller not found" });
     }
+
+    seller.status = status;
+    await seller.save();
+
+    res.json({ 
+      success: true, 
+      message: `Seller is now ${status.toUpperCase()}`, 
+      data: seller 
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 };
