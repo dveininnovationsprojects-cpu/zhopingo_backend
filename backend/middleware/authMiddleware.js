@@ -58,5 +58,31 @@ exports.optionalProtect = (req, res, next) => {
       console.log("Optional Auth: Invalid Token");
     }
   }
-  next(); // 🌟 இதுதான் முக்கியம், டோக்கன் இல்லையென்றாலும் அடுத்த ஸ்டெப்பிற்குச் செல்லும்
+  next(); 
+};
+
+
+exports.protectAdmin = (req, res, next) => {
+  let token;
+
+  if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+    token = req.headers.authorization.split(' ')[1];
+  }
+
+  if (!token) {
+    return res.status(401).json({ success: false, message: "Admin Login Required" });
+  }
+
+  try {
+    
+    const secret = 'hVVYvMx4PysJmsoZv679+1S/xx/YP4JRZmrYtNfXLiU80U3Nd+XCdRoroUFl4pbRyTf2x+e2AIvI9K8c0bE4gQ==';
+    
+    const decoded = jwt.verify(token, secret);
+    
+    
+    req.user = { id: decoded.id };
+    next();
+  } catch (err) {
+    res.status(401).json({ success: false, message: "Invalid Admin Token" });
+  }
 };
