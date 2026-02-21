@@ -249,8 +249,7 @@ const bcrypt = require("bcryptjs");
 
 const JWT_SECRET = process.env.JWT_SECRET || 'hVVYvMx4PysJmsoZv679+1S/xx/YP4JRZmrYtNfXLiU80U3Nd+XCdRoroUFl4pbRyTf2x+e2AIvI9K8c0bE4gQ==';
 
-// 🌟 மச்சான் இங்க கவனி: (req, res) மட்டும் தான் இருக்கணும், 'next' இருக்கக்கூடாது!
-exports.adminLogin = async (req, res) => { 
+exports.adminLogin = async (req, res) => {
     try {
         const { email, password } = req.body;
         const DEFAULT_EMAIL = "admin@gmail.com";
@@ -258,27 +257,29 @@ exports.adminLogin = async (req, res) => {
 
         let admin = await Admin.findOne({ email });
 
+        // அட்மின் இல்லையென்றால் உருவாக்கு
         if (!admin && email === DEFAULT_EMAIL && password === DEFAULT_PASS) {
             admin = new Admin({
                 name: "Admin da amala",
                 email: DEFAULT_EMAIL,
-                password: DEFAULT_PASS, // Schema pre-save hook ஹேஷ் பண்ணிக்கும்
-                phone: "1122334455" 
+                password: DEFAULT_PASS, // 🌟 கவனி: இங்க பாஸ்வேர்டை அப்படியே குடு! 
+                phone: "1122334455"     // Admin.js-ல இருக்குற 'pre-save' இத ஹேஷ் பண்ணிக்கும்.
             });
             await admin.save();
         }
 
         if (admin) {
+            // லாகின் பண்ணும்போது bcrypt.compare கரெக்டா வேலை செய்யும்
             const isMatch = await bcrypt.compare(password, admin.password);
             if (!isMatch) return res.status(401).json({ success: false, message: "Invalid Password" });
 
-            const token = jwt.sign({ id: admin._id, role: "admin" }, process.env.JWT_SECRET || 'hVVYvMx4PysJmsoZv679+1S/xx/YP4JRZmrYtNfXLiU80U3Nd+XCdRoroUFl4pbRyTf2x+e2AIvI9K8c0bE4gQ==', { expiresIn: "7d" });
+            const token = jwt.sign(
+                { id: admin._id, role: "admin" }, 
+                process.env.JWT_SECRET || 'hVVYvMx4PysJmsoZv679+1S/xx/YP4JRZmrYtNfXLiU80U3Nd+XCdRoroUFl4pbRyTf2x+e2AIvI9K8c0bE4gQ==', 
+                { expiresIn: "7d" }
+            );
 
-            return res.json({
-                success: true,
-                token,
-                user: { id: admin._id, name: admin.name, email: admin.email, role: "admin" }
-            });
+            return res.json({ success: true, token, user: admin });
         }
         return res.status(401).json({ success: false, message: "Invalid Credentials" });
     } catch (err) {
