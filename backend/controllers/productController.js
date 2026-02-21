@@ -233,17 +233,18 @@ exports.createProduct = async (req, res) => {
         res.status(400).json({ success: false, error: err.message }); 
     }
 };
-// 🌟 2. GET ALL PRODUCTS (Modified Fix)
+// 🌟 2. GET ALL PRODUCTS (Customer View - Corrected Logic)
 exports.getAllProducts = async (req, res) => {
     try {
         const { category, subCategory, search, page = 1, limit = 20 } = req.query;
 
-        // 🔥 STEP 1: Inactive நிலையில் உள்ள செல்லர்களை மட்டும் கண்டறியவும்
+        // 🔥 STEP 1: Inactive செல்லர்களை மட்டும் பில்டர் செய்கிறோம்
         const inactiveSellers = await Seller.find({ status: 'inactive' }).select('_id');
         const inactiveIds = inactiveSellers.map(s => s._id);
 
-        // 🔥 STEP 2: $nin (Not In) பயன்படுத்தி இவர்களை மட்டும் தவிர்க்கவும்
-        // இதன் மூலம் active, pending அல்லது ஸ்டேட்டஸ் இல்லாத மற்ற எல்லோரும் தெரிவார்கள்
+        // 🔥 STEP 2: Query Setup
+        // 'seller' என்ற ஃபீல்டு உன்னுடைய Product Schema-வில் உள்ளது.
+        // நாம் $nin (Not In) பயன்படுத்துவதால் 'inactive' தவிர மற்ற எல்லோரும் தெரிவார்கள்.
         let query = { 
             isArchived: { $ne: true },
             seller: { $nin: inactiveIds } 
@@ -257,12 +258,13 @@ exports.getAllProducts = async (req, res) => {
 
         const products = await Product.find(query)
             .populate("category subCategory", "name image")
-            .populate("seller", "shopName name address status")
+            .populate("seller", "shopName name address status") // 'status' சேர்த்து populate செய்கிறோம்
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(parseInt(limit))
             .lean(); 
 
+        // இமேஜ் பாத் பிழை (Path Correction)
         const baseUrl = `${req.protocol}://${req.get('host')}/uploads/products/`;
         
         const data = products.map(p => ({
