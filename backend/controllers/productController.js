@@ -233,15 +233,17 @@ exports.createProduct = async (req, res) => {
         res.status(400).json({ success: false, error: err.message }); 
     }
 };
-// 🌟 2. GET ALL PRODUCTS (Customer View)
+// 🌟 2. GET ALL PRODUCTS (Modified Fix)
 exports.getAllProducts = async (req, res) => {
     try {
         const { category, subCategory, search, page = 1, limit = 20 } = req.query;
 
-        // Inactive செல்லர்களை தவிர்க்கும் லாஜிக்
+        // 🔥 STEP 1: Inactive நிலையில் உள்ள செல்லர்களை மட்டும் கண்டறியவும்
         const inactiveSellers = await Seller.find({ status: 'inactive' }).select('_id');
         const inactiveIds = inactiveSellers.map(s => s._id);
 
+        // 🔥 STEP 2: $nin (Not In) பயன்படுத்தி இவர்களை மட்டும் தவிர்க்கவும்
+        // இதன் மூலம் active, pending அல்லது ஸ்டேட்டஸ் இல்லாத மற்ற எல்லோரும் தெரிவார்கள்
         let query = { 
             isArchived: { $ne: true },
             seller: { $nin: inactiveIds } 
@@ -261,19 +263,12 @@ exports.getAllProducts = async (req, res) => {
             .limit(parseInt(limit))
             .lean(); 
 
-        // ✅ திருத்தம்: இங்கு 'products/' என்பதை சேர்த்துள்ளேன்
         const baseUrl = `${req.protocol}://${req.get('host')}/uploads/products/`;
         
         const data = products.map(p => ({
             ...p,
-            images: (p.images || []).map(img => {
-                if (!img) return "";
-                if (img.startsWith('https')) return img;
-                // ஒருவேளை டேட்டாபேஸில் ஏற்கனவே 'products/' என்று இருந்தால் அதைத் தவிர்க்க
-                const cleanImg = img.replace('products/', '');
-                return baseUrl + cleanImg;
-            }),
-            video: p.video ? (p.video.startsWith('https') ? p.video : baseUrl + p.video) : "",
+            images: (p.images || []).map(img => (img && img.startsWith('http')) ? img : baseUrl + img),
+            video: p.video ? (p.video.startsWith('http') ? p.video : baseUrl + p.video) : "",
             availability: p.stock <= 0 ? "Out of Stock" : (p.stock < 10 ? `Only ${p.stock} left` : "Available"),
             ratingCount: Math.floor(Math.random() * (200 - 50) + 50)
         }));
@@ -283,17 +278,17 @@ exports.getAllProducts = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
-// 🌟 4. UPDATE PRODUCT (Now Supports Image & Video Update)
+
 exports.updateProduct = async (req, res) => {
     try {
         let updateData = { ...req.body };
 
-        // Variants parse செய்தல்
+       
         if (updateData.variants && typeof updateData.variants === 'string') {
             updateData.variants = JSON.parse(updateData.variants);
         }
 
-        // புதிய இமேஜ்கள் வந்தால் பழையவற்றை மாற்றாமல் சேர்க்கலாம் அல்லது ரீப்ளேஸ் செய்யலாம்
+        
         if (req.files) {
             if (req.files['images']) {
                 updateData.images = req.files['images'].map(f => f.filename);
@@ -303,7 +298,7 @@ exports.updateProduct = async (req, res) => {
             }
         }
 
-        // Discount மறுபடியும் கணக்கிடுதல்
+        
         if (updateData.mrp && updateData.price) {
             updateData.discountPercentage = updateData.mrp > updateData.price 
                 ? Math.round(((updateData.mrp - updateData.price) / updateData.mrp) * 100) 
@@ -320,7 +315,7 @@ exports.updateProduct = async (req, res) => {
     }
 };
 
-// 🌟 7. GET SIMILAR PRODUCTS (Hide Inactive Sellers)
+
 exports.getSimilarProducts = async (req, res) => {
     try {
         const { category } = req.query;
@@ -343,7 +338,7 @@ exports.getSimilarProducts = async (req, res) => {
     }
 };
 
-// மற்ற பழைய பங்க்ஷன்கள் (getMyProducts, deleteProduct, getProductById) அப்படியே இருக்கட்டும்.
+
 exports.getMyProducts = async (req, res) => {
     try {
         if (!req.user?.id) return res.status(401).json({ success: false, message: "Unauthorized" });
