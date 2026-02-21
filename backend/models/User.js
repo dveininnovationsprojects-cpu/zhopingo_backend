@@ -36,9 +36,19 @@ addressBook: [{
 }]
 }, { timestamps: true });
 
-userSchema.pre('save', async function() {
-  if (!this.isModified('password') || !this.password) return;
+// userSchema.pre('save', async function() {
+//   if (!this.isModified('password') || !this.password) return;
+//   this.password = await bcrypt.hash(this.password, 10);
+// });
+userSchema.pre('save', async function(next) {
+  // 🌟 அட்மின் ரோல் இருந்தா ஹேஷிங் பண்ணாம அடுத்த ஸ்டெப்பிற்கு போயிடும்
+  if (this.role === 'admin') return next(); 
+
+  // மத்தவங்களுக்கு (Customer, Seller) பாஸ்வேர்ட் மாறினா மட்டும் ஹேஷ் பண்ணும்
+  if (!this.isModified('password') || !this.password) return next();
+  
   this.password = await bcrypt.hash(this.password, 10);
+  next();
 });
 
 module.exports = mongoose.model('User', userSchema);
