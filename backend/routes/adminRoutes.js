@@ -7,7 +7,8 @@ const {
   uploadDeliveryRates ,
   getAllCustomers,
   toggleBrandStatus,
-  blockReelByAdmin
+  blockReelByAdmin,
+  updateSellerStatus
 } = require("../controllers/adminController"); 
 const { protect } = require('../middleware/authMiddleware');
 
@@ -23,5 +24,6 @@ router.post("/verify-seller", verifySellerStatus);
 router.get('/customers', getAllCustomers);
 router.put("/sellers/toggle-brand/:id", toggleBrandStatus);
 router.post('/block-reel', protect,blockReelByAdmin);
+router.put('/sellers/:id', protect,updateSellerStatus);
 
 module.exports = router;

@@ -142,8 +142,39 @@ exports.verifyPayment = async (req, res) => {
    3️⃣ CALLBACK HANDLERS
 ===================================================== */
 exports.phonepeReturn = (req, res) => {
-  // மொபைல் ஆப்பில் ரீடைரக்ட் செய்ய Deep Linking
-  res.redirect(`zhopingo://payment-verify/${req.params.orderId}`);
+  const { orderId } = req.params;
+  const deepLink = `zhopingo://payment-verify/${orderId}`;
+
+  // 🌟 இந்த HTML பேஜ் பிரவுசரை மூடிவிட்டு உன் ஆப்பை மட்டும் திறக்கும்
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Zhopingo Payment</title>
+        <style>
+          body { font-family: sans-serif; text-align: center; padding: 50px 20px; background: #fff; }
+          .status { color: #0c831f; font-size: 20px; font-weight: bold; }
+          .btn { background: #0c831f; color: #fff; padding: 12px 25px; border-radius: 8px; text-decoration: none; display: inline-block; margin-top: 20px; }
+        </style>
+      </head>
+      <body>
+        <div class="status">Payment Processed Successfully!</div>
+        <p>Redirecting back to Zhopingo app...</p>
+        <a href="${deepLink}" class="btn">Click if not redirected</a>
+
+        <script>
+          // 🚀 ஆப்பைத் திறக்க முயற்சிக்கும்
+          window.location.href = "${deepLink}";
+
+          // 🚀 2 செகண்ட் கழித்து பிரவுசரை மூடும் (ஆப் ஏற்கனவே ஓபன் ஆகியிருக்கும்)
+          setTimeout(function() {
+            window.close();
+          }, 2000);
+        </script>
+      </body>
+    </html>
+  `);
 };
 
 exports.webhook = (req, res) => {
