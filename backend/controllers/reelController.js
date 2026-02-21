@@ -118,7 +118,7 @@
 
 
 
-// controllers/reelController.js
+
 const Reel = require('../models/Reel');
 const mongoose = require('mongoose');
 
@@ -130,7 +130,7 @@ exports.uploadReel = async (req, res) => {
 
     let productId = req.body.productId;
 
-    // productId optional – normalize null-like values
+    
     if (!productId || productId === 'null' || productId === '') {
       productId = null;
     }
@@ -139,7 +139,7 @@ exports.uploadReel = async (req, res) => {
       sellerId: req.body.sellerId,
       productId: productId,
       description: req.body.description,
-      videoUrl: req.file.filename, // stored filename
+      videoUrl: req.file.filename, 
     });
 
     const savedReel = await newReel.save();
@@ -159,7 +159,7 @@ exports.uploadReel = async (req, res) => {
     res.status(400).json({ success: false, error: err.message });
   }
 };
-// 3. GET ALL REELS (வியூவர்ஸ் லிஸ்டை மட்டும் கூடுதலாக எடுக்கிறது)
+
 exports.getAllReels = async (req, res) => {
   try {
     const userId = req.user ? (req.user.id || req.user._id) : null;
@@ -168,27 +168,33 @@ exports.getAllReels = async (req, res) => {
     const reels = await Reel.find({ isBlocked: false })
       .populate('sellerId', 'shopName')
       .populate('productId')
-      .populate('viewers', 'name phone') // 🌟 வியூவர்ஸ் பெயரை அட்மினுக்கு காட்ட
+      .populate('viewers', 'name phone') 
+      .populate('likedBy', 'name phone') 
       .sort({ createdAt: -1 });
 
     const formatted = reels.map((reel) => {
-      // 🌟 உன்னுடைய பழைய Like Logic அப்படியே இருக்கிறது
-      const likedByClean = Array.isArray(reel.likedBy) ? reel.likedBy.filter(Boolean) : [];
-      const likesCount = likedByClean.length;
-      const isLiked = userId && likedByClean.length > 0 ? likedByClean.some((id) => id.toString() === userId.toString()) : false;
+      
+      const likedByArray = Array.isArray(reel.likedBy) ? reel.likedBy : [];
+      
+     
+      const isLiked = userId && likedByArray.some((user) => 
+        (user._id ? user._id.toString() : user.toString()) === userId.toString()
+      );
 
       return {
         ...reel._doc,
         videoUrl: baseUrl + reel.videoUrl, 
-        likes: likesCount,
-        isLiked,
-        views: reel.views || 0, // வியூஸ் எண்ணிக்கை
-        viewers: reel.viewers || [] // பார்த்தவர்களின் பட்டியல்
+        likes: likedByArray.length, 
+        isLiked: isLiked,
+        likers: reel.likedBy || [], 
+        views: reel.views || 0,
+        viewers: reel.viewers || []
       };
     });
 
     res.json({ success: true, data: formatted });
   } catch (err) {
+    console.error("GET REELS ERROR:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
