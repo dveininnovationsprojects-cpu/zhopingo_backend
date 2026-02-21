@@ -175,7 +175,6 @@
 //     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 // };
 
-
 const Product = require('../models/Product');
 const Seller = require('../models/Seller');
 const SubCategory = require('../models/SubCategory');
@@ -235,19 +234,18 @@ exports.createProduct = async (req, res) => {
     }
 };
 
-// 🌟 2. GET ALL PRODUCTS (Modified to check Active Sellers)
+// 🌟 2. GET ALL PRODUCTS (Modified to ONLY hide Inactive Sellers)
 exports.getAllProducts = async (req, res) => {
     try {
         const { category, subCategory, search, page = 1, limit = 20 } = req.query;
 
-        // 🔥 STEP 1: முதலில் Active நிலையில் உள்ள செல்லர்களை மட்டும் எடுக்கிறோம்
-        const activeSellers = await Seller.find({ status: 'active' }).select('_id');
-        const activeSellerIds = activeSellers.map(s => s._id);
+        // 🔥 இங்கதான் மாற்றம்: Inactive செல்லர்களை மட்டும் கண்டுபிடிக்கிறோம்
+        const inactiveSellers = await Seller.find({ status: 'inactive' }).select('_id');
+        const inactiveIds = inactiveSellers.map(s => s._id);
 
-        // 🔥 STEP 2: குவரியில் செல்லர் ஐடியைச் சேர்க்கிறோம்
         let query = { 
             isArchived: { $ne: true },
-            seller: { $in: activeSellerIds } // செல்லர் Active-ஆக இருக்க வேண்டும்
+            seller: { $nin: inactiveIds } // $nin = Not In (Inactive செல்லர்களை மட்டும் தவிர்த்துவிடு)
         };
 
         if (category) query.category = category;
@@ -280,45 +278,85 @@ exports.getAllProducts = async (req, res) => {
     }
 };
 
-// 🌟 3. GET MY PRODUCTS
+// 🌟 4. UPDATE PRODUCT (Now Supports Image & Video Update)
+exports.updateProduct = async (req, res) => {
+    try {
+        let updateData = { ...req.body };
+
+        // Variants parse செய்தல்
+        if (updateData.variants && typeof updateData.variants === 'string') {
+            updateData.variants = JSON.parse(updateData.variants);
+        }
+
+        // புதிய இமேஜ்கள் வந்தால் பழையவற்றை மாற்றாமல் சேர்க்கலாம் அல்லது ரீப்ளேஸ் செய்யலாம்
+        if (req.files) {
+            if (req.files['images']) {
+                updateData.images = req.files['images'].map(f => f.filename);
+            }
+            if (req.files['video']) {
+                updateData.video = req.files['video'][0].filename;
+            }
+        }
+
+        // Discount மறுபடியும் கணக்கிடுதல்
+        if (updateData.mrp && updateData.price) {
+            updateData.discountPercentage = updateData.mrp > updateData.price 
+                ? Math.round(((updateData.mrp - updateData.price) / updateData.mrp) * 100) 
+                : 0;
+        }
+
+        const updated = await Product.findByIdAndUpdate(req.params.id, updateData, { new: true });
+        
+        if (!updated) return res.status(404).json({ success: false, message: "Product not found" });
+
+        res.json({ success: true, data: updated });
+    } catch (err) { 
+        res.status(400).json({ success: false, error: err.message }); 
+    }
+};
+
+// 🌟 7. GET SIMILAR PRODUCTS (Hide Inactive Sellers)
+exports.getSimilarProducts = async (req, res) => {
+    try {
+        const { category } = req.query;
+
+        const inactiveSellers = await Seller.find({ status: 'inactive' }).select('_id');
+        const inactiveIds = inactiveSellers.map(s => s._id);
+
+        const products = await Product.find({ 
+            category, 
+            _id: { $ne: req.params.id }, 
+            isArchived: { $ne: true },
+            seller: { $nin: inactiveIds } 
+        }).limit(6).lean();
+
+        const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
+        const data = products.map(p => ({ ...p, images: (p.images || []).map(img => img.startsWith('http') ? img : baseUrl + img) }));
+        res.json({ success: true, data });
+    } catch (err) { 
+        res.status(500).json({ success: false, error: err.message }); 
+    }
+};
+
+// மற்ற பழைய பங்க்ஷன்கள் (getMyProducts, deleteProduct, getProductById) அப்படியே இருக்கட்டும்.
 exports.getMyProducts = async (req, res) => {
     try {
         if (!req.user?.id) return res.status(401).json({ success: false, message: "Unauthorized" });
-
-        const products = await Product.find({ seller: req.user.id, isArchived: { $ne: true } })
-            .populate('category subCategory').lean();
-
+        const products = await Product.find({ seller: req.user.id, isArchived: { $ne: true } }).populate('category subCategory').lean();
         const baseUrl = `${req.protocol}://${req.get('host')}/uploads/products/`;
-
         const data = products.map(p => ({
             ...p,
             images: (p.images || []).map(img => (img && (img.startsWith('http') || img.includes('zhopingo.in'))) ? img : baseUrl + img),
             video: p.video ? (p.video.startsWith('http') ? p.video : baseUrl + p.video) : ""
         }));
-
         res.json({ success: true, count: data.length, data });
-    } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
-    }
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
-// 🌟 4. UPDATE PRODUCT
-exports.updateProduct = async (req, res) => {
-    try {
-        if (req.body.variants && typeof req.body.variants === 'string') {
-            req.body.variants = JSON.parse(req.body.variants);
-        }
-        const updated = await Product.findByIdAndUpdate(req.params.id, req.body, { new: true });
-        res.json({ success: true, data: updated });
-    } catch (err) { res.status(400).json({ success: false, error: err.message }); }
-};
-
-// 🌟 5. DELETE PRODUCT
 exports.deleteProduct = async (req, res) => {
     try {
         const product = await Product.findById(req.params.id);
         if (!product) return res.status(404).json({ success: false, message: "Product not found" });
-
         const uploadPath = path.join(__dirname, '../public/uploads/');
         [...(product.images || []), product.video].forEach(file => {
             if (file) {
@@ -326,45 +364,18 @@ exports.deleteProduct = async (req, res) => {
                 if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
             }
         });
-
         await Product.findByIdAndDelete(req.params.id);
         res.json({ success: true, message: "Product deleted successfully!" });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
-// 🌟 6. GET PRODUCT BY ID
 exports.getProductById = async (req, res) => {
     try {
         const product = await Product.findById(req.params.id).populate('category subCategory seller');
         if (!product) return res.status(404).json({ success: false, message: "Product not found" });
-        
-        // ஒருவேளை செல்லர் Inactive-ஆக இருந்தால் காட்டக்கூடாது என்றால்:
         if (product.seller && product.seller.status === 'inactive') {
             return res.status(403).json({ success: false, message: "Product currently unavailable" });
         }
-
         res.status(200).json({ success: true, data: formatProductMedia(product, req) });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
-};
-
-// 🌟 7. GET SIMILAR PRODUCTS (Modified to check Active Sellers)
-exports.getSimilarProducts = async (req, res) => {
-    try {
-        const { category } = req.query;
-
-        // 🔥 Active செல்லர்களை மட்டும் பில்டர் செய்கிறோம்
-        const activeSellers = await Seller.find({ status: 'active' }).select('_id');
-        const activeSellerIds = activeSellers.map(s => s._id);
-
-        const products = await Product.find({ 
-            category, 
-            _id: { $ne: req.params.id }, 
-            isArchived: { $ne: true },
-            seller: { $in: activeSellerIds } // செல்லர் Active-ஆக இருக்க வேண்டும்
-        }).limit(6).lean();
-
-        const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
-        const data = products.map(p => ({ ...p, images: (p.images || []).map(img => img.startsWith('http') ? img : baseUrl + img) }));
-        res.json({ success: true, data });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
