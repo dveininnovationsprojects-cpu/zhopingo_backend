@@ -207,7 +207,7 @@ exports.updateAdminProfile = async (req, res) => {
     try {
         const updateData = req.body;
         // இங்கே நீ டேட்டாபேஸில் சேமிக்க விரும்பினால்:
-        // await User.findOneAndUpdate({ role: 'admin' }, updateData);
+        await User.findOneAndUpdate({ role: 'admin' }, updateData);
         
         res.json({ 
             success: true, 
