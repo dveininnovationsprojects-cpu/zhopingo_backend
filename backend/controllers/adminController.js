@@ -218,21 +218,22 @@ exports.getAdminProfile = async (req, res) => {
     }
 };
 
-// 4️⃣ பாஸ்வேர்ட் மாற்ற (Change Password - Secured)
+
 exports.changeAdminPassword = async (req, res) => {
     try {
-        const { oldPass, newPass } = req.body;
+        
+        const { oldPassword, newPassword } = req.body; 
+        
         const admin = await User.findById(req.user.id);
+        if (!admin || !admin.password) {
+            return res.status(404).json({ success: false, message: "Admin password not set in database" });
+        }
 
-        if (!admin) return res.status(404).json({ success: false, message: "Admin not found" });
-
-        // பழைய பாஸ்வேர்ட் செக்
-        const isMatch = await bcrypt.compare(oldPass, admin.password);
+       
+        const isMatch = await bcrypt.compare(oldPassword, admin.password);
         if (!isMatch) return res.status(400).json({ success: false, message: "Old password is wrong" });
 
-        // புதிய பாஸ்வேர்ட் ஹேஷிங்
-        const salt = await bcrypt.genSalt(10);
-        admin.password = await bcrypt.hash(newPass, salt);
+        admin.password = newPassword; 
         await admin.save();
 
         res.json({ success: true, message: "Password Changed Successfully!" });
