@@ -247,7 +247,7 @@ const jwt = require("jsonwebtoken");
 const { sendReelBlockNotification } = require("../utils/emailService");
 const bcrypt = require("bcryptjs");
 
-const JWT_SECRET = process.env.JWT_SECRET || "secret123";
+const JWT_SECRET = process.env.JWT_SECRET || 'hVVYvMx4PysJmsoZv679+1S/xx/YP4JRZmrYtNfXLiU80U3Nd+XCdRoroUFl4pbRyTf2x+e2AIvI9K8c0bE4gQ==';
 
 // 🌟 1. அட்மின் லாகின்
 exports.adminLogin = async (req, res) => {
