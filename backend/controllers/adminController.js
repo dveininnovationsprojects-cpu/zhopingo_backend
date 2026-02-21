@@ -6,6 +6,8 @@ const { sendReelBlockNotification } = require("../utils/emailService");
 const bcrypt = require("bcryptjs");
 
 const JWT_SECRET = process.env.JWT_SECRET || "secret123";
+
+// 🌟 1. அட்மின் லாகின் (Fixed Double Hashing)
 exports.adminLogin = async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -13,37 +15,30 @@ exports.adminLogin = async (req, res) => {
         const DEFAULT_PASS = "admin@123";
 
         if (email === DEFAULT_EMAIL && password === DEFAULT_PASS) {
-            // 1. அட்மின் இருக்காரான்னு பாரு
             let admin = await User.findOne({ role: 'admin' });
 
             if (!admin) {
-                // 2. ஒருவேளை அதே போன் நம்பர்ல கஸ்டமர் இருந்தா, அந்த 'unique' எர்ரரை தவிர்க்க
-                // தற்காலிகமா அட்மினுக்கு வேற ஒரு நம்பர் கொடுத்துட்டு, அப்புறம் நீ ப்ரொபைல்ல மாத்திக்கலாம்.
-                // அல்லது, டேட்டாபேஸ்ல 'Admin'னு ஒருத்தரை மட்டும் மேனுவலா கிரியேட் பண்ணிடு.
-                
+                // 🌟 இங்க தான் மேட்டர்: பாஸ்வேர்டை அப்படியே குடு, ஹேஷ் பண்ணாத!
+                // User.js-ல் உள்ள pre-save hook இத ஹேஷ் பண்ணிக்கும்.
                 admin = new User({
                     name: "Admin da amala",
                     email: DEFAULT_EMAIL,
-                    password: DEFAULT_PASS,
+                    password: DEFAULT_PASS, // 👈 JUST PLAIN TEXT
                     role: "admin",
-                    phone: "0000000000" // 👈 இத முதல்ல குடு, அப்புறம் அப்டேட் பண்ணிக்கலாம்
+                    phone: "9876543210" 
                 });
                 await admin.save();
             }
 
-            const token = jwt.sign(
-                { id: admin._id, role: "admin" },
-                JWT_SECRET,
-                { expiresIn: "7d" }
-            );
+            // இப்போ bcrypt.compare கரெக்டா மேட்ச் ஆகும்
+            const isMatch = await bcrypt.compare(password, admin.password);
+            if (!isMatch) return res.status(401).json({ success: false, message: "Invalid Password" });
 
-            return res.json({
-                success: true,
-                token,
-                user: admin
-            });
+            const token = jwt.sign({ id: admin._id, role: "admin" }, JWT_SECRET, { expiresIn: "7d" });
+
+            return res.json({ success: true, token, user: admin });
         }
-        return res.status(401).json({ success: false, message: "Invalid Admin" });
+        return res.status(401).json({ success: false, message: "Invalid Admin Credentials" });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
@@ -218,24 +213,19 @@ exports.getAdminProfile = async (req, res) => {
     }
 };
 
-// 2️⃣ பாஸ்வேர்ட் மாற்ற (Secured & Fixed)
+
 exports.changeAdminPassword = async (req, res) => {
     try {
         const { oldPassword, newPassword } = req.body; 
         
-        // 1. அட்மினைத் தேடு
         const admin = await User.findById(req.user.id);
         if (!admin) return res.status(404).json({ success: false, message: "Admin not found" });
 
-        // 2. பழைய பாஸ்வேர்ட் மேட்ச் ஆகிறதா எனப் பார்
-        const isMatch = await bcrypt.compare(oldPassword, admin.password);
         
-        if (!isMatch) {
-            return res.status(400).json({ success: false, message: "Old password is wrong" });
-        }
+        const isMatch = await bcrypt.compare(oldPassword, admin.password);
+        if (!isMatch) return res.status(400).json({ success: false, message: "Old password is wrong" });
 
-        // 3. புதிய பாஸ்வேர்டை அப்படியே அசைன் பண்ணு. 
-        // User.js-ல் உள்ள pre-save hook இதைத் தானாக ஹேஷ் செய்து சேமிக்கும்.
+        
         admin.password = newPassword; 
         await admin.save();
 
