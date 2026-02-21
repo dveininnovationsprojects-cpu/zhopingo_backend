@@ -183,23 +183,24 @@ exports.updateSellerStatus = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
-// 1. அட்மின் ப்ரொபைல் விவரங்களை டேட்டாபேஸில் இருந்து எடுக்க
+// 1. அட்மின் விவரங்களை எடுக்க
 exports.getAdminProfile = async (req, res) => {
     try {
-        // அட்மின் மின்னஞ்சலை வைத்து தேடுகிறோம்
+        // ID-யை வைத்தும் தேடலாம், அல்லது அட்மின் ரோலை வைத்தும் தேடலாம்
         let admin = await User.findOne({ role: 'admin' }).select("-password");
 
-        // ஒருவேளை டேட்டாபேஸில் அட்மின் இல்லை என்றால், நீ கேட்ட அந்த Default டேட்டாவை உருவாக்கும்
         if (!admin) {
-            admin = {
-                name: "Admin da amala", 
-                email: "admin@gmail.com",
-                phone: "000000",
-                city: "Chennai",
-                state: "Tamil Nadu",
-                country: "India",
-                role: "admin"
-            };
+            return res.json({ 
+                success: true, 
+                data: {
+                    id: "098",
+                    name: "Admin da amala", 
+                    email: "admin@gmail.com",
+                    phone: "000000",
+                    city: "Chennai",
+                    role: "admin"
+                } 
+            });
         }
 
         res.json({ success: true, data: admin });
@@ -207,33 +208,27 @@ exports.getAdminProfile = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
-
-// 2. அட்மின் ப்ரொபைல் அப்டேட் செய்ய (Real Database Update)
+// 2. அட்மின் விவரங்களை அப்டேட் செய்ய (ID தேவையில்லை)
 exports.updateAdminProfile = async (req, res) => {
     try {
         const updateData = req.body;
 
-        // அட்மின் ப்ரொபைலை கண்டுபிடித்து அப்டேட் செய்கிறோம்
+        // ரோல் 'admin' ஆக இருப்பவரை மட்டும் அப்டேட் செய்யும்
         const updatedAdmin = await User.findOneAndUpdate(
             { role: 'admin' }, 
             { $set: updateData }, 
-            { new: true, runValidators: true }
+            { new: true }
         ).select("-password");
 
         if (!updatedAdmin) {
-            return res.status(404).json({ success: false, message: "Admin account not found in database" });
+            return res.status(404).json({ success: false, message: "Admin account not found" });
         }
 
-        res.json({ 
-            success: true, 
-            message: "Profile updated successfully!",
-            data: updatedAdmin 
-        });
+        res.json({ success: true, message: "Profile updated!", data: updatedAdmin });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
 };
-
 // 3. பாஸ்வேர்ட் மாற்ற (With Proper Security)
 exports.changeAdminPassword = async (req, res) => {
     try {
