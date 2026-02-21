@@ -1,4 +1,5 @@
 const DeliveryCharge = require('../models/DeliveryCharge');
+const Admin = require('../models/Admin');
 const Seller = require("../models/Seller");
 const User = require("../models/User");
 const jwt = require("jsonwebtoken");
@@ -7,51 +8,41 @@ const bcrypt = require("bcryptjs");
 
 const JWT_SECRET = process.env.JWT_SECRET || "secret123";
 
-// 1️⃣ அட்மின் லாகின் (டேட்டாபேஸ்ல ஆள் இல்லனா கிரியேட் பண்ணி நிஜமான ID-யை கொடுக்கும்)
 exports.adminLogin = async (req, res) => {
     try {
         const { email, password } = req.body;
         const DEFAULT_EMAIL = "admin@gmail.com";
         const DEFAULT_PASS = "admin@123";
 
-        if (email === DEFAULT_EMAIL && password === DEFAULT_PASS) {
-            // 🔥 அட்மின் இல்லையென்றால் டேட்டாபேஸில் உருவாக்கும் (Upsert)
-            let admin = await User.findOne({ email: DEFAULT_EMAIL });
+        let admin = await Admin.findOne({ email });
 
-            if (!admin) {
-                const salt = await bcrypt.genSalt(10);
-                const hashedPassword = await bcrypt.hash(DEFAULT_PASS, salt);
-                
-                admin = new User({
-                    name: "Admin da amala",
-                    email: DEFAULT_EMAIL,
-                    password: hashedPassword,
-                    role: "admin",
-                    phone: "9876543210"
-                });
-                await admin.save();
-            }
+        // டேட்டாபேஸில் இல்லையென்றால் புதிய அட்மினை உருவாக்கும்
+        if (!admin && email === DEFAULT_EMAIL && password === DEFAULT_PASS) {
+            const salt = await bcrypt.genSalt(10);
+            const hashedPassword = await bcrypt.hash(DEFAULT_PASS, salt);
+            
+            admin = new Admin({
+                name: "Admin da amala",
+                email: DEFAULT_EMAIL,
+                password: hashedPassword,
+                phone: "1122334455" // தனி நம்பர், கஸ்டமர் நம்பருடன் மோதாது
+            });
+            await admin.save();
+        }
 
-            // 🌟 டோக்கனில் நிஜமான டேட்டாபேஸ் _id-யை வைக்கிறோம்
-            const token = jwt.sign(
-                { id: admin._id, role: "admin" },
-                JWT_SECRET,
-                { expiresIn: "7d" }
-            );
+        if (admin) {
+            const isMatch = await bcrypt.compare(password, admin.password);
+            if (!isMatch) return res.status(401).json({ success: false, message: "Invalid Password" });
+
+            const token = jwt.sign({ id: admin._id, role: "admin" }, JWT_SECRET, { expiresIn: "7d" });
 
             return res.json({
                 success: true,
                 token,
-                user: {
-                    id: admin._id,
-                    name: admin.name,
-                    email: admin.email,
-                    role: admin.role
-                }
+                user: { id: admin._id, name: admin.name, email: admin.email, role: "admin" }
             });
-        } else {
-            return res.status(401).json({ success: false, message: "Invalid Credentials" });
         }
+        return res.status(401).json({ success: false, message: "Invalid Credentials" });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
@@ -200,21 +191,18 @@ exports.updateSellerStatus = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
-// 2️⃣ அட்மின் ப்ரொபைல் அப்டேட் (Real DB Update)
+// 2️⃣ அட்மின் ப்ரொபைல் அப்டேட் (City, State, Country உட்பட)
 exports.updateAdminProfile = async (req, res) => {
     try {
-        // protect middleware-ல் இருந்து வரும் அட்மின் ID
-        const adminId = req.user.id; 
-
-        const updatedAdmin = await User.findByIdAndUpdate(
-            adminId,
+        const updatedAdmin = await Admin.findByIdAndUpdate(
+            req.user.id, // protect middleware-ல் இருந்து வரும் ID
             { $set: req.body },
             { new: true, runValidators: true }
         ).select("-password");
 
         if (!updatedAdmin) return res.status(404).json({ success: false, message: "Admin not found" });
 
-        res.json({ success: true, message: "Profile Updated!", data: updatedAdmin });
+        res.json({ success: true, message: "Profile Updated Successfully!", data: updatedAdmin });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
@@ -223,7 +211,7 @@ exports.updateAdminProfile = async (req, res) => {
 // 3️⃣ அட்மின் ப்ரொபைல் விவரங்களை எடுக்க
 exports.getAdminProfile = async (req, res) => {
     try {
-        const admin = await User.findById(req.user.id).select("-password");
+        const admin = await Admin.findById(req.user.id).select("-password");
         if (!admin) return res.status(404).json({ success: false, message: "Admin not found" });
         res.json({ success: true, data: admin });
     } catch (err) {
@@ -235,7 +223,7 @@ exports.getAdminProfile = async (req, res) => {
 exports.changeAdminPassword = async (req, res) => {
     try {
         const { oldPass, newPass } = req.body;
-        const admin = await User.findById(req.user.id);
+        const admin = await Admin.findById(req.user.id);
 
         if (!admin) return res.status(404).json({ success: false, message: "Admin not found" });
 
