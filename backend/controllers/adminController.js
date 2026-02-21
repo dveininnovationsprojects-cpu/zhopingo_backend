@@ -6,8 +6,6 @@ const { sendReelBlockNotification } = require("../utils/emailService");
 const bcrypt = require("bcryptjs");
 
 const JWT_SECRET = process.env.JWT_SECRET || "secret123";
-
-// 🌟 1. அட்மின் லாகின் (Fixed Double Hashing)
 exports.adminLogin = async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -15,35 +13,32 @@ exports.adminLogin = async (req, res) => {
         const DEFAULT_PASS = "admin@123";
 
         if (email === DEFAULT_EMAIL && password === DEFAULT_PASS) {
-            let admin = await User.findOne({ role: 'admin' });
+            let admin = await User.findOne({ email: DEFAULT_EMAIL, role: 'admin' });
 
             if (!admin) {
-                // 🌟 இங்க தான் மேட்டர்: பாஸ்வேர்டை அப்படியே குடு, ஹேஷ் பண்ணாத!
-                // User.js-ல் உள்ள pre-save hook இத ஹேஷ் பண்ணிக்கும்.
                 admin = new User({
                     name: "Admin da amala",
                     email: DEFAULT_EMAIL,
-                    password: DEFAULT_PASS, // 👈 JUST PLAIN TEXT
+                    password: DEFAULT_PASS, // அப்படியே சேவ் ஆகும் (No hashing)
                     role: "admin",
-                    phone: "9876543210" 
+                    phone: "9876543210"
                 });
                 await admin.save();
             }
 
-            // இப்போ bcrypt.compare கரெக்டா மேட்ச் ஆகும்
-            const isMatch = await bcrypt.compare(password, admin.password);
-            if (!isMatch) return res.status(401).json({ success: false, message: "Invalid Password" });
+            // 🌟 நேரடி செக் (No bcrypt)
+            if (password !== admin.password) {
+                return res.status(401).json({ success: false, message: "Invalid Password" });
+            }
 
             const token = jwt.sign({ id: admin._id, role: "admin" }, JWT_SECRET, { expiresIn: "7d" });
-
             return res.json({ success: true, token, user: admin });
         }
-        return res.status(401).json({ success: false, message: "Invalid Admin Credentials" });
+        return res.status(401).json({ success: false, message: "Invalid Admin" });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
 };
-
 exports.uploadDeliveryRates = async (req, res) => {
   try {
     const ratesArray = req.body; 
@@ -216,16 +211,14 @@ exports.getAdminProfile = async (req, res) => {
 
 exports.changeAdminPassword = async (req, res) => {
     try {
-        const { oldPassword, newPassword } = req.body; 
-        
+        const { oldPassword, newPassword } = req.body;
         const admin = await User.findById(req.user.id);
-        if (!admin) return res.status(404).json({ success: false, message: "Admin not found" });
 
-        
-        const isMatch = await bcrypt.compare(oldPassword, admin.password);
-        if (!isMatch) return res.status(400).json({ success: false, message: "Old password is wrong" });
+       
+        if (oldPassword !== admin.password) {
+            return res.status(400).json({ success: false, message: "Old password is wrong" });
+        }
 
-        
         admin.password = newPassword; 
         await admin.save();
 
