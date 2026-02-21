@@ -6,39 +6,55 @@ const { sendReelBlockNotification } = require("../utils/emailService");
 
 const JWT_SECRET = process.env.JWT_SECRET || "secret123";
 
-
+// 1️⃣ அட்மின் லாகின் (டேட்டாபேஸ்ல ஆள் இல்லனா கிரியேட் பண்ணி நிஜமான ID-யை கொடுக்கும்)
 exports.adminLogin = async (req, res) => {
-  try {
-    const { email, password } = req.body;
+    try {
+        const { email, password } = req.body;
+        const DEFAULT_EMAIL = "admin@gmail.com";
+        const DEFAULT_PASS = "admin@123";
 
-    
-    const DEFAULT_ADMIN_EMAIL = "admin@gmail.com";
-    const DEFAULT_ADMIN_PASS = "admin@123";
+        if (email === DEFAULT_EMAIL && password === DEFAULT_PASS) {
+            // 🔥 அட்மின் இல்லையென்றால் டேட்டாபேஸில் உருவாக்கும் (Upsert)
+            let admin = await User.findOne({ email: DEFAULT_EMAIL });
 
-    if (email === DEFAULT_ADMIN_EMAIL && password === DEFAULT_ADMIN_PASS) {
-     
-      const token = jwt.sign(
-        { id: "static_admin_id", role: "admin" },
-        JWT_SECRET,
-        { expiresIn: "7d" }
-      );
+            if (!admin) {
+                const salt = await bcrypt.genSalt(10);
+                const hashedPassword = await bcrypt.hash(DEFAULT_PASS, salt);
+                
+                admin = new User({
+                    name: "Admin da amala",
+                    email: DEFAULT_EMAIL,
+                    password: hashedPassword,
+                    role: "admin",
+                    phone: "9876543210"
+                });
+                await admin.save();
+            }
 
-      return res.json({
-        success: true,
-        token,
-        user: { email: DEFAULT_ADMIN_EMAIL, role: "admin" }
-      });
-    } else {
-      return res.status(401).json({ 
-        success: false, 
-        message: "Invalid Admin Credentials" 
-      });
+            // 🌟 டோக்கனில் நிஜமான டேட்டாபேஸ் _id-யை வைக்கிறோம்
+            const token = jwt.sign(
+                { id: admin._id, role: "admin" },
+                JWT_SECRET,
+                { expiresIn: "7d" }
+            );
+
+            return res.json({
+                success: true,
+                token,
+                user: {
+                    id: admin._id,
+                    name: admin.name,
+                    email: admin.email,
+                    role: admin.role
+                }
+            });
+        } else {
+            return res.status(401).json({ success: false, message: "Invalid Credentials" });
+        }
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
     }
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
 };
-
 
 exports.uploadDeliveryRates = async (req, res) => {
   try {
@@ -183,77 +199,56 @@ exports.updateSellerStatus = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
-// 1. அட்மின் ப்ரொபைல் விவரங்களை டேட்டாபேஸில் இருந்து எடுக்க
+// 2️⃣ அட்மின் ப்ரொபைல் அப்டேட் (Real DB Update)
+exports.updateAdminProfile = async (req, res) => {
+    try {
+        // protect middleware-ல் இருந்து வரும் அட்மின் ID
+        const adminId = req.user.id; 
+
+        const updatedAdmin = await User.findByIdAndUpdate(
+            adminId,
+            { $set: req.body },
+            { new: true, runValidators: true }
+        ).select("-password");
+
+        if (!updatedAdmin) return res.status(404).json({ success: false, message: "Admin not found" });
+
+        res.json({ success: true, message: "Profile Updated!", data: updatedAdmin });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+// 3️⃣ அட்மின் ப்ரொபைல் விவரங்களை எடுக்க
 exports.getAdminProfile = async (req, res) => {
     try {
-        // அட்மின் மின்னஞ்சலை வைத்து தேடுகிறோம்
-        let admin = await User.findOne({ role: 'admin' }).select("-password");
-
-        // ஒருவேளை டேட்டாபேஸில் அட்மின் இல்லை என்றால், நீ கேட்ட அந்த Default டேட்டாவை உருவாக்கும்
-        if (!admin) {
-            admin = {
-                name: "Admin da amala", 
-                email: "admin@gmail.com",
-                phone: "000000",
-                city: "Chennai",
-                state: "Tamil Nadu",
-                country: "India",
-                role: "admin"
-            };
-        }
-
+        const admin = await User.findById(req.user.id).select("-password");
+        if (!admin) return res.status(404).json({ success: false, message: "Admin not found" });
         res.json({ success: true, data: admin });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
 };
 
-// 2. அட்மின் ப்ரொபைல் அப்டேட் செய்ய (Real Database Update)
-exports.updateAdminProfile = async (req, res) => {
-    try {
-        const updateData = req.body;
-
-        // அட்மின் ப்ரொபைலை கண்டுபிடித்து அப்டேட் செய்கிறோம்
-        const updatedAdmin = await User.findOneAndUpdate(
-            { role: 'admin' }, 
-            { $set: updateData }, 
-            { new: true, runValidators: true }
-        ).select("-password");
-
-        if (!updatedAdmin) {
-            return res.status(404).json({ success: false, message: "Admin account not found in database" });
-        }
-
-        res.json({ 
-            success: true, 
-            message: "Profile updated successfully!",
-            data: updatedAdmin 
-        });
-    } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
-    }
-};
-
-// 3. பாஸ்வேர்ட் மாற்ற (With Proper Security)
+// 4️⃣ பாஸ்வேர்ட் மாற்ற (Change Password - Secured)
 exports.changeAdminPassword = async (req, res) => {
     try {
         const { oldPass, newPass } = req.body;
+        const admin = await User.findById(req.user.id);
 
-        // 1. அட்மினை கண்டுபிடிக்கவும்
-        const admin = await User.findOne({ role: 'admin' });
         if (!admin) return res.status(404).json({ success: false, message: "Admin not found" });
 
-        // 2. பழைய பாஸ்வேர்ட் சரியா என பார்க்கவும்
+        // பழைய பாஸ்வேர்ட் செக்
         const isMatch = await bcrypt.compare(oldPass, admin.password);
-        if (!isMatch) return res.status(400).json({ success: false, message: "Old password is incorrect" });
+        if (!isMatch) return res.status(400).json({ success: false, message: "Old password is wrong" });
 
-        // 3. புதிய பாஸ்வேர்டை ஹேஷ் (Hash) செய்து சேமிக்கவும்
+        // புதிய பாஸ்வேர்ட் ஹேஷிங்
         const salt = await bcrypt.genSalt(10);
         admin.password = await bcrypt.hash(newPass, salt);
         await admin.save();
 
-        res.json({ success: true, message: "Password updated successfully!" });
+        res.json({ success: true, message: "Password Changed Successfully!" });
     } catch (err) {
-        res.status(500).json({ success: false, message: "Password update failed", error: err.message });
+        res.status(500).json({ success: false, error: err.message });
     }
 };
