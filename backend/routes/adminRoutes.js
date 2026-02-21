@@ -30,8 +30,11 @@ router.put("/sellers/toggle-brand/:id", toggleBrandStatus);
 router.post('/block-reel', protect,blockReelByAdmin);
 router.put('/sellers/:id', protect,updateSellerStatus);
 // Admin Profile Routes
-router.get('/profile/:id',protect, getAdminProfile);
-router.put('/update-profile/:id',protect, updateAdminProfile);
-router.put('/change-password/:id', protect,changeAdminPassword);
+// அட்மின் ப்ரொபைல் - GET (பார்க்க), PUT (அப்டேட் செய்ய)
+router.get('/profile', protect, getAdminProfile);
+router.put('/profile', protect, updateAdminProfile);
+
+// பாஸ்வேர்ட் மாற்ற - PUT
+router.put('/change-password', protect, changeAdminPassword);
 
 module.exports = router;
