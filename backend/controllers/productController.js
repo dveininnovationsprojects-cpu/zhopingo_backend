@@ -233,19 +233,18 @@ exports.createProduct = async (req, res) => {
         res.status(400).json({ success: false, error: err.message }); 
     }
 };
-
-// 🌟 2. GET ALL PRODUCTS (Modified to ONLY hide Inactive Sellers)
+// 🌟 2. GET ALL PRODUCTS (Customer View)
 exports.getAllProducts = async (req, res) => {
     try {
         const { category, subCategory, search, page = 1, limit = 20 } = req.query;
 
-        // 🔥 இங்கதான் மாற்றம்: Inactive செல்லர்களை மட்டும் கண்டுபிடிக்கிறோம்
+        // Inactive செல்லர்களை தவிர்க்கும் லாஜிக்
         const inactiveSellers = await Seller.find({ status: 'inactive' }).select('_id');
         const inactiveIds = inactiveSellers.map(s => s._id);
 
         let query = { 
             isArchived: { $ne: true },
-            seller: { $nin: inactiveIds } // $nin = Not In (Inactive செல்லர்களை மட்டும் தவிர்த்துவிடு)
+            seller: { $nin: inactiveIds } 
         };
 
         if (category) query.category = category;
@@ -262,12 +261,19 @@ exports.getAllProducts = async (req, res) => {
             .limit(parseInt(limit))
             .lean(); 
 
-        const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
+        // ✅ திருத்தம்: இங்கு 'products/' என்பதை சேர்த்துள்ளேன்
+        const baseUrl = `${req.protocol}://${req.get('host')}/uploads/products/`;
         
         const data = products.map(p => ({
             ...p,
-            images: (p.images || []).map(img => (img && img.startsWith('http')) ? img : baseUrl + img),
-            video: p.video ? (p.video.startsWith('http') ? p.video : baseUrl + p.video) : "",
+            images: (p.images || []).map(img => {
+                if (!img) return "";
+                if (img.startsWith('https')) return img;
+                // ஒருவேளை டேட்டாபேஸில் ஏற்கனவே 'products/' என்று இருந்தால் அதைத் தவிர்க்க
+                const cleanImg = img.replace('products/', '');
+                return baseUrl + cleanImg;
+            }),
+            video: p.video ? (p.video.startsWith('https') ? p.video : baseUrl + p.video) : "",
             availability: p.stock <= 0 ? "Out of Stock" : (p.stock < 10 ? `Only ${p.stock} left` : "Available"),
             ratingCount: Math.floor(Math.random() * (200 - 50) + 50)
         }));
@@ -277,7 +283,6 @@ exports.getAllProducts = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
-
 // 🌟 4. UPDATE PRODUCT (Now Supports Image & Video Update)
 exports.updateProduct = async (req, res) => {
     try {
@@ -346,8 +351,8 @@ exports.getMyProducts = async (req, res) => {
         const baseUrl = `${req.protocol}://${req.get('host')}/uploads/products/`;
         const data = products.map(p => ({
             ...p,
-            images: (p.images || []).map(img => (img && (img.startsWith('http') || img.includes('zhopingo.in'))) ? img : baseUrl + img),
-            video: p.video ? (p.video.startsWith('http') ? p.video : baseUrl + p.video) : ""
+            images: (p.images || []).map(img => (img && (img.startsWith('https') || img.includes('zhopingo.in'))) ? img : baseUrl + img),
+            video: p.video ? (p.video.startsWith('https') ? p.video : baseUrl + p.video) : ""
         }));
         res.json({ success: true, count: data.length, data });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
