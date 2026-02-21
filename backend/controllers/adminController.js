@@ -189,7 +189,7 @@ exports.getAdminProfile = async (req, res) => {
         
         const adminData = {
             id: "",
-            name: "Admin da omala", // 🌟 டீஃபால்ட் பெயர்
+            name: "Admin navin da nantha da", // 🌟 டீஃபால்ட் பெயர்
             email: "admin@gmail.com",
             phone: "000000",
             city: "Chennai",
