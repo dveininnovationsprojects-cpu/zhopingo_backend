@@ -249,8 +249,8 @@ const bcrypt = require("bcryptjs");
 
 const JWT_SECRET = process.env.JWT_SECRET || 'hVVYvMx4PysJmsoZv679+1S/xx/YP4JRZmrYtNfXLiU80U3Nd+XCdRoroUFl4pbRyTf2x+e2AIvI9K8c0bE4gQ==';
 
-// 🌟 1. அட்மின் லாகின்
-exports.adminLogin = async (req, res) => {
+// 🌟 மச்சான் இங்க கவனி: (req, res) மட்டும் தான் இருக்கணும், 'next' இருக்கக்கூடாது!
+exports.adminLogin = async (req, res) => { 
     try {
         const { email, password } = req.body;
         const DEFAULT_EMAIL = "admin@gmail.com";
@@ -258,12 +258,11 @@ exports.adminLogin = async (req, res) => {
 
         let admin = await Admin.findOne({ email });
 
-        // டேட்டாபேஸில் இல்லையென்றால் டீஃபால்ட் விவரங்களுடன் உருவாக்கும்
         if (!admin && email === DEFAULT_EMAIL && password === DEFAULT_PASS) {
             admin = new Admin({
                 name: "Admin da amala",
                 email: DEFAULT_EMAIL,
-                password: DEFAULT_PASS, // Schema pre-save hook ஹேஷ் செய்துவிடும்
+                password: DEFAULT_PASS, // Schema pre-save hook ஹேஷ் பண்ணிக்கும்
                 phone: "1122334455" 
             });
             await admin.save();
@@ -273,7 +272,7 @@ exports.adminLogin = async (req, res) => {
             const isMatch = await bcrypt.compare(password, admin.password);
             if (!isMatch) return res.status(401).json({ success: false, message: "Invalid Password" });
 
-            const token = jwt.sign({ id: admin._id, role: "admin" }, JWT_SECRET, { expiresIn: "7d" });
+            const token = jwt.sign({ id: admin._id, role: "admin" }, process.env.JWT_SECRET || 'hVVYvMx4PysJmsoZv679+1S/xx/YP4JRZmrYtNfXLiU80U3Nd+XCdRoroUFl4pbRyTf2x+e2AIvI9K8c0bE4gQ==', { expiresIn: "7d" });
 
             return res.json({
                 success: true,
@@ -286,7 +285,6 @@ exports.adminLogin = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
-
 // 🌟 2. அட்மின் ப்ரொபைல் அப்டேட் (City, State, Country உட்பட)
 exports.updateAdminProfile = async (req, res) => {
     try {
