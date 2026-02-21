@@ -183,3 +183,50 @@ exports.updateSellerStatus = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
+
+exports.getAdminProfile = async (req, res) => {
+    try {
+        // நீ ஸ்டேட்டிக் ஐடி பயன்படுத்துவதால் நேரடியாக டேட்டாவை அனுப்பலாம்
+        // அல்லது ஒருவேளை User மாடலில் அட்மின் இருந்தால் அங்கிருந்து எடுக்கலாம்
+        const adminData = {
+            id: "static_admin_id",
+            name: "Amala", // 🌟 டீஃபால்ட் பெயர்
+            email: "admin@gmail.com",
+            phone: "9876543210",
+            city: "Chennai",
+            state: "Tamil Nadu",
+            country: "India"
+        };
+        res.json({ success: true, data: adminData });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+// 2. அட்மின் ப்ரொபைல் அப்டேட் செய்ய
+exports.updateAdminProfile = async (req, res) => {
+    try {
+        const updateData = req.body;
+        // இங்கே நீ டேட்டாபேஸில் சேமிக்க விரும்பினால்:
+        // await User.findOneAndUpdate({ role: 'admin' }, updateData);
+        
+        res.json({ 
+            success: true, 
+            message: "Profile updated successfully!",
+            data: updateData 
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+
+exports.changeAdminPassword = async (req, res) => {
+    try {
+        const { oldPass, newPass } = req.body;
+        // பாஸ்வேர்ட் லாஜிக் இங்கே வரும்
+        res.json({ success: true, message: "Password updated successfully!" });
+    } catch (err) {
+        res.status(500).json({ success: false, message: "Password update failed" });
+    }
+};

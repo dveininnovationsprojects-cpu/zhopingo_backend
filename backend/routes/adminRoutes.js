@@ -8,7 +8,11 @@ const {
   getAllCustomers,
   toggleBrandStatus,
   blockReelByAdmin,
-  updateSellerStatus
+  updateSellerStatus,
+  getAdminProfile,
+  changeAdminPassword,
+  updateAdminProfile
+
 } = require("../controllers/adminController"); 
 const { protect } = require('../middleware/authMiddleware');
 
@@ -25,5 +29,9 @@ router.get('/customers', getAllCustomers);
 router.put("/sellers/toggle-brand/:id", toggleBrandStatus);
 router.post('/block-reel', protect,blockReelByAdmin);
 router.put('/sellers/:id', protect,updateSellerStatus);
+// Admin Profile Routes
+router.get('/profile/:id',protect, getAdminProfile);
+router.put('/update-profile/:id',protect, updateAdminProfile);
+router.put('/change-password/:id', protect,changeAdminPassword);
 
 module.exports = router;
