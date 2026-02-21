@@ -3,6 +3,7 @@ const Seller = require("../models/Seller");
 const User = require("../models/User");
 const jwt = require("jsonwebtoken");
 const { sendReelBlockNotification } = require("../utils/emailService");
+const bcrypt = require("bcryptjs");
 
 const JWT_SECRET = process.env.JWT_SECRET || "secret123";
 
