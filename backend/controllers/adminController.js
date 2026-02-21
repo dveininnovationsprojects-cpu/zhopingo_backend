@@ -218,21 +218,24 @@ exports.getAdminProfile = async (req, res) => {
     }
 };
 
-
+// 2️⃣ பாஸ்வேர்ட் மாற்ற (Secured & Fixed)
 exports.changeAdminPassword = async (req, res) => {
     try {
-        
         const { oldPassword, newPassword } = req.body; 
         
+        // 1. அட்மினைத் தேடு
         const admin = await User.findById(req.user.id);
-        if (!admin || !admin.password) {
-            return res.status(404).json({ success: false, message: "Admin password not set in database" });
+        if (!admin) return res.status(404).json({ success: false, message: "Admin not found" });
+
+        // 2. பழைய பாஸ்வேர்ட் மேட்ச் ஆகிறதா எனப் பார்
+        const isMatch = await bcrypt.compare(oldPassword, admin.password);
+        
+        if (!isMatch) {
+            return res.status(400).json({ success: false, message: "Old password is wrong" });
         }
 
-       
-        const isMatch = await bcrypt.compare(oldPassword, admin.password);
-        if (!isMatch) return res.status(400).json({ success: false, message: "Old password is wrong" });
-
+        // 3. புதிய பாஸ்வேர்டை அப்படியே அசைன் பண்ணு. 
+        // User.js-ல் உள்ள pre-save hook இதைத் தானாக ஹேஷ் செய்து சேமிக்கும்.
         admin.password = newPassword; 
         await admin.save();
 
