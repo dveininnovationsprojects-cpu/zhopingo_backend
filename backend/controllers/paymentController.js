@@ -193,7 +193,6 @@
 //   }
 // };
 
-
 const {
   StandardCheckoutClient,
   Env,
@@ -252,30 +251,25 @@ const createDelhiveryShipment = async (order, customerPhone) => {
 };
 
 /* =====================================================
-    ✅ INTERNAL ORDER UPDATE LOGIC (Common for Webhook/Verify)
+    ✅ INTERNAL ORDER UPDATE
 ===================================================== */
 const updateOrderSuccess = async (orderId) => {
   try {
     const order = await Order.findById(orderId);
     if (order && order.paymentStatus !== "Paid") {
       const user = await User.findById(order.customerId);
-      
       order.paymentStatus = "Paid";
       order.status = "Placed";
 
-      // 🚚 Auto-Shipment Creation
       const delhiRes = await createDelhiveryShipment(order, user?.phone || "9876543210");
       if (delhiRes?.packages?.length > 0) {
         order.awbNumber = delhiRes.packages[0].waybill;
       }
-      
       await order.save();
-      console.log(`✅ Order ${orderId} Updated Successfully!`);
       return true;
     }
     return false;
   } catch (err) {
-    console.error("❌ updateOrderSuccess Error:", err.message);
     return false;
   }
 };
@@ -292,82 +286,65 @@ exports.createSession = async (req, res) => {
     const request = StandardCheckoutPayRequest.builder()
       .merchantOrderId(order._id.toString())
       .amount(Math.round(order.totalAmount * 100))
-      // 🌟 இது வெறும் பேக்-எண்ட் ரீடைரக்ட் மட்டுமே, யூசர் ஆப்பிற்குள் திரும்புவதற்கு
+      // 🌟 Ngrok URL இங்க தான் இருக்கும், ஆனா கஸ்டமர் இத பார்க்க மாட்டாங்க
       .redirectUrl(`${process.env.BASE_URL}/api/v1/payments/phonepe-return/${orderId}`)
       .build();
 
     const response = await client.pay(request);
+    const checkoutUrl = response.redirect_url || response.redirectUrl || (response.data?.instrumentResponse?.redirectInfo?.url);
 
-    // URL கண்டுபிடிக்கும் லாஜிக்
-    const checkoutUrl = response.redirect_url || 
-                        response.redirectUrl || 
-                        (response.data?.instrumentResponse?.redirectInfo?.url);
-
-    res.json({
-      success: true,
-      url: checkoutUrl, 
-      phonepeOrderId: response.order_id || response.orderId
-    });
-
+    res.json({ success: true, url: checkoutUrl });
   } catch (error) {
-    console.error("❌ Create Session Error:", error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 };
 
 /* =====================================================
-    2️⃣ VERIFY PAYMENT (Status Check API for App)
+    2️⃣ PHONEPE RETURN (The "Magic" Redirect)
+===================================================== */
+exports.phonepeReturn = (req, res) => {
+  const { orderId } = req.params;
+  // 🌟 இதுதான் மேஜிக்: Ngrok பேஜ்ஜை ஒரு செகண்ட் கூட காட்டாம ஆப்பைத் திறக்கும்
+  const deepLink = `zhopingo://payment-verify/${orderId}`;
+  
+  res.send(`
+    <html>
+      <head>
+        <script>
+          window.location.href = "${deepLink}";
+          setTimeout(function() { window.close(); }, 500);
+        </script>
+      </head>
+      <body><p>Redirecting to Zhopingo App...</p></body>
+    </html>
+  `);
+};
+
+/* =====================================================
+    3️⃣ VERIFY PAYMENT & WEBHOOK
 ===================================================== */
 exports.verifyPayment = async (req, res) => {
   try {
     const { orderId } = req.params;
     const response = await client.getOrderStatus(orderId);
-
     if (response.state === "COMPLETED") {
       await updateOrderSuccess(orderId);
       return res.json({ success: true, message: "Payment Success" });
     }
-    res.status(400).json({ success: false, message: "Payment Not Completed", state: response.state });
+    res.status(400).json({ success: false, message: "Payment Failed" });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 };
 
-/* =====================================================
-    3️⃣ PHONEPE RETURN (The Blinkit Trick)
-===================================================== */
-exports.phonepeReturn = (req, res) => {
-  const { orderId } = req.params;
-  // 🌟 இதுதான் மேஜிக்: Ngrok URL கண்ணில் படுவதற்கு முன்னரே ஆப்பைத் திறக்கச் சொல்லும்
-  const deepLink = `zhopingo://payment-verify/${orderId}`;
-  res.redirect(deepLink);
-};
-
-/* =====================================================
-    4️⃣ WEBHOOK HANDLER
-===================================================== */
 exports.webhook = async (req, res) => {
-  try {
-    const response = req.body;
-    console.log("📩 PHONEPE WEBHOOK RECEIVED");
-
-    const orderId = response.merchantOrderId || response.data?.merchantOrderId;
-    const status = response.state || response.data?.state;
-
-    if (status === "COMPLETED") {
-      await updateOrderSuccess(orderId);
-    }
-
-    res.status(200).send("OK");
-  } catch (error) {
-    console.error("❌ Webhook Error:", error.message);
-    res.status(500).send("Error");
-  }
+  const response = req.body;
+  const orderId = response.merchantOrderId || response.data?.merchantOrderId;
+  const status = response.state || response.data?.state;
+  if (status === "COMPLETED") await updateOrderSuccess(orderId);
+  res.status(200).send("OK");
 };
 
-/* =====================================================
-    5️⃣ TRACKING
-===================================================== */
 exports.trackOrder = async (req, res) => {
   try {
     const response = await axios.get(`https://staging-express.delhivery.com/api/v1/packages/json/?waybill=${req.params.awb}`, {
