@@ -221,31 +221,52 @@ exports.createOrder = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
-/* =====================================================
-    ⚡ BYPASS / TEST PAYMENT
-===================================================== */
+// /* =====================================================
+//     ⚡ BYPASS / TEST PAYMENT
+// ===================================================== */
+// exports.bypassPaymentAndShip = async (req, res) => {
+//     try {
+//         const { orderId } = req.params;
+//         const order = await Order.findById(orderId);
+//         if(!order) return res.status(404).json({ success: false, message: "Order not found" });
+
+//         const user = await User.findById(order.customerId);
+//         order.paymentStatus = "Paid";
+//         order.status = "Placed";
+
+//         const delhiRes = await createDelhiveryShipment(order, user?.phone || "9876543210");
+        
+//         if (delhiRes && (delhiRes.success === true || delhiRes.packages?.length > 0)) {
+//             order.awbNumber = delhiRes.packages?.[0]?.waybill;
+//             console.log("SUCCESS: AWB Assigned:", order.awbNumber);
+//         } else {
+//             order.awbNumber = `TEST-${Date.now()}`;
+//             console.log("FAILED: Delhivery Error, assigned TEST ID");
+//         }
+        
+//         await order.save();
+//         return res.json({ success: true, message: "Test Payment Success & AWB Assigned", data: order });
+//     } catch (err) { 
+//         res.status(500).json({ success: false, error: err.message }); 
+//     }
+// };
+
 exports.bypassPaymentAndShip = async (req, res) => {
     try {
-        const { orderId } = req.params;
-        const order = await Order.findById(orderId);
-        if(!order) return res.status(404).json({ success: false, message: "Order not found" });
-
-        const user = await User.findById(order.customerId);
-        order.paymentStatus = "Paid";
-        order.status = "Placed";
-
+        // ... பழைய கோடு ...
         const delhiRes = await createDelhiveryShipment(order, user?.phone || "9876543210");
         
-        if (delhiRes && (delhiRes.success === true || delhiRes.packages?.length > 0)) {
+        if (delhiRes && delhiRes.success === true) {
             order.awbNumber = delhiRes.packages?.[0]?.waybill;
-            console.log("SUCCESS: AWB Assigned:", order.awbNumber);
         } else {
-            order.awbNumber = `TEST-${Date.now()}`;
-            console.log("FAILED: Delhivery Error, assigned TEST ID");
+            // 🌟 🌟 🌟 டெஸ்டிங்கிற்காக ஒரு ரியல் டெல்லிவரி ஐடியை இங்க போடு 🌟 🌟 🌟
+            // இந்த நம்பரை வச்சு உன் ஆப்ல மேப் ஓடுதான்னு பாக்கலாம்
+            order.awbNumber = "128374922"; 
+            console.log("⚠️ Delhivery Server Error (NoneType). Using static AWB for UI testing.");
         }
         
         await order.save();
-        return res.json({ success: true, message: "Test Payment Success & AWB Assigned", data: order });
+        return res.json({ success: true, message: "Test Mode: AWB Assigned", data: order });
     } catch (err) { 
         res.status(500).json({ success: false, error: err.message }); 
     }
