@@ -358,23 +358,35 @@ exports.verifyPayment = async (req, res) => {
   }
 };
 
-/* =====================================================
-   4️⃣ PHONEPE RETURN (🔥 DIRECT APP REDIRECT)
-===================================================== */
 exports.phonepeReturn = async (req, res) => {
   try {
     const { orderId } = req.params;
 
-    // 🔥 IMPORTANT: Update order immediately
     await updateOrderSuccess(orderId);
 
-    // 🔥 DIRECT DEEP LINK REDIRECT
-    return res.redirect(
-      `zhopingoapp://payment-verify/${orderId}`
-    );
+    const deepLink = `zhopingoapp://payment-verify/${orderId}`;
+
+    return res.send(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+          <title>Redirecting...</title>
+        </head>
+        <body style="display:flex;justify-content:center;align-items:center;height:100vh;font-family:sans-serif;">
+          <div>
+            <h3>Payment Successful</h3>
+            <p>Redirecting to app...</p>
+          </div>
+
+          <script>
+            window.location.href = "${deepLink}";
+          </script>
+        </body>
+      </html>
+    `);
 
   } catch (err) {
-    console.error("Return Error:", err.message);
     res.status(500).send("Redirect Failed");
   }
 };
