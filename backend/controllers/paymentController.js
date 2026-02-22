@@ -192,20 +192,12 @@
 //     res.status(500).json({ success: false, error: "Tracking failed" });
 //   }
 // };
-
-const {
-  StandardCheckoutClient,
-  Env,
-  StandardCheckoutPayRequest
-} = require("pg-sdk-node");
-
+const { StandardCheckoutClient, Env, StandardCheckoutPayRequest } = require("pg-sdk-node");
 const Order = require("../models/Order");
 const User = require("../models/User");
 const axios = require("axios");
 
-/* =====================================================
-    🔑 SDK INITIALIZATION
-===================================================== */
+// 🔑 SDK Initialization
 const client = StandardCheckoutClient.getInstance(
   process.env.PHONEPE_CLIENT_ID,
   process.env.PHONEPE_CLIENT_SECRET,
@@ -213,9 +205,7 @@ const client = StandardCheckoutClient.getInstance(
   process.env.PHONEPE_ENV === "PRODUCTION" ? Env.PRODUCTION : Env.SANDBOX
 );
 
-/* =====================================================
-    🚚 DELHIVERY HELPER
-===================================================== */
+// 🚚 Delhivery Helper
 const createDelhiveryShipment = async (order, customerPhone) => {
   try {
     const shipmentData = {
@@ -232,51 +222,31 @@ const createDelhiveryShipment = async (order, customerPhone) => {
       }],
       pickup_location: { name: "benjamin" },
     };
-
     const response = await axios.post(
       "https://staging-express.delhivery.com/api/cmu/create.json",
       `format=json&data=${JSON.stringify(shipmentData)}`,
-      {
-        headers: {
-          Authorization: `Token ${process.env.DELHIVERY_TOKEN}`,
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-      }
+      { headers: { Authorization: `Token ${process.env.DELHIVERY_TOKEN}`, "Content-Type": "application/x-www-form-urlencoded" } }
     );
     return response.data;
-  } catch (error) {
-    console.error("❌ Delhivery Error:", error.message);
-    return null;
-  }
+  } catch (error) { return null; }
 };
 
-/* =====================================================
-    ✅ INTERNAL ORDER UPDATE
-===================================================== */
+// ✅ Order Status Update
 const updateOrderSuccess = async (orderId) => {
-  try {
-    const order = await Order.findById(orderId);
-    if (order && order.paymentStatus !== "Paid") {
-      const user = await User.findById(order.customerId);
-      order.paymentStatus = "Paid";
-      order.status = "Placed";
-
-      const delhiRes = await createDelhiveryShipment(order, user?.phone || "9876543210");
-      if (delhiRes?.packages?.length > 0) {
-        order.awbNumber = delhiRes.packages[0].waybill;
-      }
-      await order.save();
-      return true;
-    }
-    return false;
-  } catch (err) {
-    return false;
+  const order = await Order.findById(orderId);
+  if (order && order.paymentStatus !== "Paid") {
+    const user = await User.findById(order.customerId);
+    order.paymentStatus = "Paid";
+    order.status = "Placed";
+    const delhiRes = await createDelhiveryShipment(order, user?.phone || "9876543210");
+    if (delhiRes?.packages?.length > 0) order.awbNumber = delhiRes.packages[0].waybill;
+    await order.save();
+    return true;
   }
+  return false;
 };
 
-/* =====================================================
-    1️⃣ CREATE SESSION
-===================================================== */
+// 🌟 1️⃣ CREATE SESSION (பேமெண்ட் லிங்க் கண்டிப்பாக வரும்)
 exports.createSession = async (req, res) => {
   try {
     const { orderId } = req.body;
@@ -286,12 +256,17 @@ exports.createSession = async (req, res) => {
     const request = StandardCheckoutPayRequest.builder()
       .merchantOrderId(order._id.toString())
       .amount(Math.round(order.totalAmount * 100))
-      // 🌟 Ngrok URL இங்க தான் இருக்கும், ஆனா கஸ்டமர் இத பார்க்க மாட்டாங்க
       .redirectUrl(`${process.env.BASE_URL}/api/v1/payments/phonepe-return/${orderId}`)
       .build();
 
     const response = await client.pay(request);
-    const checkoutUrl = response.redirect_url || response.redirectUrl || (response.data?.instrumentResponse?.redirectInfo?.url);
+    
+    // URL-ஐத் தேடி எடுக்கும் லாஜிக்
+    const checkoutUrl = response.redirect_url || 
+                        response.redirectUrl || 
+                        (response.data?.instrumentResponse?.redirectInfo?.url);
+
+    if (!checkoutUrl) return res.status(400).json({ success: false, message: "Payment URL generation failed" });
 
     res.json({ success: true, url: checkoutUrl });
   } catch (error) {
@@ -299,42 +274,39 @@ exports.createSession = async (req, res) => {
   }
 };
 
-/* =====================================================
-    2️⃣ PHONEPE RETURN (The "Magic" Redirect)
-===================================================== */
+// 🌟 2️⃣ PHONEPE RETURN (Ngrok-ஐத் தாண்டி ஆப்பைத் திறக்கும் ஸ்கிரிப்ட்)
 exports.phonepeReturn = (req, res) => {
   const { orderId } = req.params;
-  // 🌟 இதுதான் மேஜிக்: Ngrok பேஜ்ஜை ஒரு செகண்ட் கூட காட்டாம ஆப்பைத் திறக்கும்
   const deepLink = `zhopingo://payment-verify/${orderId}`;
   
   res.send(`
     <html>
       <head>
         <script>
+          // 🚀 இதுதான் மச்சான் அந்த மேஜிக் - பிரவுசரை நிக்கவிடாம ஆப்பைத் திறக்கும்
           window.location.href = "${deepLink}";
-          setTimeout(function() { window.close(); }, 500);
+          setTimeout(function() { window.location.href = "${deepLink}"; }, 500);
         </script>
       </head>
-      <body><p>Redirecting to Zhopingo App...</p></body>
+      <body style="text-align:center;padding-top:50px;font-family:sans-serif;">
+        <h2 style="color:#0c831f;">Payment Processing...</h2>
+        <p>Redirecting to Zhopingo App</p>
+      </body>
     </html>
   `);
 };
 
-/* =====================================================
-    3️⃣ VERIFY PAYMENT & WEBHOOK
-===================================================== */
+// 🌟 3️⃣ VERIFY & WEBHOOK
 exports.verifyPayment = async (req, res) => {
   try {
     const { orderId } = req.params;
     const response = await client.getOrderStatus(orderId);
     if (response.state === "COMPLETED") {
       await updateOrderSuccess(orderId);
-      return res.json({ success: true, message: "Payment Success" });
+      return res.json({ success: true, message: "Success" });
     }
-    res.status(400).json({ success: false, message: "Payment Failed" });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
+    res.status(400).json({ success: false, message: "Failed" });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
 };
 
 exports.webhook = async (req, res) => {
@@ -343,15 +315,4 @@ exports.webhook = async (req, res) => {
   const status = response.state || response.data?.state;
   if (status === "COMPLETED") await updateOrderSuccess(orderId);
   res.status(200).send("OK");
-};
-
-exports.trackOrder = async (req, res) => {
-  try {
-    const response = await axios.get(`https://staging-express.delhivery.com/api/v1/packages/json/?waybill=${req.params.awb}`, {
-      headers: { Authorization: `Token ${process.env.DELHIVERY_TOKEN}` },
-    });
-    res.json({ success: true, tracking: response.data });
-  } catch (error) {
-    res.status(500).json({ success: false, error: "Tracking failed" });
-  }
 };
