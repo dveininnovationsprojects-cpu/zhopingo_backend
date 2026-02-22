@@ -286,8 +286,7 @@ exports.createSession = async (req, res) => {
 /* =====================================================
     2️⃣ VERIFY PAYMENT (Status Check)
 ===================================================== */
-// 1. உன் ஆர்டர் கன்ட்ரோலரில் இருக்கும் டெல்லிவரி பங்க்ஷனை இங்கேயும் இம்போர்ட் செய்
-const { createDelhiveryShipment } = require('./orderController'); 
+
 
 const updateOrderSuccess = async (orderId) => {
   try {
