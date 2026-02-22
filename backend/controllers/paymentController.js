@@ -193,6 +193,7 @@
 //   }
 // };
 
+
 const {
   StandardCheckoutClient,
   Env,
@@ -251,6 +252,35 @@ const createDelhiveryShipment = async (order, customerPhone) => {
 };
 
 /* =====================================================
+    ✅ INTERNAL ORDER UPDATE LOGIC (Common for Webhook/Verify)
+===================================================== */
+const updateOrderSuccess = async (orderId) => {
+  try {
+    const order = await Order.findById(orderId);
+    if (order && order.paymentStatus !== "Paid") {
+      const user = await User.findById(order.customerId);
+      
+      order.paymentStatus = "Paid";
+      order.status = "Placed";
+
+      // 🚚 Auto-Shipment Creation
+      const delhiRes = await createDelhiveryShipment(order, user?.phone || "9876543210");
+      if (delhiRes?.packages?.length > 0) {
+        order.awbNumber = delhiRes.packages[0].waybill;
+      }
+      
+      await order.save();
+      console.log(`✅ Order ${orderId} Updated Successfully!`);
+      return true;
+    }
+    return false;
+  } catch (err) {
+    console.error("❌ updateOrderSuccess Error:", err.message);
+    return false;
+  }
+};
+
+/* =====================================================
     1️⃣ CREATE SESSION
 ===================================================== */
 exports.createSession = async (req, res) => {
@@ -262,6 +292,7 @@ exports.createSession = async (req, res) => {
     const request = StandardCheckoutPayRequest.builder()
       .merchantOrderId(order._id.toString())
       .amount(Math.round(order.totalAmount * 100))
+      // 🌟 இது வெறும் பேக்-எண்ட் ரீடைரக்ட் மட்டுமே, யூசர் ஆப்பிற்குள் திரும்புவதற்கு
       .redirectUrl(`${process.env.BASE_URL}/api/v1/payments/phonepe-return/${orderId}`)
       .build();
 
@@ -279,32 +310,14 @@ exports.createSession = async (req, res) => {
     });
 
   } catch (error) {
+    console.error("❌ Create Session Error:", error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 };
 
 /* =====================================================
-    2️⃣ VERIFY PAYMENT (Status Check)
+    2️⃣ VERIFY PAYMENT (Status Check API for App)
 ===================================================== */
-// இது ஒரு காமன் பங்க்ஷன் (Verify API-க்கும் Webhook-க்கும் பயன்படும்)
-const updateOrderSuccess = async (orderId) => {
-  const order = await Order.findById(orderId);
-  if (order && order.paymentStatus !== "Paid") {
-    const user = await User.findById(order.customerId);
-    order.paymentStatus = "Paid";
-    order.status = "Placed";
-
-    // 🚚 Auto-Shipment Creation
-    const delhiRes = await createDelhiveryShipment(order, user?.phone || "9876543210");
-    if (delhiRes?.packages?.length > 0) {
-      order.awbNumber = delhiRes.packages[0].waybill;
-    }
-    await order.save();
-    return true;
-  }
-  return false;
-};
-
 exports.verifyPayment = async (req, res) => {
   try {
     const { orderId } = req.params;
@@ -321,31 +334,28 @@ exports.verifyPayment = async (req, res) => {
 };
 
 /* =====================================================
-    3️⃣ PHONEPE RETURN (Direct App Redirect)
+    3️⃣ PHONEPE RETURN (The Blinkit Trick)
 ===================================================== */
 exports.phonepeReturn = (req, res) => {
   const { orderId } = req.params;
-  // 🌟 Blinkit Feel: அந்த மொக்கை பேஜ் காட்டாம நேரடியா ஆப்பைத் திறக்கிறோம்
+  // 🌟 இதுதான் மேஜிக்: Ngrok URL கண்ணில் படுவதற்கு முன்னரே ஆப்பைத் திறக்கச் சொல்லும்
   const deepLink = `zhopingo://payment-verify/${orderId}`;
   res.redirect(deepLink);
 };
 
 /* =====================================================
-    4️⃣ WEBHOOK HANDLER (Real-time Confirmation)
+    4️⃣ WEBHOOK HANDLER
 ===================================================== */
 exports.webhook = async (req, res) => {
   try {
-    // PhonePe மெசேஜை டீகோட் செய்தல்
     const response = req.body;
-    console.log("📩 PHONEPE WEBHOOK:", response);
+    console.log("📩 PHONEPE WEBHOOK RECEIVED");
 
-    // ஆர்டர் ஐடி மற்றும் ஸ்டேட்டஸை செக் செய்தல்
     const orderId = response.merchantOrderId || response.data?.merchantOrderId;
     const status = response.state || response.data?.state;
 
     if (status === "COMPLETED") {
       await updateOrderSuccess(orderId);
-      console.log(`✅ Order ${orderId} confirmed via Webhook`);
     }
 
     res.status(200).send("OK");
