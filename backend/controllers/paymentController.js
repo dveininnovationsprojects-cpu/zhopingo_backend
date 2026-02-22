@@ -286,23 +286,40 @@ exports.createSession = async (req, res) => {
 /* =====================================================
     2️⃣ VERIFY PAYMENT (Status Check)
 ===================================================== */
-// இது ஒரு காமன் பங்க்ஷன் (Verify API-க்கும் Webhook-க்கும் பயன்படும்)
-const updateOrderSuccess = async (orderId) => {
-  const order = await Order.findById(orderId);
-  if (order && order.paymentStatus !== "Paid") {
-    const user = await User.findById(order.customerId);
-    order.paymentStatus = "Paid";
-    order.status = "Placed";
+// 1. உன் ஆர்டர் கன்ட்ரோலரில் இருக்கும் டெல்லிவரி பங்க்ஷனை இங்கேயும் இம்போர்ட் செய்
+const { createDelhiveryShipment } = require('./orderController'); 
 
-    // 🚚 Auto-Shipment Creation
-    const delhiRes = await createDelhiveryShipment(order, user?.phone || "9876543210");
-    if (delhiRes?.packages?.length > 0) {
-      order.awbNumber = delhiRes.packages[0].waybill;
+const updateOrderSuccess = async (orderId) => {
+  try {
+    const order = await Order.findById(orderId);
+    
+    // 🌟 ஏற்கனவே Paid ஆக இல்லையென்றால் மட்டும் உள்ளே செல்லும்
+    if (order && order.paymentStatus !== "Paid") {
+      const user = await User.findById(order.customerId);
+      
+      order.paymentStatus = "Paid";
+      order.status = "Placed";
+
+      // 🚚 🌟 மேஜிக் இங்க தான் இருக்கு: 
+      // ஆன்லைன் பேமெண்ட் முடிஞ்ச உடனே டெல்லிவரி ஏபிஐ-யை கூப்பிடுறோம்
+      const delhiRes = await createDelhiveryShipment(order, user?.phone || "9876543210");
+      
+      if (delhiRes && (delhiRes.success === true || delhiRes.packages)) {
+        // டெல்லிவரி கொடுத்த Waybill (AWB) நம்பரை சேவ் பண்றோம்
+        order.awbNumber = delhiRes.packages?.[0]?.waybill;
+        console.log("✅ Delhivery AWB Linked:", order.awbNumber);
+      } else {
+        console.log("⚠️ Delhivery API call failed in Payment Flow");
+      }
+
+      await order.save();
+      return true;
     }
-    await order.save();
-    return true;
+    return false;
+  } catch (err) {
+    console.error("❌ updateOrderSuccess Error:", err.message);
+    return false;
   }
-  return false;
 };
 
 exports.verifyPayment = async (req, res) => {
