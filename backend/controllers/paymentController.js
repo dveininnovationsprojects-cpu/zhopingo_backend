@@ -325,9 +325,33 @@ exports.verifyPayment = async (req, res) => {
 ===================================================== */
 exports.phonepeReturn = (req, res) => {
   const { orderId } = req.params;
-  // 🌟 Blinkit Feel: அந்த மொக்கை பேஜ் காட்டாம நேரடியா ஆப்பைத் திறக்கிறோம்
+
   const deepLink = `zhopingo://payment-verify/${orderId}`;
-  res.redirect(deepLink);
+
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Redirecting...</title>
+      </head>
+      <body style="display:flex;justify-content:center;align-items:center;height:100vh;font-family:sans-serif;">
+        <div>
+          <h3>Redirecting to App...</h3>
+        </div>
+
+        <script>
+          // Try opening app
+          window.location.href = "${deepLink}";
+
+          // If app doesn't open in 2 sec, stay silently (no login redirect)
+          setTimeout(function() {
+            window.location.replace("${deepLink}");
+          }, 1500);
+        </script>
+      </body>
+    </html>
+  `);
 };
 
 /* =====================================================
