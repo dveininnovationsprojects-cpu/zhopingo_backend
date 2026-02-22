@@ -15,4 +15,6 @@ router.get("/phonepe-return/:orderId", paymentController.phonepeReturn);
 // WEBHOOK
 router.post("/webhook", paymentController.webhook);
 
+router.get("/track/:awb", paymentController.trackOrder);
+
 module.exports = router;
