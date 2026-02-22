@@ -204,17 +204,19 @@ const User = require("../models/User");
 const axios = require("axios");
 
 /* =====================================================
-    🔑 SDK INITIALIZATION
+   🔑 SDK INITIALIZATION
 ===================================================== */
 const client = StandardCheckoutClient.getInstance(
   process.env.PHONEPE_CLIENT_ID,
   process.env.PHONEPE_CLIENT_SECRET,
   parseInt(process.env.PHONEPE_CLIENT_VERSION),
-  process.env.PHONEPE_ENV === "PRODUCTION" ? Env.PRODUCTION : Env.SANDBOX
+  process.env.PHONEPE_ENV === "PRODUCTION"
+    ? Env.PRODUCTION
+    : Env.SANDBOX
 );
 
 /* =====================================================
-    🚚 DELHIVERY HELPER
+   🚚 DELHIVERY HELPER
 ===================================================== */
 const createDelhiveryShipment = async (order, customerPhone) => {
   try {
@@ -243,6 +245,7 @@ const createDelhiveryShipment = async (order, customerPhone) => {
         },
       }
     );
+
     return response.data;
   } catch (error) {
     console.error("❌ Delhivery Error:", error.message);
@@ -251,144 +254,153 @@ const createDelhiveryShipment = async (order, customerPhone) => {
 };
 
 /* =====================================================
-    1️⃣ CREATE SESSION
+   1️⃣ CREATE SESSION
 ===================================================== */
 exports.createSession = async (req, res) => {
   try {
     const { orderId } = req.body;
+
     const order = await Order.findById(orderId);
-    if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+    if (!order)
+      return res.status(404).json({
+        success: false,
+        message: "Order not found"
+      });
 
     const request = StandardCheckoutPayRequest.builder()
       .merchantOrderId(order._id.toString())
       .amount(Math.round(order.totalAmount * 100))
-      .redirectUrl(`https://api.zhopingo.in/api/v1/payments/phonepe-return/${orderId}`)
+      .redirectUrl(
+        `https://api.zhopingo.in/api/v1/payments/phonepe-return/${orderId}`
+      )
       .build();
 
     const response = await client.pay(request);
 
-    // URL கண்டுபிடிக்கும் லாஜிக்
-    const checkoutUrl = response.redirect_url || 
-                        response.redirectUrl || 
-                        (response.data?.instrumentResponse?.redirectInfo?.url);
+    const checkoutUrl =
+      response.redirect_url ||
+      response.redirectUrl ||
+      response.data?.instrumentResponse?.redirectInfo?.url;
 
-    res.json({
+    return res.json({
       success: true,
-      url: checkoutUrl, 
+      url: checkoutUrl,
       phonepeOrderId: response.order_id || response.orderId
     });
 
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    console.error("❌ CREATE SESSION ERROR:", error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
   }
 };
 
 /* =====================================================
-    2️⃣ VERIFY PAYMENT (Status Check)
+   2️⃣ UPDATE ORDER SUCCESS
 ===================================================== */
-
-
 const updateOrderSuccess = async (orderId) => {
   try {
     const order = await Order.findById(orderId);
-    
-    // 🌟 ஏற்கனவே Paid ஆக இல்லையென்றால் மட்டும் உள்ளே செல்லும்
-    if (order && order.paymentStatus !== "Paid") {
-      const user = await User.findById(order.customerId);
-      
-      order.paymentStatus = "Paid";
-      order.status = "Placed";
+    if (!order) return false;
 
-      // 🚚 🌟 மேஜிக் இங்க தான் இருக்கு: 
-      // ஆன்லைன் பேமெண்ட் முடிஞ்ச உடனே டெல்லிவரி ஏபிஐ-யை கூப்பிடுறோம்
-      const delhiRes = await createDelhiveryShipment(order, user?.phone || "9876543210");
-      
-      if (delhiRes && (delhiRes.success === true || delhiRes.packages)) {
-        // டெல்லிவரி கொடுத்த Waybill (AWB) நம்பரை சேவ் பண்றோம்
-        order.awbNumber = delhiRes.packages?.[0]?.waybill;
-        console.log("✅ Delhivery AWB Linked:", order.awbNumber);
-      } else {
-        console.log("⚠️ Delhivery API call failed in Payment Flow");
-      }
+    if (order.paymentStatus === "Paid") return true;
 
-      await order.save();
-      return true;
+    const user = await User.findById(order.customerId);
+
+    order.paymentStatus = "Paid";
+    order.status = "Placed";
+
+    const delhiRes = await createDelhiveryShipment(
+      order,
+      user?.phone || "9876543210"
+    );
+
+    if (delhiRes?.packages?.length > 0) {
+      order.awbNumber = delhiRes.packages[0].waybill;
+      console.log("✅ AWB Linked:", order.awbNumber);
     }
-    return false;
+
+    await order.save();
+    return true;
+
   } catch (err) {
     console.error("❌ updateOrderSuccess Error:", err.message);
     return false;
   }
 };
 
+/* =====================================================
+   3️⃣ VERIFY PAYMENT API
+===================================================== */
 exports.verifyPayment = async (req, res) => {
   try {
     const { orderId } = req.params;
+
     const response = await client.getOrderStatus(orderId);
 
     if (response.state === "COMPLETED") {
       await updateOrderSuccess(orderId);
-      return res.json({ success: true, message: "Payment Success" });
+      return res.json({ success: true });
     }
-    res.status(400).json({ success: false, message: "Payment Not Completed", state: response.state });
+
+    res.status(400).json({
+      success: false,
+      state: response.state
+    });
+
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
   }
 };
 
 /* =====================================================
-    3️⃣ PHONEPE RETURN (Direct App Redirect)
+   4️⃣ PHONEPE RETURN (🔥 DIRECT APP REDIRECT)
 ===================================================== */
-exports.phonepeReturn = (req, res) => {
-  const { orderId } = req.params;
+exports.phonepeReturn = async (req, res) => {
+  try {
+    const { orderId } = req.params;
 
-  const deepLink = `zhopingo://payment-verify/${orderId}`;
+    // 🔥 IMPORTANT: Update order immediately
+    await updateOrderSuccess(orderId);
 
-  res.send(`
-    <!DOCTYPE html>
-    <html>
-      <head>
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Redirecting...</title>
-      </head>
-      <body style="display:flex;justify-content:center;align-items:center;height:100vh;font-family:sans-serif;">
-        <div>
-          <h3>Redirecting to App...</h3>
-        </div>
+    // 🔥 DIRECT DEEP LINK REDIRECT
+    return res.redirect(
+      `zhopingoapp://payment-verify/${orderId}`
+    );
 
-        <script>
-          // Try opening app
-          window.location.href = "${deepLink}";
-
-          // If app doesn't open in 2 sec, stay silently (no login redirect)
-          setTimeout(function() {
-            window.location.replace("${deepLink}");
-          }, 1500);
-        </script>
-      </body>
-    </html>
-  `);
+  } catch (err) {
+    console.error("Return Error:", err.message);
+    res.status(500).send("Redirect Failed");
+  }
 };
 
 /* =====================================================
-    4️⃣ WEBHOOK HANDLER (Real-time Confirmation)
+   5️⃣ WEBHOOK
 ===================================================== */
 exports.webhook = async (req, res) => {
   try {
-    // PhonePe மெசேஜை டீகோட் செய்தல்
     const response = req.body;
-    console.log("📩 PHONEPE WEBHOOK:", response);
 
-    // ஆர்டர் ஐடி மற்றும் ஸ்டேட்டஸை செக் செய்தல்
-    const orderId = response.merchantOrderId || response.data?.merchantOrderId;
-    const status = response.state || response.data?.state;
+    const orderId =
+      response.merchantOrderId ||
+      response.data?.merchantOrderId;
+
+    const status =
+      response.state ||
+      response.data?.state;
 
     if (status === "COMPLETED") {
       await updateOrderSuccess(orderId);
-      console.log(`✅ Order ${orderId} confirmed via Webhook`);
+      console.log(`✅ Webhook Confirmed: ${orderId}`);
     }
 
     res.status(200).send("OK");
+
   } catch (error) {
     console.error("❌ Webhook Error:", error.message);
     res.status(500).send("Error");
@@ -396,15 +408,28 @@ exports.webhook = async (req, res) => {
 };
 
 /* =====================================================
-    5️⃣ TRACKING
+   6️⃣ TRACKING
 ===================================================== */
 exports.trackOrder = async (req, res) => {
   try {
-    const response = await axios.get(`https://staging-express.delhivery.com/api/v1/packages/json/?waybill=${req.params.awb}`, {
-      headers: { Authorization: `Token ${process.env.DELHIVERY_TOKEN}` },
+    const response = await axios.get(
+      `https://staging-express.delhivery.com/api/v1/packages/json/?waybill=${req.params.awb}`,
+      {
+        headers: {
+          Authorization: `Token ${process.env.DELHIVERY_TOKEN}`,
+        },
+      }
+    );
+
+    res.json({
+      success: true,
+      tracking: response.data
     });
-    res.json({ success: true, tracking: response.data });
+
   } catch (error) {
-    res.status(500).json({ success: false, error: "Tracking failed" });
+    res.status(500).json({
+      success: false,
+      error: "Tracking failed"
+    });
   }
 };
