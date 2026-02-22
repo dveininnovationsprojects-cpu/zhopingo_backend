@@ -555,7 +555,7 @@ exports.createSession = async (req, res) => {
     const request = StandardCheckoutPayRequest.builder()
       .merchantOrderId(order._id.toString())
       .amount(Math.round(order.totalAmount * 100))
-      .redirectUrl(`https:/api.zhopingo.in/api/v1/payments/phonepe-return/${orderId}`)
+      .redirectUrl(`https://api.zhopingo.in/api/v1/payments/phonepe-return/${orderId}`)
       .build();
 
     const response = await client.pay(request);
