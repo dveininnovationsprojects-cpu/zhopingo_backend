@@ -450,9 +450,7 @@ const Order = require("../models/Order");
 const User = require("../models/User");
 const axios = require("axios");
 
-/* =====================================================
-    🔑 SDK INITIALIZATION
-===================================================== */
+
 const client = StandardCheckoutClient.getInstance(
   process.env.PHONEPE_CLIENT_ID,
   process.env.PHONEPE_CLIENT_SECRET,
@@ -460,19 +458,16 @@ const client = StandardCheckoutClient.getInstance(
   process.env.PHONEPE_ENV === "PRODUCTION" ? Env.PRODUCTION : Env.SANDBOX
 );
 
-/* =====================================================
-    🚚 DELHIVERY HELPER (HSN & URL FIXED)
-===================================================== */
+
 const createDelhiveryShipment = async (order, customerPhone) => {
   try {
-    // 🌟 🌟 🌟 DYNAMIC HSN LOGIC 🌟 🌟 🌟
-    // உன் ஆர்டர் ஐட்டங்களில் இருக்கும் HSN கோடை எடுக்கும் முறை
+   
     const itemHSN = order.items?.[0]?.hsnCode || order.items?.[0]?.hsn || "0000";
 
     const shipmentData = {
       shipments: [{
         name: order.shippingAddress?.receiverName || "Customer",
-        // அட்ரஸ் ஃபீல்டுகளை மிகச் சரியாக இணைத்துள்ளேன்
+        
         add: `${order.shippingAddress?.flatNo || ""}, ${order.shippingAddress?.addressLine || order.shippingAddress?.area || "Testing Street"}`,
         pin: order.shippingAddress?.pincode,
         phone: customerPhone,
@@ -480,12 +475,12 @@ const createDelhiveryShipment = async (order, customerPhone) => {
         payment_mode: "Pre-paid",
         amount: order.totalAmount,
         weight: 0.5,
-        hsn_code: itemHSN, // 👈 இப்போ இது Static இல்ல!
+        hsn_code: itemHSN, 
       }],
       pickup_location: { name: "benjamin" }, 
     };
 
-    // 🌟 லைவ் அல்லது ஸ்டேஜிங் URL-ஐ தானாகத் தேர்ந்தெடுக்கும்
+    
     const DELHI_URL = process.env.DELHIVERY_ENV === "PRODUCTION" 
       ? "https://track.delhivery.com/api/cmu/create.json" 
       : "https://staging-express.delhivery.com/api/cmu/create.json";
@@ -507,9 +502,7 @@ const createDelhiveryShipment = async (order, customerPhone) => {
   }
 };
 
-/* =====================================================
-    ✅ INTERNAL ORDER SUCCESS LOGIC
-===================================================== */
+
 const updateOrderSuccess = async (orderId) => {
   try {
     const order = await Order.findById(orderId);
@@ -521,14 +514,14 @@ const updateOrderSuccess = async (orderId) => {
       order.paymentStatus = "Paid";
       order.status = "Placed";
 
-      // 🚚 டெல்லிவரி கால் (Online Payment முடிந்ததும்)
+      
       const delhiRes = await createDelhiveryShipment(order, user?.phone || "9876543210");
       
       if (delhiRes && (delhiRes.success === true || delhiRes.packages?.length > 0)) {
     order.awbNumber = delhiRes.packages[0].waybill;
     console.log("✅ Delhivery AWB Created:", order.awbNumber);
 } else {
-    // 🌟 இங்க தான் மாற்றம்: TEST-ID-க்கு பதிலா நம்ம டெஸ்ட் நம்பர்
+    
     order.awbNumber = "128374922"; 
     console.log("⚠️ Delhivery Server Issue. Using fallback AWB for testing.");
 }
@@ -543,9 +536,7 @@ const updateOrderSuccess = async (orderId) => {
   }
 };
 
-/* =====================================================
-    1️⃣ CREATE SESSION
-===================================================== */
+
 exports.createSession = async (req, res) => {
   try {
     const { orderId } = req.body;
@@ -567,9 +558,7 @@ exports.createSession = async (req, res) => {
   }
 };
 
-/* =====================================================
-    2️⃣ VERIFY PAYMENT API
-===================================================== */
+
 exports.verifyPayment = async (req, res) => {
   try {
     const { orderId } = req.params;
@@ -585,35 +574,38 @@ exports.verifyPayment = async (req, res) => {
   }
 };
 
-/* =====================================================
-    3️⃣ PHONEPE RETURN (Direct App Redirect)
-===================================================== */
-exports.phonepeReturn = (req, res) => {
-  const { orderId } = req.params;
-  const deepLink = `zhopingo://payment-verify/${orderId}`;
 
-  res.send(`
-    <!DOCTYPE html>
-    <html>
-      <head>
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Returning to App</title>
-        <style>
-          body { font-family: sans-serif; text-align: center; padding-top: 50px; background: #fff; }
-          .btn { background: #0c831f; color: #fff; padding: 15px 30px; text-decoration: none; border-radius: 10px; font-weight: bold; display: inline-block; margin-top: 20px; }
-        </style>
-      </head>
-      <body>
-        <h2 style="color: #0c831f;">Payment Successful!</h2>
-        <p>Redirecting you back to the app...</p>
-        <a href="${deepLink}" id="redirectBtn" class="btn">Return to App</a>
-        <script>
-          window.location.href = "${deepLink}";
-          setTimeout(function() { document.getElementById('redirectBtn').click(); }, 1500);
-        </script>
-      </body>
-    </html>
-  `);
+exports.phonepeReturn = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+
+  
+    await updateOrderSuccess(orderId); 
+
+    const deepLink = `zhopingo://payment-verify/${orderId}`;
+
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Payment Successful</title>
+        </head>
+        <body style="text-align:center; padding-top:50px; font-family:sans-serif;">
+          <h2 style="color: #0c831f;">Payment Successful!</h2>
+          <p>Redirecting you back to the Zhopingo app...</p>
+          <a href="${deepLink}" id="redirectBtn" style="background:#0c831f; color:#fff; padding:15px 30px; text-decoration:none; border-radius:10px; font-weight:bold;">Return to App</a>
+          <script>
+            window.location.href = "${deepLink}";
+            setTimeout(function() { document.getElementById('redirectBtn').click(); }, 1500);
+          </script>
+        </body>
+      </html>
+    `);
+  } catch (error) {
+    console.error("Error in phonepeReturn:", error);
+    res.status(500).send("Internal Server Error");
+  }
 };
 
 /* =====================================================
