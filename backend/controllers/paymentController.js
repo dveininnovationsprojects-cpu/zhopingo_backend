@@ -358,37 +358,35 @@ exports.verifyPayment = async (req, res) => {
   }
 };
 
-exports.phonepeReturn = async (req, res) => {
-  try {
-    const { orderId } = req.params;
+exports.phonepeReturn = (req, res) => {
+  const { orderId } = req.params;
+  const deepLink = `zhopingo://payment-verify/${orderId}`;
 
-    await updateOrderSuccess(orderId);
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Returning to Zhopingo</title>
+      </head>
+      <body style="text-align:center; padding-top:100px; font-family:sans-serif;">
+        <h2>Payment Successful!</h2>
+        <p>Redirecting you back to the app...</p>
+        
+        <a href="${deepLink}" id="redirectBtn" style="background:#0c831f; color:#fff; padding:15px 30px; text-decoration:none; border-radius:10px; font-weight:bold;">Return to App</a>
 
-    const deepLink = `zhopingoapp://payment-verify/${orderId}`;
-
-    return res.send(`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-          <title>Redirecting...</title>
-        </head>
-        <body style="display:flex;justify-content:center;align-items:center;height:100vh;font-family:sans-serif;">
-          <div>
-            <h3>Payment Successful</h3>
-            <p>Redirecting to app...</p>
-          </div>
-
-          <script>
-            window.location.href = "${deepLink}";
-          </script>
-        </body>
-      </html>
-    `);
-
-  } catch (err) {
-    res.status(500).send("Redirect Failed");
-  }
+        <script>
+          // 🚀 ஆட்டோமேட்டிக்கா ஆப்பைத் திறக்க முயற்சிக்கும்
+          window.location.href = "${deepLink}";
+          
+          // ஒருவேளை ஆப் திறக்கலைனா, யூசர் பட்டனை அழுத்தலாம்
+          setTimeout(function() {
+            document.getElementById('redirectBtn').click();
+          }, 1000);
+        </script>
+      </body>
+    </html>
+  `);
 };
 
 /* =====================================================
