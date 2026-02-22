@@ -250,24 +250,51 @@ exports.createOrder = async (req, res) => {
 //         res.status(500).json({ success: false, error: err.message }); 
 //     }
 // };
-
 exports.bypassPaymentAndShip = async (req, res) => {
     try {
-        // ... பழைய கோடு ...
+        const { orderId } = req.params;
+
+        // 🌟 1. முதல்ல ஆர்டரை டேட்டாபேஸ்ல இருந்து எடுக்குறோம்
+        const order = await Order.findById(orderId);
+        
+        if (!order) {
+            return res.status(404).json({ success: false, message: "Order not found" });
+        }
+
+        // 🌟 2. கஸ்டமர் டேட்டாவை எடுக்குறோம்
+        const user = await User.findById(order.customerId);
+        
+        // ஸ்டேட்டஸ் அப்டேட்
+        order.paymentStatus = "Paid";
+        order.status = "Placed";
+
+        // 🌟 3. டெல்லிவரி ஏபிஐ-யை கூப்பிடுறோம்
         const delhiRes = await createDelhiveryShipment(order, user?.phone || "9876543210");
         
-        if (delhiRes && delhiRes.success === true) {
-            order.awbNumber = delhiRes.packages?.[0]?.waybill;
+        // 🌟 4. டெல்லிவரி ரிசல்ட்டை செக் பண்றோம்
+        if (delhiRes && (delhiRes.success === true || (delhiRes.packages && delhiRes.packages.length > 0))) {
+            // நிஜமான Waybill வந்தா அதை போடு
+            order.awbNumber = delhiRes.packages[0].waybill;
+            console.log("✅ Real Delhivery AWB Assigned:", order.awbNumber);
         } else {
-            // 🌟 🌟 🌟 டெஸ்டிங்கிற்காக ஒரு ரியல் டெல்லிவரி ஐடியை இங்க போடு 🌟 🌟 🌟
-            // இந்த நம்பரை வச்சு உன் ஆப்ல மேப் ஓடுதான்னு பாக்கலாம்
+            // 🛑 இங்க தான் நாம ஹேக் பண்றோம்! 
+            // டெல்லிவரி சர்வர் எர்ரர் (NoneType) குடுக்கறதுனால, 
+            // உனக்கு ஆப்ல ட்ராக்கிங் ஒர்க் ஆகணும்னு ஒரு நம்பரை இங்க குடுக்குறேன்.
             order.awbNumber = "128374922"; 
-            console.log("⚠️ Delhivery Server Error (NoneType). Using static AWB for UI testing.");
+            console.log("⚠️ Delhivery Server Error. Using static AWB for UI testing.");
         }
         
+        // 🌟 5. எல்லாத்தையும் சேவ் பண்ணு
         await order.save();
-        return res.json({ success: true, message: "Test Mode: AWB Assigned", data: order });
+
+        return res.json({ 
+            success: true, 
+            message: "Test Payment Success & AWB Assigned", 
+            data: order 
+        });
+
     } catch (err) { 
+        console.error("❌ Bypass API Critical Error:", err.message);
         res.status(500).json({ success: false, error: err.message }); 
     }
 };
@@ -327,11 +354,38 @@ exports.cancelOrder = async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
+/* =====================================================
+    📈 TRACKING API (இதோ தெளிவான கோடு மச்சான்)
+===================================================== */
 exports.trackDelhivery = async (req, res) => {
     try {
-        const response = await axios.get(`${DELHI_URL_TRACK}?waybill=${req.params.awb}`, {
-            headers: { 'Authorization': `Token ${DELHI_TOKEN}` }
-        });
+        const { awb } = req.params; // யூசர் அனுப்பும் AWB நம்பர்
+
+        // 🌟 கண்டிஷன் 1: ஒருவேளை டம்மி நம்பர் (128374922) இருந்தா:
+        // இது நீ டெஸ்ட் பண்ணும்போது மேப் ஒர்க் ஆகுதான்னு பார்க்க உதவும்.
+        if (awb === "128374922") {
+            return res.json({
+                success: true,
+                tracking: {
+                    ShipmentData: [{
+                        Shipment: {
+                            Status: { Status: "In Transit", StatusDateTime: new Date().toISOString() },
+                            Scans: [{ ScanDetail: { Instructions: "Out for Delivery", ScannedLocation: "Chennai Hub" } }]
+                        }
+                    }]
+                }
+            });
+        }
+
+        // 🌟 கண்டிஷன் 2: நிஜமான டெல்லிவரி ஏபிஐ கால்
+        const response = await axios.get(`${DELHI_URL_TRACK}?waybill=${awb}`, {
+    headers: { 'Authorization': `Token ${DELHI_TOKEN}` }
+});
+
         res.json({ success: true, tracking: response.data });
-    } catch (err) { res.status(500).json({ success: false, message: "Tracking API failed" }); }
+
+    } catch (err) {
+        console.error("❌ Tracking API Error:", err.message);
+        res.status(500).json({ success: false, message: "Tracking failed. Try later." });
+    }
 };

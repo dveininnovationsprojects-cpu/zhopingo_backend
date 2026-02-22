@@ -7,6 +7,7 @@ const orderSchema = new mongoose.Schema({
         name: { type: String, required: true },
         quantity: { type: Number, required: true },
         price: { type: Number, required: true }, 
+        hsnCode: { type: String, default: "0000" },
         mrp: { type: Number },
         // 🔥 இங்கதான் மஜாவே இருக்கு: ref குடுத்தா தான் shopName வரும்
         sellerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Seller', required: true }, 
