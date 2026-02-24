@@ -85,16 +85,18 @@
 
 // module.exports = { upload, processImages };
 
-const aws = require('aws-sdk');
+const { S3Client } = require("@aws-sdk/client-s3");
 const multer = require('multer');
 const multerS3 = require('multer-s3');
 const path = require('path');
 
-// 🌟 AWS Config
-const s3 = new aws.S3({
-  accessKeyId: process.env.AWS_ACCESS_KEY,
-  secretAccessKey: process.env.AWS_SECRET_KEY,
-  region: process.env.AWS_REGION
+// 🌟 AWS SDK v3 Client - Modern Standard
+const s3 = new S3Client({
+  region: process.env.AWS_REGION,
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY,
+    secretAccessKey: process.env.AWS_SECRET_KEY,
+  },
 });
 
 const upload = multer({
@@ -103,61 +105,30 @@ const upload = multer({
     bucket: process.env.AWS_BUCKET_NAME,
     contentType: multerS3.AUTO_CONTENT_TYPE,
     key: (req, file, cb) => {
-      // 🌟 Unnoda EXACT pazhaya switch-case folder logic
       let folder = 'others';
-
       switch (file.fieldname) {
-        case "profileImage":
-          folder = "sellers";
-          break;
-        case "images":
-          folder = "products";
-          break;
-        case "video":
-          folder = "products/videos";
-          break;
-        case "image":
-          folder = "categories";
-          break;
-        case "pan_doc":
-          folder = "kyc/pan";
-          break;
-        case "gst_doc":
-          folder = "kyc/gst";
-          break;
-        case "fssai_doc":
-          folder = "kyc/fssai";
-          break;
-        case "msme_doc":
-          folder = "kyc/msme";
-          break;
-        default:
-          folder = "others";
+        case "profileImage": folder = "sellers"; break;
+        case "images": folder = "products"; break;
+        case "video": folder = "products/videos"; break;
+        case "image": folder = "categories"; break;
+        case "pan_doc": folder = "kyc/pan"; break;
+        case "gst_doc": folder = "kyc/gst"; break;
+        case "fssai_doc": folder = "kyc/fssai"; break;
+        case "msme_doc": folder = "kyc/msme"; break;
+        default: folder = "others";
       }
-
-      const uniqueName = Date.now() + "-" + Math.round(Math.random() * 1e9);
-      // 🔥 S3 Key format: "products/123456.jpg"
+      const uniqueName = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
       cb(null, `${folder}/${uniqueName}${path.extname(file.originalname)}`);
     }
   }),
-  limits: {
-    fileSize: 50 * 1024 * 1024 // 50MB safe limit
-  },
+  limits: { fileSize: 50 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const allowed =
-      file.mimetype.startsWith("image/") ||
-      file.mimetype.startsWith("video/") ||
-      file.mimetype === "application/pdf";
-
-    if (!allowed) {
-      return cb(new Error("Unsupported file type"), false);
-    }
-    cb(null, true);
+    const allowed = file.mimetype.startsWith("image/") || file.mimetype.startsWith("video/") || file.mimetype === "application/pdf";
+    allowed ? cb(null, true) : cb(new Error("Unsupported file type"), false);
   }
 });
 
-// 🌟 Pazhaya code-la iruntha missing logic (Ippo error varaathu)
+// 🌟 Process Image Middleware (Existing logic preserved)
 const processImages = (req, res, next) => next();
 
-// 🌟 Exporting everything exactly as needed by routes
 module.exports = { upload, s3, processImages };
