@@ -84,12 +84,13 @@
 // const processImages = (req, res, next) => next();
 
 // module.exports = { upload, processImages };
+
 const aws = require('aws-sdk');
 const multer = require('multer');
 const multerS3 = require('multer-s3');
 const path = require('path');
 
-// 🌟 AWS Config - Credentials from .env
+// 🌟 AWS Config
 const s3 = new aws.S3({
   accessKeyId: process.env.AWS_ACCESS_KEY,
   secretAccessKey: process.env.AWS_SECRET_KEY,
@@ -100,9 +101,9 @@ const upload = multer({
   storage: multerS3({
     s3: s3,
     bucket: process.env.AWS_BUCKET_NAME,
-    contentType: multerS3.AUTO_CONTENT_TYPE, // Browser-la correct-ah render aaga ithu mukkiyam
+    contentType: multerS3.AUTO_CONTENT_TYPE,
     key: (req, file, cb) => {
-      // 🌟 Unnoda existing folder logic logic
+      // 🌟 Unnoda EXACT pazhaya switch-case folder logic
       let folder = 'others';
 
       switch (file.fieldname) {
@@ -135,7 +136,7 @@ const upload = multer({
       }
 
       const uniqueName = Date.now() + "-" + Math.round(Math.random() * 1e9);
-      // 🔥 Key format: "products/123456.jpg"
+      // 🔥 S3 Key format: "products/123456.jpg"
       cb(null, `${folder}/${uniqueName}${path.extname(file.originalname)}`);
     }
   }),
@@ -155,4 +156,8 @@ const upload = multer({
   }
 });
 
-module.exports = { upload, s3 };
+// 🌟 Pazhaya code-la iruntha missing logic (Ippo error varaathu)
+const processImages = (req, res, next) => next();
+
+// 🌟 Exporting everything exactly as needed by routes
+module.exports = { upload, s3, processImages };
