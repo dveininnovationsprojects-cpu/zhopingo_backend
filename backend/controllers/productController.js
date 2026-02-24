@@ -211,7 +211,8 @@
 const Product = require('../models/Product');
 const Seller = require('../models/Seller');
 const SubCategory = require('../models/SubCategory');
-const { s3 } = require('../middleware/multerConfig'); // 🌟 S3 instance-ai import pannuvom
+const { s3 } = require('../middleware/multerConfig');
+const { DeleteObjectsCommand } = require("@aws-sdk/client-s3"); // 🌟 S3 instance-ai import pannuvom
 
 // 🌟 Helper: CloudFront URL-ai lightning fast-ah attach panna
 const formatProductMedia = (product) => {
@@ -340,25 +341,24 @@ exports.updateProduct = async (req, res) => {
     }
 };
 
-// 🌟 4. DELETE PRODUCT (S3 Cleanup Added)
+// 🌟 4. DELETE PRODUCT (S3 Cleanup Corrected for SDK v3)
 exports.deleteProduct = async (req, res) => {
     try {
         const product = await Product.findById(req.params.id);
         if (!product) return res.status(404).json({ success: false, message: "Product not found" });
 
-        // 🔥 Senior Peer Logic: Cloud assets cleanup
-        const deleteParams = {
-            Bucket: process.env.AWS_BUCKET_NAME,
-            Delete: {
-                Objects: [
-                    ...product.images.map(img => ({ Key: img })),
-                    { Key: product.video }
-                ].filter(obj => obj.Key)
-            }
-        };
+        // 🔥 Prepare objects for deletion
+        const objectsToDelete = [
+            ...(product.images || []).map(img => ({ Key: img })),
+            product.video ? { Key: product.video } : null
+        ].filter(obj => obj && obj.Key);
 
-        if (deleteParams.Delete.Objects.length > 0) {
-            await s3.deleteObjects(deleteParams).promise();
+        if (objectsToDelete.length > 0) {
+            const command = new DeleteObjectsCommand({
+                Bucket: process.env.AWS_BUCKET_NAME,
+                Delete: { Objects: objectsToDelete }
+            });
+            await s3.send(command); // SDK v3 uses .send()
         }
 
         await Product.findByIdAndDelete(req.params.id);
@@ -367,7 +367,6 @@ exports.deleteProduct = async (req, res) => {
         res.status(500).json({ success: false, error: err.message }); 
     }
 };
-
 // 🌟 5. GET PRODUCT BY ID
 exports.getProductById = async (req, res) => {
     try {
