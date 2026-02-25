@@ -397,52 +397,38 @@ const Reel = require('../models/Reel');
 const mongoose = require('mongoose');
 const { s3 } = require('../middleware/multerConfig');
 const { DeleteObjectCommand } = require("@aws-sdk/client-s3");
-
-// 🌟 1. UPLOAD REEL
 exports.uploadReel = async (req, res) => {
   try {
-    // Check if Multer file is present
+    // 🔥 THE REAL PROBLEM CHECKER:
     if (!req.file) {
+      console.log("MULTER FAILED: File missing in req.file");
       return res.status(400).json({ 
         success: false, 
-        error: "Video file upload aagala! Postman-la Key peyar 'video' nu thaan irukkanum." 
+        error: "Multer file-ai pick panna matikuthu! Postman-la Key 'video' nu irukannu check pannu." 
       });
     }
 
-    let productId = req.body.productId;
-    if (!productId || productId === 'null' || productId === '') {
-      productId = null;
-    }
+    console.log("MULTER SUCCESS: File Key is", req.file.key);
 
     const newReel = new Reel({
       sellerId: req.body.sellerId,
-      productId: productId,
+      productId: (req.body.productId === 'null' || !req.body.productId) ? null : req.body.productId,
       description: req.body.description,
-      // 🔥 S3 bucket-oda key-ai inga sariya map pannittaen
-      videoUrl: req.file.key, 
+      videoUrl: req.file.key, // S3 key assignment
     });
 
     const savedReel = await newReel.save();
-
-    const populatedReel = await Reel.findById(savedReel._id)
-      .populate('productId')
-      .populate('sellerId', 'name shopName');
-
     const CF_URL = process.env.CLOUDFRONT_URL || "https://d1utzn73483swp.cloudfront.net/";
     
     res.status(201).json({
       success: true,
-      data: { 
-        ...populatedReel._doc, 
-        videoUrl: CF_URL + populatedReel.videoUrl 
-      },
+      data: { ...savedReel._doc, videoUrl: CF_URL + savedReel.videoUrl },
     });
   } catch (err) {
     console.error("UPLOAD REEL ERROR:", err);
     res.status(400).json({ success: false, error: err.message });
   }
 };
-
 // 🌟 2. GET ALL REELS
 exports.getAllReels = async (req, res) => {
   try {
