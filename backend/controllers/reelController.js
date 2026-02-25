@@ -396,36 +396,47 @@
 const Reel = require('../models/Reel');
 const mongoose = require('mongoose');
 const { s3 } = require('../middleware/multerConfig');
-const { DeleteObjectCommand } = require("@aws-sdk/client-s3"); // 🌟 SDK v3 standard
-// 🌟 UPLOAD REEL Controller Fixed
+const { DeleteObjectCommand } = require("@aws-sdk/client-s3");
+
+// 🌟 1. UPLOAD REEL (S3 Compatible)
 exports.uploadReel = async (req, res) => {
   try {
-    // 1. Multer file check
+    // Multer file field 'video' check
     if (!req.file) {
       return res.status(400).json({ success: false, error: "Please upload a video file using the key 'video'" });
     }
 
-    // 2. Mapping 'video' field from Multer to 'videoUrl' in Schema
-    // Ippo Schema-la irukka videoUrl field-ku value katchithama pogum
+    let productId = req.body.productId;
+    if (!productId || productId === 'null' || productId === '') {
+      productId = null;
+    }
+
     const newReel = new Reel({
       sellerId: req.body.sellerId,
-      productId: (req.body.productId === 'null' || !req.body.productId) ? null : req.body.productId,
+      productId: productId,
       description: req.body.description,
-      videoUrl: req.file.key, // 👈 Multer-S3 kidaikkira key-ai inga katchithama map pannittaen
+      // local-la 'filename' irukkum, S3-la 'key' thaan mukkiyam
+      videoUrl: req.file.key, 
     });
 
-    // 3. Save to Database
     const savedReel = await newReel.save();
 
-    // 4. Send Response with CloudFront URL
+    const populatedReel = await Reel.findById(savedReel._id)
+      .populate('productId')
+      .populate('sellerId', 'name shopName');
+
+    // CloudFront URL generation
     const CF_URL = process.env.CLOUDFRONT_URL || "https://d1utzn73483swp.cloudfront.net/";
     
     res.status(201).json({
       success: true,
-      data: { ...savedReel._doc, videoUrl: CF_URL + savedReel.videoUrl },
+      data: { 
+        ...populatedReel._doc, 
+        videoUrl: CF_URL + populatedReel.videoUrl 
+      },
     });
   } catch (err) {
-    console.error("UPLOAD REEL CONTROLLER ERROR:", err);
+    console.error("UPLOAD REEL ERROR:", err);
     res.status(400).json({ success: false, error: err.message });
   }
 };
@@ -434,7 +445,7 @@ exports.uploadReel = async (req, res) => {
 exports.getAllReels = async (req, res) => {
   try {
     const userId = req.user ? (req.user.id || req.user._id) : null;
-    const CF_URL = process.env.CLOUDFRONT_URL;
+    const CF_URL = process.env.CLOUDFRONT_URL || "https://d1utzn73483swp.cloudfront.net/";
 
     const reels = await Reel.find({ isBlocked: false })
       .populate('sellerId', 'shopName')
@@ -452,13 +463,10 @@ exports.getAllReels = async (req, res) => {
 
       return {
         ...reel,
-        // 🌟 Full CloudFront URL for fast streaming
         videoUrl: CF_URL + reel.videoUrl, 
         likes: likedByArray.length, 
         isLiked: isLiked,
-        likers: reel.likedBy || [], 
         views: reel.views || 0,
-        viewers: reel.viewers || []
       };
     });
 
@@ -471,9 +479,8 @@ exports.getAllReels = async (req, res) => {
 // 🌟 3. TOGGLE LIKE
 exports.toggleLike = async (req, res) => {
   try {
-    if (!req.user) {
-      return res.status(401).json({ success: false, message: "Please login to like" });
-    }
+    if (!req.user) return res.status(401).json({ success: false, message: "Please login to like" });
+    
     const userId = req.user.id || req.user._id;
     const reel = await Reel.findById(req.params.id);
     if (!reel) return res.status(404).json({ success: false, message: "Reel not found" });
@@ -498,18 +505,17 @@ exports.toggleLike = async (req, res) => {
   }
 };
 
-// 🌟 4. DELETE REEL (Fixed with SDK v3 Command)
+// 🌟 4. DELETE REEL (Fixed with S3 Cleanup)
 exports.deleteReel = async (req, res) => {
   try {
     const reel = await Reel.findById(req.params.id);
     if (!reel) return res.status(404).json({ success: false, message: "Reel not found" });
 
-    // 🔥 Delete video from S3 using modern Command pattern
     if (reel.videoUrl) {
-        await s3.send(new DeleteObjectCommand({
-            Bucket: process.env.AWS_BUCKET_NAME,
-            Key: reel.videoUrl
-        }));
+      await s3.send(new DeleteObjectCommand({
+        Bucket: process.env.AWS_BUCKET_NAME,
+        Key: reel.videoUrl
+      }));
     }
 
     await Reel.findByIdAndDelete(req.params.id);
@@ -519,11 +525,12 @@ exports.deleteReel = async (req, res) => {
   }
 };
 
-// 🌟 5. ADD VIEW
+// 🌟 5. ADD REEL VIEW
 exports.addReelView = async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.user ? (req.user.id || req.user._id) : null;
+
     const reel = await Reel.findById(id);
     if (!reel) return res.status(404).json({ success: false, message: "Reel not found" });
 
@@ -541,14 +548,6 @@ exports.addReelView = async (req, res) => {
   }
 };
 
-// Other existing features (Report, Update)
 exports.reportReel = async (req, res) => {
   res.json({ success: true, message: "Report submitted successfully" });
-};
-
-exports.updateReel = async (req, res) => {
-  try {
-    const updated = await Reel.findByIdAndUpdate(req.params.id, req.body, { new: true });
-    res.json({ success: true, data: updated });
-  } catch (err) { res.status(400).json({ success: false, error: err.message }); }
 };
