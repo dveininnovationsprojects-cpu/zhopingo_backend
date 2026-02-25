@@ -247,11 +247,13 @@ exports.getProductsBySeller = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
-
 exports.getAllBrands = async (req, res) => {
     try {
-      
-        const brands = await Seller.find({ isBrand: true }).select("shopName profileImage name");
+        // 🌟 THE FIX: 'shopLogo' field-aiyum sethu select pannanum
+        // Appo thaan frontend-la Image source={uri: ...shopLogo} work aagum
+        const brands = await Seller.find({ isBrand: true })
+            .select("shopName shopLogo profileImage name")
+            .lean(); // Lean use panna query innum fast-ah irukkum
         
         res.json({ 
             success: true, 
@@ -259,6 +261,7 @@ exports.getAllBrands = async (req, res) => {
             data: brands 
         });
     } catch (err) {
+        console.error("GET ALL BRANDS ERROR:", err.message);
         res.status(500).json({ success: false, error: err.message });
     }
 };
