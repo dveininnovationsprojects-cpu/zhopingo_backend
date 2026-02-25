@@ -85,6 +85,62 @@
 
 // module.exports = { upload, processImages };
 
+// const { S3Client } = require("@aws-sdk/client-s3");
+// const multer = require('multer');
+// const multerS3 = require('multer-s3');
+// const path = require('path');
+
+// // 🌟 AWS SDK v3 Client - Modern Standard
+// const s3 = new S3Client({
+//   region: process.env.AWS_REGION,
+//   credentials: {
+//     accessKeyId: process.env.AWS_ACCESS_KEY,
+//     secretAccessKey: process.env.AWS_SECRET_KEY,
+//   },
+// });
+
+// const upload = multer({
+//   storage: multerS3({
+//     s3: s3,
+//     bucket: process.env.AWS_BUCKET_NAME,
+//     contentType: multerS3.AUTO_CONTENT_TYPE,
+//     key: (req, file, cb) => {
+//       let folder = 'others';
+//       switch (file.fieldname) {
+//         case "profileImage": folder = "sellers"; break;
+//         case "images": folder = "products"; break;
+//         case "video": 
+//           if (req.originalUrl.includes('reels')) {
+//             folder = "reels"; 
+//           } else {
+//             folder = "products/videos"; 
+//           }
+//           break;
+        
+//         case "image": folder = "categories"; break;
+//         case "pan_doc": folder = "kyc/pan"; break;
+//         case "gst_doc": folder = "kyc/gst"; break;
+//         case "fssai_doc": folder = "kyc/fssai"; break;
+//         case "msme_doc": folder = "kyc/msme"; break;
+//         default: folder = "others";
+//       }
+//       const uniqueName = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+//       cb(null, `${folder}/${uniqueName}${path.extname(file.originalname)}`);
+//     }
+//   }),
+//   limits: { fileSize: 100 * 1024 * 1024 },
+//   fileFilter: (req, file, cb) => {
+//     const allowed = file.mimetype.startsWith("image/") || file.mimetype.startsWith("video/") || file.mimetype === "application/pdf";
+//     allowed ? cb(null, true) : cb(new Error("Unsupported file type"), false);
+//   }
+// });
+
+// // 🌟 Process Image Middleware (Existing logic preserved)
+// const processImages = (req, res, next) => next();
+
+// module.exports = { upload, s3, processImages };
+
+
 const { S3Client } = require("@aws-sdk/client-s3");
 const multer = require('multer');
 const multerS3 = require('multer-s3');
@@ -106,32 +162,54 @@ const upload = multer({
     contentType: multerS3.AUTO_CONTENT_TYPE,
     key: (req, file, cb) => {
       let folder = 'others';
+      
+      // 🌟 Fieldname-ai base panni folder logic
       switch (file.fieldname) {
-        case "profileImage": folder = "sellers"; break;
-        case "images": folder = "products"; break;
+        case "profileImage": 
+          folder = "sellers"; 
+          break;
+        case "images": 
+          folder = "products"; 
+          break;
         case "video": 
+          // Endpoint URL-ai check panni reels folder-ku anupuvom
           if (req.originalUrl.includes('reels')) {
             folder = "reels"; 
           } else {
             folder = "products/videos"; 
           }
           break;
-        
-        case "image": folder = "categories"; break;
-        case "pan_doc": folder = "kyc/pan"; break;
-        case "gst_doc": folder = "kyc/gst"; break;
-        case "fssai_doc": folder = "kyc/fssai"; break;
-        case "msme_doc": folder = "kyc/msme"; break;
-        default: folder = "others";
+        case "image": 
+          folder = "categories"; 
+          break;
+        case "pan_doc": 
+          folder = "kyc/pan"; 
+          break;
+        case "gst_doc": 
+          folder = "kyc/gst"; 
+          break;
+        case "fssai_doc": 
+          folder = "kyc/fssai"; 
+          break;
+        case "msme_doc": 
+          folder = "kyc/msme"; 
+          break;
+        default: 
+          folder = "others";
       }
+      
       const uniqueName = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
       cb(null, `${folder}/${uniqueName}${path.extname(file.originalname)}`);
     }
   }),
-  limits: { fileSize: 100 * 1024 * 1024 },
+  limits: { fileSize: 100 * 1024 * 1024 }, // 100MB for Videos/Reels
   fileFilter: (req, file, cb) => {
     const allowed = file.mimetype.startsWith("image/") || file.mimetype.startsWith("video/") || file.mimetype === "application/pdf";
-    allowed ? cb(null, true) : cb(new Error("Unsupported file type"), false);
+    if (allowed) {
+      cb(null, true);
+    } else {
+      cb(new Error("Unsupported file type"), false);
+    }
   }
 });
 
