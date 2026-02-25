@@ -182,7 +182,7 @@ const upload = multer({
       cb(null, `${folder}/${uniqueName}${path.extname(file.originalname)}`);
     }
   }),
-  limits: { fileSize: 100 * 1024 * 1024 }, // 100MB for Reels/Videos
+  limits: { fileSize: 100000 * 1024 * 1024 }, // 100MB for Reels/Videos
   fileFilter: (req, file, cb) => {
     const allowed = file.mimetype.startsWith("image/") || file.mimetype.startsWith("video/") || file.mimetype === "application/pdf";
     if (allowed) {
