@@ -109,7 +109,14 @@ const upload = multer({
       switch (file.fieldname) {
         case "profileImage": folder = "sellers"; break;
         case "images": folder = "products"; break;
-        case "video": folder = "products/videos"; break;
+        case "video": 
+          if (req.originalUrl.includes('reels')) {
+            folder = "reels"; 
+          } else {
+            folder = "products/videos"; 
+          }
+          break;
+        
         case "image": folder = "categories"; break;
         case "pan_doc": folder = "kyc/pan"; break;
         case "gst_doc": folder = "kyc/gst"; break;
@@ -121,7 +128,7 @@ const upload = multer({
       cb(null, `${folder}/${uniqueName}${path.extname(file.originalname)}`);
     }
   }),
-  limits: { fileSize: 50 * 1024 * 1024 },
+  limits: { fileSize: 100 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const allowed = file.mimetype.startsWith("image/") || file.mimetype.startsWith("video/") || file.mimetype === "application/pdf";
     allowed ? cb(null, true) : cb(new Error("Unsupported file type"), false);
