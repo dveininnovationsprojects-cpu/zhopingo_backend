@@ -146,7 +146,7 @@ const multer = require('multer');
 const multerS3 = require('multer-s3');
 const path = require('path');
 
-// 🌟 AWS SDK v3 Client - Modern Standard
+// 🌟 AWS SDK v3 Client
 const s3 = new S3Client({
   region: process.env.AWS_REGION,
   credentials: {
@@ -163,46 +163,26 @@ const upload = multer({
     key: (req, file, cb) => {
       let folder = 'others';
       
-      // 🌟 Fieldname-ai base panni folder logic
-      switch (file.fieldname) {
-        case "profileImage": 
-          folder = "sellers"; 
-          break;
-        case "images": 
-          folder = "products"; 
-          break;
-        case "video": 
-          // Endpoint URL-ai check panni reels folder-ku anupuvom
-          if (req.originalUrl.includes('reels')) {
-            folder = "reels"; 
-          } else {
-            folder = "products/videos"; 
-          }
-          break;
-        case "image": 
-          folder = "categories"; 
-          break;
-        case "pan_doc": 
-          folder = "kyc/pan"; 
-          break;
-        case "gst_doc": 
-          folder = "kyc/gst"; 
-          break;
-        case "fssai_doc": 
-          folder = "kyc/fssai"; 
-          break;
-        case "msme_doc": 
-          folder = "kyc/msme"; 
-          break;
-        default: 
-          folder = "others";
+      // 🌟 Fieldname match check
+      const field = file.fieldname;
+
+      if (field === "profileImage") folder = "sellers";
+      else if (field === "images") folder = "products";
+      else if (field === "video") {
+        // Smart routing: URL-ai check panni folder mathuvom
+        folder = req.originalUrl.includes('reels') ? "reels" : "products/videos";
       }
-      
+      else if (field === "image") folder = "categories";
+      else if (field === "pan_doc") folder = "kyc/pan";
+      else if (field === "gst_doc") folder = "kyc/gst";
+      else if (field === "fssai_doc") folder = "kyc/fssai";
+      else if (field === "msme_doc") folder = "kyc/msme";
+
       const uniqueName = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
       cb(null, `${folder}/${uniqueName}${path.extname(file.originalname)}`);
     }
   }),
-  limits: { fileSize: 100 * 1024 * 1024 }, // 100MB for Videos/Reels
+  limits: { fileSize: 100 * 1024 * 1024 }, // 100MB for Reels/Videos
   fileFilter: (req, file, cb) => {
     const allowed = file.mimetype.startsWith("image/") || file.mimetype.startsWith("video/") || file.mimetype === "application/pdf";
     if (allowed) {
@@ -213,7 +193,6 @@ const upload = multer({
   }
 });
 
-// 🌟 Process Image Middleware (Existing logic preserved)
 const processImages = (req, res, next) => next();
 
 module.exports = { upload, s3, processImages };

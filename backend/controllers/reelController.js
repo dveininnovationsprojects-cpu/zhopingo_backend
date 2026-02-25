@@ -398,12 +398,15 @@ const mongoose = require('mongoose');
 const { s3 } = require('../middleware/multerConfig');
 const { DeleteObjectCommand } = require("@aws-sdk/client-s3");
 
-// 🌟 1. UPLOAD REEL (S3 Compatible)
+// 🌟 1. UPLOAD REEL
 exports.uploadReel = async (req, res) => {
   try {
-    // Multer file field 'video' check
+    // Check if Multer file is present
     if (!req.file) {
-      return res.status(400).json({ success: false, error: "Please upload a video file using the key 'video'" });
+      return res.status(400).json({ 
+        success: false, 
+        error: "Video file upload aagala! Postman-la Key peyar 'video' nu thaan irukkanum." 
+      });
     }
 
     let productId = req.body.productId;
@@ -415,7 +418,7 @@ exports.uploadReel = async (req, res) => {
       sellerId: req.body.sellerId,
       productId: productId,
       description: req.body.description,
-      // local-la 'filename' irukkum, S3-la 'key' thaan mukkiyam
+      // 🔥 S3 bucket-oda key-ai inga sariya map pannittaen
       videoUrl: req.file.key, 
     });
 
@@ -425,7 +428,6 @@ exports.uploadReel = async (req, res) => {
       .populate('productId')
       .populate('sellerId', 'name shopName');
 
-    // CloudFront URL generation
     const CF_URL = process.env.CLOUDFRONT_URL || "https://d1utzn73483swp.cloudfront.net/";
     
     res.status(201).json({
@@ -505,7 +507,7 @@ exports.toggleLike = async (req, res) => {
   }
 };
 
-// 🌟 4. DELETE REEL (Fixed with S3 Cleanup)
+// 🌟 4. DELETE REEL
 exports.deleteReel = async (req, res) => {
   try {
     const reel = await Reel.findById(req.params.id);
@@ -530,7 +532,6 @@ exports.addReelView = async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.user ? (req.user.id || req.user._id) : null;
-
     const reel = await Reel.findById(id);
     if (!reel) return res.status(404).json({ success: false, message: "Reel not found" });
 
