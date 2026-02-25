@@ -203,17 +203,15 @@ exports.getProductsBySeller = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
-
-/* ================= 4. UPDATE SELLER PROFILE (🌟 THE IMAGE FIX) ================= */
+/* ================= UPDATE SELLER PROFILE ================= */
 exports.updateSellerProfile = async (req, res) => {
     try {
         const updateData = { ...req.body };
 
-        // 🔥 THE MAGIC FIX: Frontend uses shopLogo property, so save it there!
-        // S3-la store aaga 'key' thaan path value.
+        // 🌟 S3 Fix: Frontend uses shopLogo, so we map req.file.key to both
         if (req.file) {
             updateData.shopLogo = req.file.key; 
-            updateData.profileImage = req.file.key; // Safe side: keeping both
+            updateData.profileImage = req.file.key; 
         }
 
         const seller = await Seller.findByIdAndUpdate(
