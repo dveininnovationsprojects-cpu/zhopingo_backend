@@ -204,17 +204,19 @@ exports.getProductsBySeller = async (req, res) => {
     }
 };
 
-
+/* ================= 4. UPDATE SELLER PROFILE (🌟 THE IMAGE FIX) ================= */
 exports.updateSellerProfile = async (req, res) => {
     try {
         const updateData = { ...req.body };
 
-        
+        // 🔥 THE MAGIC FIX: Frontend uses shopLogo property, so save it there!
+        // S3-la store aaga 'key' thaan path value.
         if (req.file) {
-            updateData.profileImage = `sellers/${req.file.filename}`;
+            updateData.shopLogo = req.file.key; 
+            updateData.profileImage = req.file.key; // Safe side: keeping both
         }
 
-        const seller = await mongoose.model("Seller").findByIdAndUpdate(
+        const seller = await Seller.findByIdAndUpdate(
             req.params.id,
             updateData,
             { new: true }
@@ -228,7 +230,7 @@ exports.updateSellerProfile = async (req, res) => {
     }
 };
 
-// 🌟 ஒரு குறிப்பிட்ட செல்லரின் தயாரிப்புகளை மட்டும் எடுக்க (sellerId-ஐ வைத்து)
+
 exports.getProductsBySeller = async (req, res) => {
     try {
         const { sellerId } = req.params;
