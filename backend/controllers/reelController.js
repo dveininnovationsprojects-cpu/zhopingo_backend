@@ -397,42 +397,35 @@ const Reel = require('../models/Reel');
 const mongoose = require('mongoose');
 const { s3 } = require('../middleware/multerConfig');
 const { DeleteObjectCommand } = require("@aws-sdk/client-s3"); // 🌟 SDK v3 standard
-
-// 🌟 1. UPLOAD REEL
+// 🌟 UPLOAD REEL Controller Fixed
 exports.uploadReel = async (req, res) => {
   try {
+    // 1. Multer file check
     if (!req.file) {
-      return res.status(400).json({ success: false, error: "Please upload a video file" });
+      return res.status(400).json({ success: false, error: "Please upload a video file using the key 'video'" });
     }
 
-    let productId = req.body.productId;
-    if (!productId || productId === 'null' || productId === '') {
-      productId = null;
-    }
-
+    // 2. Mapping 'video' field from Multer to 'videoUrl' in Schema
+    // Ippo Schema-la irukka videoUrl field-ku value katchithama pogum
     const newReel = new Reel({
       sellerId: req.body.sellerId,
-      productId: productId,
+      productId: (req.body.productId === 'null' || !req.body.productId) ? null : req.body.productId,
       description: req.body.description,
-      // 🌟 Saving S3 key (e.g., products/videos/123.mp4)
-      videoUrl: req.file.key, 
+      videoUrl: req.file.key, // 👈 Multer-S3 kidaikkira key-ai inga katchithama map pannittaen
     });
 
+    // 3. Save to Database
     const savedReel = await newReel.save();
 
-    const populatedReel = await Reel.findById(savedReel._id)
-      .populate('productId')
-      .populate('sellerId', 'name shopName');
-
-    const CF_URL = process.env.CLOUDFRONT_URL;
-    const fullUrl = CF_URL + populatedReel.videoUrl;
-
+    // 4. Send Response with CloudFront URL
+    const CF_URL = process.env.CLOUDFRONT_URL || "https://d1utzn73483swp.cloudfront.net/";
+    
     res.status(201).json({
       success: true,
-      data: { ...populatedReel._doc, videoUrl: fullUrl },
+      data: { ...savedReel._doc, videoUrl: CF_URL + savedReel.videoUrl },
     });
   } catch (err) {
-    console.error("UPLOAD REEL ERROR:", err);
+    console.error("UPLOAD REEL CONTROLLER ERROR:", err);
     res.status(400).json({ success: false, error: err.message });
   }
 };
