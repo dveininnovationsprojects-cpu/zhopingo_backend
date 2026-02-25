@@ -233,14 +233,19 @@ exports.getProductsBySeller = async (req, res) => {
     try {
         const { sellerId } = req.params;
         
-        // அந்த செல்லர் ஐடி உள்ள பொருட்களை மட்டும் தேடுகிறது
+        // 1. First, Seller details-ai edukkom (Logo path idhula dhaan irukku)
+        const sellerInfo = await Seller.findById(sellerId).select("shopName profileImage shopLogo");
+
+        // 2. Aprom andha seller-oda products-ai edukkom
         const products = await mongoose.model("Product").find({ seller: sellerId })
             .populate("category")
             .sort({ createdAt: -1 });
 
+        // 🌟 response-la 'seller' object-aiyum sethu anuppalam
         res.json({ 
             success: true, 
             count: products.length,
+            seller: sellerInfo, // 🔥 Idhu dhaan missing!
             data: products 
         });
     } catch (err) {
