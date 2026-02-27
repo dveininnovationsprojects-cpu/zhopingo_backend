@@ -42,34 +42,48 @@ exports.deleteHsnCode = async (req, res) => {
         res.json({ success: true, message: "HSN Code deleted" });
     } catch (err) { res.status(400).json({ error: err.message }); }
 };
-
-// ================= 🌟 CATEGORY =================
-exports.getPermanentCategories = async (req, res) => {
-    try {
-        const CF_URL = process.env.CLOUDFRONT_URL;
-        const cats = await Category.find({ isPermanent: true }).lean();
-        const data = cats.map(cat => ({
-            ...cat, image: cat.image ? (cat.image.startsWith('http') ? cat.image : CF_URL + cat.image) : ""
-        }));
-        res.json({ success: true, data });
-    } catch (err) { res.status(500).json({ error: err.message }); }
-};
-
+// 🌟 1. CREATE: Normal Image or Permanent Icon upload
 exports.createCategory = async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: "Image upload failed" });
-    const category = new Category({ ...req.body, image: req.file.key, isActive: true });
+    if (!req.file) return res.status(400).json({ error: "File upload failed" });
+
+    const category = new Category({ 
+        ...req.body, 
+        image: req.file.key, 
+        isActive: true,
+        // Frontend "true" string-ah anuppunaalum handle aagum
+        isPermanent: req.body.isPermanent === 'true' || req.body.isPermanent === true 
+    });
+
     await category.save();
     res.status(201).json({ success: true, data: category });
   } catch (err) { res.status(400).json({ error: err.message }); }
 };
 
+// 🌟 2. TOP BAR: Fetch only Permanent Icons
+exports.getPermanentCategories = async (req, res) => {
+    try {
+        const CF_URL = process.env.CLOUDFRONT_URL;
+        const cats = await Category.find({ isPermanent: true }).lean();
+        
+        const data = cats.map(cat => ({
+            ...cat,
+            image: cat.image ? (cat.image.startsWith('http') ? cat.image : CF_URL + cat.image) : ""
+        }));
+        res.json({ success: true, data });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+};
+
+
 exports.getCategories = async (req, res) => {
     try {
         const CF_URL = process.env.CLOUDFRONT_URL;
-        const cats = await Category.find().lean();
+        // Inga normal categories (isPermanent: false) mattum fetch pannuvom
+        const cats = await Category.find({ isPermanent: { $ne: true } }).lean();
+        
         const data = cats.map(cat => ({
-            ...cat, image: cat.image ? (cat.image.startsWith('http') ? cat.image : CF_URL + cat.image) : ""
+            ...cat,
+            image: cat.image ? (cat.image.startsWith('http') ? cat.image : CF_URL + cat.image) : ""
         }));
         res.json({ success: true, data });
     } catch (err) { res.status(500).json({ error: err.message }); }
@@ -78,10 +92,29 @@ exports.getCategories = async (req, res) => {
 exports.updateCategory = async (req, res) => {
     try {
         const updateData = { ...req.body };
-        if (req.file) updateData.image = req.file.key;
-        const category = await Category.findByIdAndUpdate(req.params.id, updateData, { new: true });
-        res.json({ success: true, data: category });
-    } catch (err) { res.status(400).json({ error: err.message }); }
+
+        // 🌟 1. Icon or Image update panna andha key-ah update pannuvom
+        if (req.file) {
+            updateData.image = req.file.key;
+        }
+
+        // 🌟 2. Boolean Handling: Frontend-la irundhu string-ah vandhaalum handle pannanum
+        if (updateData.isPermanent !== undefined) {
+            updateData.isPermanent = updateData.isPermanent === 'true' || updateData.isPermanent === true;
+        }
+
+        const category = await Category.findByIdAndUpdate(
+            req.params.id, 
+            updateData, 
+            { new: true } // Latest updated data-va return pannum
+        );
+
+        if (!category) return res.status(404).json({ success: false, message: "Category not found" });
+
+        res.json({ success: true, message: "Category updated successfully!", data: category });
+    } catch (err) { 
+        res.status(400).json({ success: false, error: err.message }); 
+    }
 };
 
 exports.deleteCategory = async (req, res) => {
@@ -216,11 +249,45 @@ exports.getMasterListBySubCategory = async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 };
 
+// 🌟 Update Master Catalog and Sync with all Seller Inventories
 exports.updateMasterProduct = async (req, res) => {
     try {
-        const updated = await MasterProduct.findByIdAndUpdate(req.params.id, req.body, { new: true });
-        res.json({ success: true, data: updated });
-    } catch (err) { res.status(400).json({ error: err.message }); }
+        const { id } = req.params; // MasterProduct ID
+        const updateData = { ...req.body };
+
+        // 1. Update the Master Catalog entry
+        const updatedMaster = await MasterProduct.findByIdAndUpdate(id, updateData, { new: true }).populate('hsnMasterId');
+        
+        if (!updatedMaster) {
+            return res.status(404).json({ success: false, message: "Master Product not found" });
+        }
+
+        // 2. 🔥 THE SYNC LOGIC: Find all seller products using this master ID
+        let inventoryUpdate = {};
+        if (updateData.name) inventoryUpdate.name = updatedMaster.name;
+        
+        // Admin HSN select panni map pannuna, automatic-ah seller table-la sync aaganum
+        if (updateData.hsnMasterId) {
+            inventoryUpdate.hsnCode = updatedMaster.hsnMasterId.hsnCode;
+            inventoryUpdate.gstPercentage = updatedMaster.hsnMasterId.gstRate;
+        }
+
+        if (Object.keys(inventoryUpdate).length > 0) {
+            await Product.updateMany(
+                { masterProductId: id }, 
+                { $set: inventoryUpdate }
+            );
+        }
+
+        res.json({ 
+            success: true, 
+            message: "Master Catalog updated and synced with all seller inventories!", 
+            data: updatedMaster 
+        });
+
+    } catch (err) {
+        res.status(400).json({ success: false, error: "Update Error: " + err.message });
+    }
 };
 
 exports.deleteMasterProduct = async (req, res) => {
