@@ -1,274 +1,88 @@
-
-
-// const Product = require('../models/Product');
-// const Seller = require('../models/Seller');
-// const SubCategory = require('../models/SubCategory');
-// const fs = require('fs');
-// const path = require('path');
-
-// // 🌟 Helper: இமேஜ் மற்றும் வீடியோ லிங்க்குகளை URL-ஆக மாற்ற
-// const formatProductMedia = (product, req) => {
-//     const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
-//     const doc = product.toObject ? product.toObject() : product;
-
-//     return {
-//         ...doc,
-//         images: (doc.images || []).map(img => 
-//             (img && img.startsWith('http')) ? img : baseUrl + img
-//         ),
-//         video: doc.video ? 
-//             (doc.video.startsWith('http') ? doc.video : baseUrl + doc.video) 
-//             : ""
-//     };
-// };
-
-// // 🌟 1. CREATE PRODUCT
-// exports.createProduct = async (req, res) => {
-//     try {
-//         const sellerId = req.body.seller || req.user?.id;
-//         const seller = await Seller.findById(sellerId);
-//         if (!seller) return res.status(404).json({ success: false, message: "Seller not found" });
-
-//         const subCat = await SubCategory.findById(req.body.subCategory);
-//         if (!subCat) return res.status(400).json({ success: false, message: "Invalid SubCategory" });
-
-//         const images = req.files && req.files['images'] ? req.files['images'].map(f => f.filename) : [];
-//         const video = req.files && req.files['video'] ? req.files['video'][0].filename : "";
-
-//         const discount = req.body.mrp > req.body.price 
-//             ? Math.round(((req.body.mrp - req.body.price) / req.body.mrp) * 100) 
-//             : 0;
-
-//         const product = new Product({
-//             ...req.body,
-//             hsnCode: subCat.hsnCode, 
-//             gstPercentage: subCat.gstRate || subCat.gstPercentage || 0,
-//             discountPercentage: discount,
-//             images,
-//             video,
-//             seller: seller._id,
-//             variants: req.body.variants ? (typeof req.body.variants === 'string' ? JSON.parse(req.body.variants) : req.body.variants) : [],
-//             averageRating: (Math.random() * (5 - 3) + 3).toFixed(1) 
-//         });
-
-//         await product.save();
-//         res.status(201).json({ success: true, data: product });
-
-//     } catch (err) { 
-//         res.status(400).json({ success: false, error: err.message }); 
-//     }
-// };
-// // 🌟 2. GET ALL PRODUCTS (Customer View - Corrected Logic)
-// exports.getAllProducts = async (req, res) => {
-//     try {
-//         const { category, subCategory, search, page = 1, limit = 20 } = req.query;
-
-//         // 🔥 STEP 1: Inactive செல்லர்களை மட்டும் பில்டர் செய்கிறோம்
-//         const inactiveSellers = await Seller.find({ status: 'inactive' }).select('_id');
-//         const inactiveIds = inactiveSellers.map(s => s._id);
-
-//         // 🔥 STEP 2: Query Setup
-//         // 'seller' என்ற ஃபீல்டு உன்னுடைய Product Schema-வில் உள்ளது.
-//         // நாம் $nin (Not In) பயன்படுத்துவதால் 'inactive' தவிர மற்ற எல்லோரும் தெரிவார்கள்.
-//         let query = { 
-//             isArchived: { $ne: true },
-//             seller: { $nin: inactiveIds } 
-//         };
-
-//         if (category) query.category = category;
-//         if (subCategory) query.subCategory = subCategory;
-//         if (search) query.name = { $regex: search, $options: "i" };
-
-//         const skip = (parseInt(page) - 1) * parseInt(limit);
-
-//         const products = await Product.find(query)
-//             .populate("category subCategory", "name image")
-//             .populate("seller", "shopName name address status") // 'status' சேர்த்து populate செய்கிறோம்
-//             .sort({ createdAt: -1 })
-//             .skip(skip)
-//             .limit(parseInt(limit))
-//             .lean(); 
-
-//         // இமேஜ் பாத் பிழை (Path Correction)
-//         const baseUrl = `${req.protocol}://${req.get('host')}/uploads/products/`;
-        
-//         const data = products.map(p => ({
-//             ...p,
-//             images: (p.images || []).map(img => (img && img.startsWith('http')) ? img : baseUrl + img),
-//             video: p.video ? (p.video.startsWith('http') ? p.video : baseUrl + p.video) : "",
-//             availability: p.stock <= 0 ? "Out of Stock" : (p.stock < 10 ? `Only ${p.stock} left` : "Available"),
-//             ratingCount: Math.floor(Math.random() * (200 - 50) + 50)
-//         }));
-
-//         res.status(200).json({ success: true, count: data.length, data });
-//     } catch (err) {
-//         res.status(500).json({ success: false, error: err.message });
-//     }
-// };
-
-// exports.updateProduct = async (req, res) => {
-//     try {
-//         let updateData = { ...req.body };
-
-       
-//         if (updateData.variants && typeof updateData.variants === 'string') {
-//             updateData.variants = JSON.parse(updateData.variants);
-//         }
-
-        
-//         if (req.files) {
-//             if (req.files['images']) {
-//                 updateData.images = req.files['images'].map(f => f.filename);
-//             }
-//             if (req.files['video']) {
-//                 updateData.video = req.files['video'][0].filename;
-//             }
-//         }
-
-        
-//         if (updateData.mrp && updateData.price) {
-//             updateData.discountPercentage = updateData.mrp > updateData.price 
-//                 ? Math.round(((updateData.mrp - updateData.price) / updateData.mrp) * 100) 
-//                 : 0;
-//         }
-
-//         const updated = await Product.findByIdAndUpdate(req.params.id, updateData, { new: true });
-        
-//         if (!updated) return res.status(404).json({ success: false, message: "Product not found" });
-
-//         res.json({ success: true, data: updated });
-//     } catch (err) { 
-//         res.status(400).json({ success: false, error: err.message }); 
-//     }
-// };
-
-
-// exports.getSimilarProducts = async (req, res) => {
-//     try {
-//         const { category } = req.query;
-
-//         const inactiveSellers = await Seller.find({ status: 'inactive' }).select('_id');
-//         const inactiveIds = inactiveSellers.map(s => s._id);
-
-//         const products = await Product.find({ 
-//             category, 
-//             _id: { $ne: req.params.id }, 
-//             isArchived: { $ne: true },
-//             seller: { $nin: inactiveIds } 
-//         }).limit(6).lean();
-
-//         const baseUrl = `${req.protocol}://${req.get('host')}/uploads/`;
-//         const data = products.map(p => ({ ...p, images: (p.images || []).map(img => img.startsWith('http') ? img : baseUrl + img) }));
-//         res.json({ success: true, data });
-//     } catch (err) { 
-//         res.status(500).json({ success: false, error: err.message }); 
-//     }
-// };
-
-
-// exports.getMyProducts = async (req, res) => {
-//     try {
-//         if (!req.user?.id) return res.status(401).json({ success: false, message: "Unauthorized" });
-//         const products = await Product.find({ seller: req.user.id, isArchived: { $ne: true } }).populate('category subCategory').lean();
-//         const baseUrl = `${req.protocol}://${req.get('host')}/uploads/products/`;
-//         const data = products.map(p => ({
-//             ...p,
-//             images: (p.images || []).map(img => (img && (img.startsWith('https') || img.includes('zhopingo.in'))) ? img : baseUrl + img),
-//             video: p.video ? (p.video.startsWith('https') ? p.video : baseUrl + p.video) : ""
-//         }));
-//         res.json({ success: true, count: data.length, data });
-//     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
-// };
-
-// exports.deleteProduct = async (req, res) => {
-//     try {
-//         const product = await Product.findById(req.params.id);
-//         if (!product) return res.status(404).json({ success: false, message: "Product not found" });
-//         const uploadPath = path.join(__dirname, '../public/uploads/');
-//         [...(product.images || []), product.video].forEach(file => {
-//             if (file) {
-//                 const filePath = path.join(uploadPath, file);
-//                 if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-//             }
-//         });
-//         await Product.findByIdAndDelete(req.params.id);
-//         res.json({ success: true, message: "Product deleted successfully!" });
-//     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
-// };
-
-// exports.getProductById = async (req, res) => {
-//     try {
-//         const product = await Product.findById(req.params.id).populate('category subCategory seller');
-//         if (!product) return res.status(404).json({ success: false, message: "Product not found" });
-//         if (product.seller && product.seller.status === 'inactive') {
-//             return res.status(403).json({ success: false, message: "Product currently unavailable" });
-//         }
-//         res.status(200).json({ success: true, data: formatProductMedia(product, req) });
-//     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
-// };
-
-
 const Product = require('../models/Product');
 const Seller = require('../models/Seller');
 const SubCategory = require('../models/SubCategory');
+const MasterProduct = require('../models/MasterProduct'); 
 const { s3 } = require('../middleware/multerConfig');
-const { DeleteObjectsCommand } = require("@aws-sdk/client-s3"); // 🌟 S3 instance-ai import pannuvom
+const { DeleteObjectsCommand } = require("@aws-sdk/client-s3");
 
-// 🌟 Helper: CloudFront URL-ai lightning fast-ah attach panna
+// 🌟 Helper: CloudFront URL logic
 const formatProductMedia = (product) => {
-    const CF_URL = process.env.CLOUDFRONT_URL; // Example: https://d1utzn73483swp.cloudfront.net/
+    const CF_URL = process.env.CLOUDFRONT_URL;
     const doc = product.toObject ? product.toObject() : product;
 
     return {
         ...doc,
-        images: (doc.images || []).map(img => 
+        images: (doc.images || []).map(img =>
             (img && img.startsWith('http')) ? img : CF_URL + img
         ),
-        video: doc.video ? 
-            (doc.video.startsWith('http') ? doc.video : CF_URL + doc.video) 
+        video: doc.video ?
+            (doc.video.startsWith('http') ? doc.video : CF_URL + doc.video)
             : ""
     };
 };
 
-// 🌟 1. CREATE PRODUCT
+// 🌟 1. CREATE PRODUCT (Mapping with Master Catalog)
 exports.createProduct = async (req, res) => {
     try {
-        const sellerId = req.body.seller || req.user?.id;
+        const sellerId = req.user?.id;
         const seller = await Seller.findById(sellerId);
         if (!seller) return res.status(404).json({ success: false, message: "Seller not found" });
 
-        const subCat = await SubCategory.findById(req.body.subCategory);
-        if (!subCat) return res.status(400).json({ success: false, message: "Invalid SubCategory" });
+        const { masterProductId, price, mrp, stock } = req.body;
 
-        // 🌟 S3-la irunthu kidaikkura 'key'-ai (e.g., products/123.jpg) save pannuvom
+        // 🔥 FIX: Fetching HSN/GST from MasterProduct via Populate
+        const masterData = await MasterProduct.findById(masterProductId).populate('hsnMasterId');
+        if (!masterData) return res.status(400).json({ success: false, message: "Invalid Master Product selection" });
+
         const images = req.files && req.files['images'] ? req.files['images'].map(f => f.key) : [];
         const video = req.files && req.files['video'] ? req.files['video'][0].key : "";
 
-        const discount = req.body.mrp > req.body.price 
-            ? Math.round(((req.body.mrp - req.body.price) / req.body.mrp) * 100) 
-            : 0;
-
         const product = new Product({
             ...req.body,
-            hsnCode: subCat.hsnCode, 
-            gstPercentage: subCat.gstRate || subCat.gstPercentage || 0,
-            discountPercentage: discount,
+            masterProductId: masterProductId,
+            name: masterData.name, // Auto name from catalog
+            category: masterData.category,
+            subCategory: masterData.subCategory,
+            hsnCode: masterData.hsnMasterId.hsnCode, // Copied from HSN Master
+            gstPercentage: masterData.hsnMasterId.gstRate, // Copied from HSN Master
+            discountPercentage: mrp > price ? Math.round(((mrp - price) / mrp) * 100) : 0,
             images,
             video,
-            seller: seller._id,
+            seller: sellerId,
+            isMaster: false,
+            isApproved: true,
             variants: req.body.variants ? (typeof req.body.variants === 'string' ? JSON.parse(req.body.variants) : req.body.variants) : [],
-            averageRating: (Math.random() * (5 - 3) + 3).toFixed(1) 
+            averageRating: (Math.random() * (5 - 3) + 3).toFixed(1)
         });
 
         await product.save();
-        res.status(201).json({ success: true, data: product });
+        res.status(201).json({ success: true, message: "Product created successfully!", data: product });
+    } catch (err) {
+        res.status(400).json({ success: false, error: err.message });
+    }
+};
 
+// 🌟 2. SELLER NAME REQUEST (Token Rise)
+exports.requestNewProduct = async (req, res) => {
+    try {
+        const { name, category, subCategory } = req.body;
+        
+        const newRequest = new MasterProduct({
+            name,
+            category,
+            subCategory,
+            isApproved: false,
+            status: 'pending'
+        });
+
+        await newRequest.save();
+        res.status(201).json({ success: true, message: "Product Name request sent to Admin!", data: newRequest });
     } catch (err) { 
         res.status(400).json({ success: false, error: err.message }); 
     }
 };
 
-// 🌟 2. GET ALL PRODUCTS (Customer View)
+// 🌟 3. GET ALL PRODUCTS (Customer View)
 exports.getAllProducts = async (req, res) => {
     try {
         const { category, subCategory, search, page = 1, limit = 20 } = req.query;
@@ -276,9 +90,11 @@ exports.getAllProducts = async (req, res) => {
         const inactiveSellers = await Seller.find({ status: 'inactive' }).select('_id');
         const inactiveIds = inactiveSellers.map(s => s._id);
 
-        let query = { 
+        let query = {
             isArchived: { $ne: true },
-            seller: { $nin: inactiveIds } 
+            isMaster: false,
+            isApproved: true,
+            seller: { $nin: inactiveIds }
         };
 
         if (category) query.category = category;
@@ -293,10 +109,10 @@ exports.getAllProducts = async (req, res) => {
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(parseInt(limit))
-            .lean(); 
+            .lean();
 
         const data = products.map(p => ({
-            ...formatProductMedia(p), // 🌟 CloudFront logic helper used here
+            ...formatProductMedia(p),
             availability: p.stock <= 0 ? "Out of Stock" : (p.stock < 10 ? `Only ${p.stock} left` : "Available"),
             ratingCount: Math.floor(Math.random() * (200 - 50) + 50)
         }));
@@ -307,106 +123,90 @@ exports.getAllProducts = async (req, res) => {
     }
 };
 
-// 🌟 3. UPDATE PRODUCT
+// 🌟 4. UPDATE PRODUCT (Syncs HSN if Master ID changes)
 exports.updateProduct = async (req, res) => {
     try {
         let updateData = { ...req.body };
 
+        // 🔥 If master product changes, update HSN and GST too
+        if (updateData.masterProductId) {
+            const masterData = await MasterProduct.findById(updateData.masterProductId).populate('hsnMasterId');
+            if (masterData) {
+                updateData.name = masterData.name;
+                updateData.hsnCode = masterData.hsnMasterId.hsnCode;
+                updateData.gstPercentage = masterData.hsnMasterId.gstRate;
+            }
+        }
+
         if (updateData.variants && typeof updateData.variants === 'string') {
             updateData.variants = JSON.parse(updateData.variants);
         }
-
         if (req.files) {
-            if (req.files['images']) {
-                updateData.images = req.files['images'].map(f => f.key); // Use S3 key
-            }
-            if (req.files['video']) {
-                updateData.video = req.files['video'][0].key; // Use S3 key
-            }
+            if (req.files['images']) updateData.images = req.files['images'].map(f => f.key);
+            if (req.files['video']) updateData.video = req.files['video'][0].key;
         }
-
         if (updateData.mrp && updateData.price) {
-            updateData.discountPercentage = updateData.mrp > updateData.price 
-                ? Math.round(((updateData.mrp - updateData.price) / updateData.mrp) * 100) 
-                : 0;
+            updateData.discountPercentage = updateData.mrp > updateData.price ? Math.round(((updateData.mrp - updateData.price) / updateData.mrp) * 100) : 0;
         }
 
         const updated = await Product.findByIdAndUpdate(req.params.id, updateData, { new: true });
-        
         if (!updated) return res.status(404).json({ success: false, message: "Product not found" });
-
         res.json({ success: true, data: updated });
-    } catch (err) { 
-        res.status(400).json({ success: false, error: err.message }); 
-    }
+    } catch (err) { res.status(400).json({ success: false, error: err.message }); }
 };
 
-// 🌟 4. DELETE PRODUCT (S3 Cleanup Corrected for SDK v3)
+// 🌟 5. DELETE PRODUCT (With S3 Cleanup)
 exports.deleteProduct = async (req, res) => {
     try {
         const product = await Product.findById(req.params.id);
         if (!product) return res.status(404).json({ success: false, message: "Product not found" });
 
-        // 🔥 Prepare objects for deletion
-        const objectsToDelete = [
-            ...(product.images || []).map(img => ({ Key: img })),
-            product.video ? { Key: product.video } : null
-        ].filter(obj => obj && obj.Key);
-
+        const objectsToDelete = [...(product.images || []).map(img => ({ Key: img })), product.video ? { Key: product.video } : null].filter(obj => obj && obj.Key);
         if (objectsToDelete.length > 0) {
-            const command = new DeleteObjectsCommand({
-                Bucket: process.env.AWS_BUCKET_NAME,
-                Delete: { Objects: objectsToDelete }
-            });
-            await s3.send(command); // SDK v3 uses .send()
+            await s3.send(new DeleteObjectsCommand({ Bucket: process.env.AWS_BUCKET_NAME, Delete: { Objects: objectsToDelete } }));
         }
 
         await Product.findByIdAndDelete(req.params.id);
-        res.json({ success: true, message: "Product and Cloud assets deleted successfully!" });
-    } catch (err) { 
-        res.status(500).json({ success: false, error: err.message }); 
-    }
+        res.json({ success: true, message: "Product removed successfully!" });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
-// 🌟 5. GET PRODUCT BY ID
+
+// 🌟 6. GET PRODUCT BY ID
 exports.getProductById = async (req, res) => {
     try {
         const product = await Product.findById(req.params.id).populate('category subCategory seller');
         if (!product) return res.status(404).json({ success: false, message: "Product not found" });
-        if (product.seller && product.seller.status === 'inactive') {
-            return res.status(403).json({ success: false, message: "Product currently unavailable" });
-        }
         res.status(200).json({ success: true, data: formatProductMedia(product) });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
-// 🌟 6. GET MY PRODUCTS (Seller View)
+// 🌟 7. GET MY PRODUCTS (Seller Dashboard)
 exports.getMyProducts = async (req, res) => {
     try {
         if (!req.user?.id) return res.status(401).json({ success: false, message: "Unauthorized" });
         const products = await Product.find({ seller: req.user.id, isArchived: { $ne: true } }).populate('category subCategory').lean();
-        
-        const data = products.map(p => formatProductMedia(p));
-        res.json({ success: true, count: data.length, data });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+        res.json({ success: true, count: products.length, data: products.map(p => formatProductMedia(p)) });
+    } catch (err) { res.status(500).json({ error: err.message }); }
 };
 
-// 🌟 7. GET SIMILAR PRODUCTS
+// 🌟 8. GET SIMILAR PRODUCTS
 exports.getSimilarProducts = async (req, res) => {
     try {
         const { category } = req.query;
-        const inactiveSellers = await Seller.find({ status: 'inactive' }).select('_id');
-        const inactiveIds = inactiveSellers.map(s => s._id);
+        const products = await Product.find({ category, _id: { $ne: req.params.id }, isArchived: { $ne: true }, isMaster: false }).limit(6).lean();
+        res.json({ success: true, data: products.map(p => formatProductMedia(p)) });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+};
 
-        const products = await Product.find({ 
-            category, 
-            _id: { $ne: req.params.id }, 
-            isArchived: { $ne: true },
-            seller: { $nin: inactiveIds } 
-        }).limit(6).lean();
-
-        const data = products.map(p => formatProductMedia(p));
-        res.json({ success: true, data });
-    } catch (err) { 
-        res.status(500).json({ success: false, error: err.message }); 
+// 🌟 9. GET MASTER LIST BY SUB-CATEGORY (Seller Dropdown)
+exports.getMasterListBySubCategory = async (req, res) => {
+    try {
+        const list = await MasterProduct.find({ 
+            subCategory: req.params.subCatId,
+            isApproved: true 
+        }).populate('hsnMasterId').lean(); // Added populate here for frontend convenience
+        res.json({ success: true, data: list });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
     }
 };
