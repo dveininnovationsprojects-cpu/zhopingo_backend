@@ -82,11 +82,12 @@ exports.requestNewProduct = async (req, res) => {
     }
 };
 // 🌟 Updated getAllProducts Logic (Fault Mapping Fix)
+// 🌟 Updated getAllProducts Logic (Deep Mapping Fix)
 exports.getAllProducts = async (req, res) => {
     try {
         const { category, subCategory, search, page = 1, limit = 20 } = req.query;
 
-        // 🔥 FIX: Check only active sellers if they exist, otherwise don't block products
+        // 1. First, find all Active Sellers ONLY
         const activeSellers = await Seller.find({ status: 'active' }).select('_id');
         const activeIds = activeSellers.map(s => s._id.toString());
 
@@ -104,27 +105,32 @@ exports.getAllProducts = async (req, res) => {
 
         const products = await Product.find(query)
             .populate("category subCategory", "name image")
-            .populate("seller", "shopName name status")
+            .populate("seller", "shopName name address status")
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(parseInt(limit))
             .lean();
 
-        // 🔥 Filter only those products whose seller is in our active list
-        // If seller is null (admin added), we allow it.
-        const filteredProducts = products.filter(p => {
-            if (!p.seller) return true; // Admin product
-            return activeIds.includes(p.seller._id ? p.seller._id.toString() : p.seller.toString());
-        });
-
-        const data = filteredProducts.map(p => ({
-            ...formatProductMedia(p),
-            stock: p.stock !== undefined ? p.stock : 50,
-            price: p.price || 0,
-            mrp: p.mrp || 0,
-            availability: p.stock > 0 ? "Available" : "Out of Stock",
-            ratingCount: Math.floor(Math.random() * 150) + 10
-        }));
+        // 🔥 CRITICAL FIX: Mapping logic ensures products are filtered AFTER fetch 
+        // to handle seller null and inactive sellers properly.
+        const data = products
+            .filter(p => {
+                // If product has no seller (Admin), allow it.
+                if (!p.seller) return true;
+                // If seller object is populated, check status directly.
+                if (p.seller && p.seller.status) return p.seller.status === 'active';
+                // Fallback check against activeIds array
+                const sId = p.seller._id ? p.seller._id.toString() : p.seller.toString();
+                return activeIds.includes(sId);
+            })
+            .map(p => ({
+                ...formatProductMedia(p),
+                stock: p.stock !== undefined ? p.stock : 50, 
+                price: p.price || 0, 
+                mrp: p.mrp || 0,
+                availability: p.stock > 0 ? "Available" : "Out of Stock",
+                ratingCount: Math.floor(Math.random() * 100) + 10
+            }));
 
         res.status(200).json({ success: true, count: data.length, data });
     } catch (err) {
