@@ -324,6 +324,7 @@ exports.getPendingProductTokens = async (req, res) => {
             isApproved: false 
         })
         .populate('category', 'name')
+        .populate("seller", "shopName name address status")
         .populate('subCategory', 'name')
         .sort({ createdAt: -1 }); // Latest items mela varum
 
