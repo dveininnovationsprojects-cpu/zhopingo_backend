@@ -62,15 +62,17 @@ exports.createProduct = async (req, res) => {
     }
 };
 
-// 🌟 2. SELLER NAME REQUEST (Token Rise)
+// 🌟 SELLER NAME REQUEST (Token Rise) - Seller ID sethu save pannurom
 exports.requestNewProduct = async (req, res) => {
     try {
         const { name, category, subCategory } = req.body;
-        
+        const sellerId = req.user?.id; // Logged-in seller id
+
         const newRequest = new MasterProduct({
             name,
             category,
             subCategory,
+            seller: sellerId, // 🌟 Indha field dhaan mukkiam machan
             isApproved: false,
             status: 'pending'
         });

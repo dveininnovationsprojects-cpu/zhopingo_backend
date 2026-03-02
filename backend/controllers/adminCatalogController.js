@@ -318,15 +318,15 @@ exports.rejectProductRequest = async (req, res) => {
 
 exports.getPendingProductTokens = async (req, res) => {
     try {
-        // 🔥 FIX: Product table-ku badhula MasterProduct-la 'pending' status records mattum fetch pannanum
+        // 🔥 FIX: MasterProduct-la 'pending' records with Seller details
         const pending = await MasterProduct.find({ 
             status: 'pending', 
             isApproved: false 
         })
         .populate('category', 'name')
-        .populate("seller", "shopName name address status")
         .populate('subCategory', 'name')
-        .sort({ createdAt: -1 }); // Latest items mela varum
+        .populate('seller', 'shopName name address') // 🌟 ShopName ippo fetch aagum
+        .sort({ createdAt: -1 });
 
         res.json({ 
             success: true, 
