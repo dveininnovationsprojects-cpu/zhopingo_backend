@@ -304,3 +304,23 @@ exports.getPendingProductTokens = async (req, res) => {
         res.json({ success: true, data: pending });
     } catch (err) { res.status(500).json({ error: err.message }); }
 };
+// 🌟 New: Admin dashboard-kkaga full Master Product list fetch pandradhu
+exports.getAllMasterProducts = async (req, res) => {
+    try {
+        // Idhula status active/approved ellathayum populate panni full list-ah kootitu varuvom
+        const list = await MasterProduct.find()
+            .populate('category', 'name')
+            .populate('subCategory', 'name')
+            .populate('hsnMasterId', 'hsnCode gstRate')
+            .sort({ createdAt: -1 }) // Latest products mela varum
+            .lean();
+
+        res.json({ 
+            success: true, 
+            count: list.length, 
+            data: list 
+        });
+    } catch (err) { 
+        res.status(500).json({ success: false, error: "Fetch Error: " + err.message }); 
+    }
+};

@@ -29,6 +29,8 @@ router.post('/master-product/add', catalogController.addMasterProduct);
 router.get('/master-list/:subCatId', catalogController.getMasterListBySubCategory);
 router.put('/master-product/:id', catalogController.updateMasterProduct);
 router.delete('/master-product/:id', catalogController.deleteMasterProduct);
+// Master List-ah full-ah edukka (Pagination and Filtering ready)
+router.get('/master-products/all', catalogController.getAllMasterProducts);
 
 // --- Tokens / Seller Requests ---
 router.get('/tokens/pending', catalogController.getPendingProductTokens);
