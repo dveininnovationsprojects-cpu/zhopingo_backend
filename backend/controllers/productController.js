@@ -40,7 +40,7 @@ exports.createProduct = async (req, res) => {
         const product = new Product({
             ...req.body,
             masterProductId: masterProductId,
-            name: masterData.name, // Auto name from catalog
+            name: req.body.name, 
             category: masterData.category,
             subCategory: masterData.subCategory,
             hsnCode: masterData.hsnMasterId.hsnCode, // Copied from HSN Master

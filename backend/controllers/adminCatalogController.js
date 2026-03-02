@@ -318,8 +318,21 @@ exports.rejectProductRequest = async (req, res) => {
 
 exports.getPendingProductTokens = async (req, res) => {
     try {
-        const pending = await Product.find({ isApproved: false, seller: { $ne: null } })
-            .populate('seller', 'shopName').populate('category subCategory', 'name').sort({ createdAt: -1 });
-        res.json({ success: true, data: pending });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        // 🔥 FIX: Product table-ku badhula MasterProduct-la 'pending' status records mattum fetch pannanum
+        const pending = await MasterProduct.find({ 
+            status: 'pending', 
+            isApproved: false 
+        })
+        .populate('category', 'name')
+        .populate('subCategory', 'name')
+        .sort({ createdAt: -1 }); // Latest items mela varum
+
+        res.json({ 
+            success: true, 
+            count: pending.length, 
+            data: pending 
+        });
+    } catch (err) { 
+        res.status(500).json({ success: false, error: err.message }); 
+    }
 };
