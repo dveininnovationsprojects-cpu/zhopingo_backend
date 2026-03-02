@@ -1,6 +1,6 @@
 const Reel = require('../models/Reel');
 const mongoose = require('mongoose');
-const { s3 } = require('../utils/upload'); 
+const { s3 } = require('../middleware/multerConfig');
 const { DeleteObjectCommand } = require("@aws-sdk/client-s3");
 
 // 🌟 Helper: CloudFront URL-ai attach panna (Exactly like Product Flow)
