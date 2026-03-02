@@ -10,7 +10,7 @@ const productListSchema = new mongoose.Schema({
     seller: { 
     type: mongoose.Schema.Types.ObjectId, 
     ref: 'Seller', // Indha ref dhaan shopName populate panna help pannum
-    required: true 
+    
 },
     status: { type: String, enum: ['pending', 'active', 'rejected','approved'], default: 'active' },
     isApproved: { type: Boolean, default: true }
