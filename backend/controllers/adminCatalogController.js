@@ -172,101 +172,59 @@ exports.deleteSubCategory = async (req, res) => {
 };
 
 // ================= 🌟 MASTER PRODUCT LIST (HSN Mapping ONLY here) =================
-
 exports.addMasterProduct = async (req, res) => {
     try {
         const { name, category, subCategory, hsnMasterId } = req.body;
         const newEntry = new MasterProduct({
-            name, category, subCategory, hsnMasterId,
-            isApproved: true, status: 'active'
+            name, 
+            category, 
+            subCategory, 
+            hsnMasterId,
+            // 🌟 Image key handling added
+            image: req.file ? req.file.key : "", 
+            isApproved: true, 
+            status: 'active'
         });
         await newEntry.save();
         res.status(201).json({ success: true, message: "Catalog updated!", data: newEntry });
     } catch (err) { res.status(400).json({ error: err.message }); }
 };
-// 🌟 1. APPROVE TOKEN: Seller request-ah approve mattum pannum (MasterProduct table)
-exports.approveProductToken = async (req, res) => {
-    try {
-        const { productId } = req.body; 
-        
-        if (!productId) return res.status(400).json({ success: false, message: "Product ID is required" });
-
-        // 🔥 FIX: Seller request 'MasterProduct' table-la pending-ah vizhuradhala anga dhaan check pannanum
-        const requestProduct = await MasterProduct.findById(productId.trim());
-
-        if (!requestProduct) return res.status(404).json({ success: false, message: "Request record not found in MasterProduct table" });
-
-        requestProduct.isApproved = true; 
-        requestProduct.status = 'approved'; 
-        await requestProduct.save();
-
-        res.json({ success: true, message: "Token marked as Approved. Now you can map HSN manually." });
-    } catch (err) { res.status(400).json({ success: false, error: "Invalid ID Format: " + err.message }); }
-};
-
-// 🌟 2. ADD TO MASTER: Approved token-ah dropdown-la select panni manual-ah HSN map pandradhu
-exports.addApprovedToMaster = async (req, res) => {
-    try {
-        const { productId, hsnMasterId } = req.body; 
-
-        if (!productId || !hsnMasterId) return res.status(400).json({ success: false, message: "Both Product ID and HSN ID are required" });
-
-        // MasterProduct-la irukka pending record-ah fetch pannu
-        const requestProduct = await MasterProduct.findById(productId.trim());
-        const hsnDoc = await HsnMaster.findById(hsnMasterId.trim());
-
-        if (!requestProduct || !hsnDoc) {
-            return res.status(404).json({ success: false, message: "Record not found. Check if the IDs are correct." });
-        }
-
-        // Manual mapping update
-        requestProduct.hsnMasterId = hsnMasterId.trim();
-        requestProduct.isApproved = true;
-        requestProduct.status = 'active'; // Ippo dhaan seller dropdown-la varum
-        
-        await requestProduct.save();
-
-        res.json({ 
-            success: true, 
-            message: "Successfully mapped HSN and activated in Catalog!", 
-            data: requestProduct 
-        });
-    } catch (err) { res.status(400).json({ success: false, error: "Mapping Error: " + err.message }); }
-};
-exports.rejectProductRequest = async (req, res) => {
-    try {
-        await Product.findByIdAndDelete(req.body.productId);
-        res.json({ success: true, message: "Request rejected and deleted." });
-    } catch (err) { res.status(400).json({ error: err.message }); }
-};
 
 exports.getMasterListBySubCategory = async (req, res) => {
     try {
+        const CF_URL = process.env.CLOUDFRONT_URL;
         const list = await MasterProduct.find({ subCategory: req.params.subCatId })
             .populate('hsnMasterId') 
             .lean();
-        res.json({ success: true, data: list });
+
+        // 🌟 Adding CloudFront URL for Master Product images
+        const data = list.map(item => ({
+            ...item,
+            image: item.image ? (item.image.startsWith('http') ? item.image : CF_URL + item.image) : ""
+        }));
+
+        res.json({ success: true, data });
     } catch (err) { res.status(500).json({ error: err.message }); }
 };
 
-// 🌟 Update Master Catalog and Sync with all Seller Inventories
 exports.updateMasterProduct = async (req, res) => {
     try {
-        const { id } = req.params; // MasterProduct ID
+        const { id } = req.params;
         const updateData = { ...req.body };
 
-        // 1. Update the Master Catalog entry
+        // 🌟 Handle image update
+        if (req.file) updateData.image = req.file.key;
+
         const updatedMaster = await MasterProduct.findByIdAndUpdate(id, updateData, { new: true }).populate('hsnMasterId');
         
         if (!updatedMaster) {
             return res.status(404).json({ success: false, message: "Master Product not found" });
         }
 
-        // 2. 🔥 THE SYNC LOGIC: Find all seller products using this master ID
+        // SYNC LOGIC with all Seller Inventories
         let inventoryUpdate = {};
         if (updateData.name) inventoryUpdate.name = updatedMaster.name;
         
-        // Admin HSN select panni map pannuna, automatic-ah seller table-la sync aaganum
         if (updateData.hsnMasterId) {
             inventoryUpdate.hsnCode = updatedMaster.hsnMasterId.hsnCode;
             inventoryUpdate.gstPercentage = updatedMaster.hsnMasterId.gstRate;
@@ -281,13 +239,10 @@ exports.updateMasterProduct = async (req, res) => {
 
         res.json({ 
             success: true, 
-            message: "Master Catalog updated and synced with all seller inventories!", 
+            message: "Master Catalog updated and synced!", 
             data: updatedMaster 
         });
-
-    } catch (err) {
-        res.status(400).json({ success: false, error: "Update Error: " + err.message });
-    }
+    } catch (err) { res.status(400).json({ success: false, error: "Update Error: " + err.message }); }
 };
 
 exports.deleteMasterProduct = async (req, res) => {
@@ -297,30 +252,74 @@ exports.deleteMasterProduct = async (req, res) => {
     } catch (err) { res.status(400).json({ error: err.message }); }
 };
 
+// 🌟 Admin dashboard-kkaga full Master Product list fetch pandradhu
+exports.getAllMasterProducts = async (req, res) => {
+    try {
+        const CF_URL = process.env.CLOUDFRONT_URL;
+        const list = await MasterProduct.find()
+            .populate('category', 'name')
+            .populate('subCategory', 'name')
+            .populate('hsnMasterId', 'hsnCode gstRate')
+            .sort({ createdAt: -1 })
+            .lean();
+
+        // 🌟 Image path correction for full list
+        const data = list.map(item => ({
+            ...item,
+            image: item.image ? (item.image.startsWith('http') ? item.image : CF_URL + item.image) : ""
+        }));
+
+        res.json({ success: true, count: data.length, data });
+    } catch (err) { res.status(500).json({ success: false, error: "Fetch Error: " + err.message }); }
+};
+
+// ================= 🌟 TOKENS / SELLER REQUESTS =================
+exports.approveProductToken = async (req, res) => {
+    try {
+        const { productId } = req.body; 
+        if (!productId) return res.status(400).json({ success: false, message: "Product ID is required" });
+
+        const requestProduct = await MasterProduct.findById(productId.trim());
+        if (!requestProduct) return res.status(404).json({ success: false, message: "Request record not found" });
+
+        requestProduct.isApproved = true; 
+        requestProduct.status = 'approved'; 
+        await requestProduct.save();
+
+        res.json({ success: true, message: "Token marked as Approved." });
+    } catch (err) { res.status(400).json({ success: false, error: err.message }); }
+};
+
+exports.addApprovedToMaster = async (req, res) => {
+    try {
+        const { productId, hsnMasterId } = req.body; 
+        if (!productId || !hsnMasterId) return res.status(400).json({ success: false, message: "IDs required" });
+
+        const requestProduct = await MasterProduct.findById(productId.trim());
+        const hsnDoc = await HsnMaster.findById(hsnMasterId.trim());
+
+        if (!requestProduct || !hsnDoc) return res.status(404).json({ success: false, message: "Record not found" });
+
+        requestProduct.hsnMasterId = hsnMasterId.trim();
+        requestProduct.isApproved = true;
+        requestProduct.status = 'active'; 
+        await requestProduct.save();
+
+        res.json({ success: true, message: "Successfully mapped HSN!", data: requestProduct });
+    } catch (err) { res.status(400).json({ success: false, error: err.message }); }
+};
+
+exports.rejectProductRequest = async (req, res) => {
+    try {
+        await Product.findByIdAndDelete(req.body.productId);
+        res.json({ success: true, message: "Request rejected." });
+    } catch (err) { res.status(400).json({ error: err.message }); }
+};
+
 exports.getPendingProductTokens = async (req, res) => {
     try {
         const pending = await Product.find({ isApproved: false, seller: { $ne: null } })
             .populate('seller', 'shopName').populate('category subCategory', 'name').sort({ createdAt: -1 });
         res.json({ success: true, data: pending });
     } catch (err) { res.status(500).json({ error: err.message }); }
-};
-// 🌟 New: Admin dashboard-kkaga full Master Product list fetch pandradhu
-exports.getAllMasterProducts = async (req, res) => {
-    try {
-        // Idhula status active/approved ellathayum populate panni full list-ah kootitu varuvom
-        const list = await MasterProduct.find()
-            .populate('category', 'name')
-            .populate('subCategory', 'name')
-            .populate('hsnMasterId', 'hsnCode gstRate')
-            .sort({ createdAt: -1 }) // Latest products mela varum
-            .lean();
-
-        res.json({ 
-            success: true, 
-            count: list.length, 
-            data: list 
-        });
-    } catch (err) { 
-        res.status(500).json({ success: false, error: "Fetch Error: " + err.message }); 
-    }
 };
