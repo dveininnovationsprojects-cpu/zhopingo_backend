@@ -67,20 +67,24 @@ exports.createWalletTopupSession = async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 };
-
-// ✅ 2. VERIFY & REDIRECT TOPUP (Exactly like PhonePe Return)
 exports.verifyWalletTopup = async (req, res) => {
   try {
-    const { topupId } = req.params;
+    // 🌟 THE FIX: URL path-la irundhu topupId-ah edukkurom
+    const { topupId } = req.params; 
+
+    if (!topupId) return res.redirect("zhopingo://wallet-failed");
+
     const response = await client.getOrderStatus(topupId);
 
     if (response.state === "COMPLETED") {
-      // Logic-ah Wallet balance update pannanum
       const parts = topupId.split('_');
       const userId = parts[1];
       const amount = response.amount / 100;
 
       const user = await User.findById(userId);
+      if (!user) return res.redirect("zhopingo://wallet-failed");
+
+      // Duplicate check using transaction reason
       const alreadyAdded = user.walletTransactions.some(t => t.reason.includes(topupId));
 
       if (!alreadyAdded) {
@@ -88,16 +92,17 @@ exports.verifyWalletTopup = async (req, res) => {
         user.walletTransactions.unshift({
           amount,
           type: "CREDIT",
-          reason: `Wallet Topup (PhonePe: ${topupId})`,
+          reason: `Wallet Topup Success (${topupId})`,
           date: new Date()
         });
         await user.save();
       }
+      return res.redirect("zhopingo://wallet-success");
     }
 
-    const deepLink = `zhopingo://wallet-success`;
-    res.send(`<html><script>window.location.href="${deepLink}";</script></html>`);
-  } catch (error) {
+    res.redirect("zhopingo://wallet-failed");
+  } catch (err) {
+    console.error("❌ PhonePe Verify Error:", err.message);
     res.redirect("zhopingo://wallet-failed");
   }
 };

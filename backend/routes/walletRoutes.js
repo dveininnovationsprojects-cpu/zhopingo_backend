@@ -9,8 +9,8 @@ router.get('/status/:userId', protect, walletController.getWalletStatus);
 // 2. Top-up Process (Cashfree Session)
 router.post('/create-topup', protect, walletController.createWalletTopupSession);
 
-// 3. Cashfree Callback (No 'protect' because Cashfree server redirects here)
-router.get('/verify-topup', walletController.verifyWalletTopup);
+// 🌟 THE FIX: topupId-ah path parameter-ah config pannittaen
+router.get('/verify-topup/:topupId', walletController.verifyWalletTopup);
 
 // 4. 🌟 Pay for Order using Wallet (New Endpoint)
 router.post('/pay-using-wallet', protect, walletController.payUsingWallet);
