@@ -69,11 +69,7 @@ exports.createWalletTopupSession = async (req, res) => {
 };
 exports.verifyWalletTopup = async (req, res) => {
   try {
-    // 🌟 THE FIX: URL path-la irundhu topupId-ah edukkurom
     const { topupId } = req.params; 
-
-    if (!topupId) return res.redirect("zhopingo://wallet-failed");
-
     const response = await client.getOrderStatus(topupId);
 
     if (response.state === "COMPLETED") {
@@ -82,9 +78,6 @@ exports.verifyWalletTopup = async (req, res) => {
       const amount = response.amount / 100;
 
       const user = await User.findById(userId);
-      if (!user) return res.redirect("zhopingo://wallet-failed");
-
-      // Duplicate check using transaction reason
       const alreadyAdded = user.walletTransactions.some(t => t.reason.includes(topupId));
 
       if (!alreadyAdded) {
@@ -97,17 +90,16 @@ exports.verifyWalletTopup = async (req, res) => {
         });
         await user.save();
       }
-      return res.redirect("zhopingo://wallet-success");
+     
+      return res.redirect(`zhopingo://wallet-success?amount=${amount}`);
     }
-
     res.redirect("zhopingo://wallet-failed");
   } catch (err) {
-    console.error("❌ PhonePe Verify Error:", err.message);
     res.redirect("zhopingo://wallet-failed");
   }
 };
 
-// ✅ 3. PAY ORDER USING WALLET (With Delhivery Sync)
+
 exports.payUsingWallet = async (req, res) => {
   try {
     const { orderId, userId } = req.body;
