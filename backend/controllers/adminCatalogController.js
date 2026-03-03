@@ -75,11 +75,13 @@ exports.getPermanentCategories = async (req, res) => {
 };
 
 
+// 🌟 Fixed: Fetch ALL categories for product creation (Dropdown logic)
 exports.getCategories = async (req, res) => {
     try {
         const CF_URL = process.env.CLOUDFRONT_URL;
-        // Inga normal categories (isPermanent: false) mattum fetch pannuvom
-        const cats = await Category.find({ isPermanent: { $ne: true } }).lean();
+        
+        // 🔥 THE FIX: query-ah empty pannittaen, so permanent & normal ellame varum
+        const cats = await Category.find({}).lean(); 
         
         const data = cats.map(cat => ({
             ...cat,
