@@ -311,9 +311,35 @@ exports.addApprovedToMaster = async (req, res) => {
 
 exports.rejectProductRequest = async (req, res) => {
     try {
-        await Product.findByIdAndDelete(req.body.productId);
-        res.json({ success: true, message: "Request rejected." });
-    } catch (err) { res.status(400).json({ error: err.message }); }
+        const { productId } = req.body;
+
+        if (!productId) {
+            return res.status(400).json({ success: false, message: "Product ID is required" });
+        }
+
+        // 🔥 THE FIX: Record-ah delete pannaama, status-ah strictly 'rejected'-nu update pannurom
+        const updatedRequest = await MasterProduct.findByIdAndUpdate(
+            productId,
+            { 
+                status: 'rejected', 
+                isApproved: false 
+            },
+            { new: true }
+        );
+
+        if (!updatedRequest) {
+            return res.status(404).json({ success: false, message: "Request not found" });
+        }
+
+        res.json({ 
+            success: true, 
+            message: "Product request rejected successfully.", 
+            data: updatedRequest 
+        });
+
+    } catch (err) { 
+        res.status(400).json({ success: false, error: err.message }); 
+    }
 };
 
 exports.getPendingProductTokens = async (req, res) => {
