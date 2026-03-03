@@ -290,53 +290,83 @@ exports.approveProductToken = async (req, res) => {
     } catch (err) { res.status(400).json({ success: false, error: err.message }); }
 };
 
+// 🌟 1. GET ALL TOKENS (Approved, Pending, Rejected - Filtered by Status)
+// Frontend-la irundhu status query-ah anuppalam (Ex: ?status=rejected)
+exports.getAllProductTokens = async (req, res) => {
+    try {
+        const { status } = req.query; // pending, approved, active, rejected
+        const CF_URL = process.env.CLOUDFRONT_URL;
+
+        let query = { seller: { $ne: null } }; // Seller requests mattum
+        if (status) query.status = status;
+
+        const tokens = await MasterProduct.find(query)
+            .populate('category subCategory', 'name')
+            .populate('seller', 'shopName name address')
+            .populate('hsnMasterId', 'hsnCode gstRate')
+            .sort({ createdAt: -1 })
+            .lean();
+
+        const data = tokens.map(t => ({
+            ...t,
+            image: t.image ? (t.image.startsWith('http') ? t.image : CF_URL + t.image) : "",
+            // UI logic easy-ah irukka helper field
+            statusLabel: t.status === 'active' ? 'Approved & Live' : 
+                         t.status === 'approved' ? 'Approved (Waiting for HSN)' : 
+                         t.status === 'rejected' ? 'Rejected' : 'Pending'
+        }));
+
+        res.json({ success: true, count: data.length, data });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+// 🌟 2. APPROVE & MAP HSN (Token-ah Active status-ku maathum)
 exports.addApprovedToMaster = async (req, res) => {
     try {
         const { productId, hsnMasterId } = req.body; 
-        if (!productId || !hsnMasterId) return res.status(400).json({ success: false, message: "IDs required" });
-
-        const requestProduct = await MasterProduct.findById(productId.trim());
-        const hsnDoc = await HsnMaster.findById(hsnMasterId.trim());
-
-        if (!requestProduct || !hsnDoc) return res.status(404).json({ success: false, message: "Record not found" });
-
-        requestProduct.hsnMasterId = hsnMasterId.trim();
-        requestProduct.isApproved = true;
-        requestProduct.status = 'active'; 
-        await requestProduct.save();
-
-        res.json({ success: true, message: "Successfully mapped HSN!", data: requestProduct });
-    } catch (err) { res.status(400).json({ success: false, error: err.message }); }
-};
-
-exports.rejectProductRequest = async (req, res) => {
-    try {
-        const { productId } = req.body;
-
-        if (!productId) {
-            return res.status(400).json({ success: false, message: "Product ID is required" });
+        if (!productId || !hsnMasterId) {
+            return res.status(400).json({ success: false, message: "Product and HSN IDs required" });
         }
 
-        // 🔥 THE FIX: Record-ah delete pannaama, status-ah strictly 'rejected'-nu update pannurom
+        const requestProduct = await MasterProduct.findById(productId);
+        if (!requestProduct) return res.status(404).json({ success: false, message: "Record not found" });
+
+        requestProduct.hsnMasterId = hsnMasterId;
+        requestProduct.isApproved = true;
+        requestProduct.status = 'active'; // 🌟 Official-ah live aagidum
+        
+        await requestProduct.save();
+
+        res.json({ 
+            success: true, 
+            message: "Successfully mapped HSN and activated variety!", 
+            data: requestProduct 
+        });
+    } catch (err) { 
+        res.status(400).json({ success: false, error: err.message }); 
+    }
+};
+
+// 🌟 3. REJECT REQUEST (Status strictly 'rejected'-nu update aagum)
+exports.rejectProductRequest = async (req, res) => {
+    try {
+        const { productId, reason } = req.body; // Reason optionally add pannalam
+
         const updatedRequest = await MasterProduct.findByIdAndUpdate(
             productId,
             { 
                 status: 'rejected', 
-                isApproved: false 
+                isApproved: false,
+                rejectionReason: reason || "Does not meet catalog standards"
             },
             { new: true }
         );
 
-        if (!updatedRequest) {
-            return res.status(404).json({ success: false, message: "Request not found" });
-        }
+        if (!updatedRequest) return res.status(404).json({ success: false, message: "Request not found" });
 
-        res.json({ 
-            success: true, 
-            message: "Product request rejected successfully.", 
-            data: updatedRequest 
-        });
-
+        res.json({ success: true, message: "Product request rejected.", data: updatedRequest });
     } catch (err) { 
         res.status(400).json({ success: false, error: err.message }); 
     }
