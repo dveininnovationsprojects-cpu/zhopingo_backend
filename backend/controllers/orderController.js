@@ -511,16 +511,48 @@ exports.cancelOrder = async (req, res) => {
 exports.trackDelhivery = async (req, res) => {
     try {
         const { awb } = req.params;
+
+        // 🌟 🌟 🌟 THE MAGIC FIX: Dummy data-la Scans add pannurom 🌟 🌟 🌟
         if (awb === "128374922") {
-            return res.json({ success: true, tracking: { ShipmentData: [{ Shipment: { Status: { Status: "In Transit" }, Scans: [] } }] } });
+            return res.json({ 
+                success: true, 
+                tracking: { 
+                    ShipmentData: [{ 
+                        Shipment: { 
+                            Status: { 
+                                Status: "In Transit",
+                                StatusDateTime: new Date().toISOString() 
+                            }, 
+                            // 🌟 Inga Scans-la data illama irundhadhu dhaan problem
+                            Scans: [
+                                { 
+                                    ScanDetail: { 
+                                        Instructions: "Package reached at facility", 
+                                        ScannedLocation: "Chennai Hub",
+                                        ScanDateTime: new Date().toISOString()
+                                    } 
+                                },
+                                { 
+                                    ScanDetail: { 
+                                        Instructions: "Package Dispatched", 
+                                        ScannedLocation: "Siruseri Hub" 
+                                    } 
+                                }
+                            ] 
+                        } 
+                    }] 
+                } 
+            });
         }
+
         const response = await axios.get(`${DELHI_URL_TRACK}?waybill=${awb}`, {
             headers: { 'Authorization': `Token ${DELHI_TOKEN}` }
         });
         res.json({ success: true, tracking: response.data });
-    } catch (err) { res.status(500).json({ success: false, message: "Tracking failed." }); }
+    } catch (err) { 
+        res.status(500).json({ success: false, message: "Tracking failed." }); 
+    }
 };
-
 exports.getMyOrders = async (req, res) => {
     try {
         const orders = await Order.find({ customerId: req.params.userId }).populate('items.productId').sort({ createdAt: -1 });
