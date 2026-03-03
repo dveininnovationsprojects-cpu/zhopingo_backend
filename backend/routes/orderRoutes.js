@@ -21,6 +21,6 @@ router.put('/cancel/:orderId', protect, orderCtrl.cancelOrder);
 
 // 5. Tracking (Delhivery)
 router.get('/track/:awb', protect, orderCtrl.trackDelhivery);
-router.post('/webhook/delhivery', orderController.handleDelhiveryWebhook);
+router.post('/webhook/delhivery', orderCtrl.handleDelhiveryWebhook);
 
 module.exports = router;
