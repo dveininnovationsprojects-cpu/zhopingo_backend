@@ -324,7 +324,7 @@ const WAREHOUSE_PINCODE = "600001";
 const ADMIN_MARGIN = 40; 
 
 /* =====================================================
-    🚚 HELPER: LIVE SHIPPING RATE
+    🚚 HELPER: LIVE SHIPPING RATE (No Handling Charges)
 ===================================================== */
 const getLiveShippingRate = async (pincode, weight = 500, paymentMode = "Pre-paid") => {
     try {
@@ -375,9 +375,8 @@ const createDelhiveryShipment = async (order, customerPhone) => {
         return null;
     }
 };
-
 /* =====================================================
-    🌟 1. LIVE RATE ENDPOINT FOR FRONTEND
+    🌟 1. LIVE RATE ENDPOINT FOR FRONTEND (Min ₹80, No Handling)
 ===================================================== */
 exports.calculateLiveDeliveryRate = async (req, res) => {
     try {
@@ -386,6 +385,8 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
 
         const liveCost = await getLiveShippingRate(pincode, 500, paymentMode);
         let finalCharge = Math.ceil(liveCost + ADMIN_MARGIN);
+        
+        // 🌟 Minimum ₹80 Rule
         if (finalCharge < 80) finalCharge = 80; 
 
         res.json({ success: true, finalCharge, actualDelhiveryCost: liveCost });
@@ -393,15 +394,14 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
         res.json({ success: false, finalCharge: 80 }); 
     }
 };
-
 /* =====================================================
-    🌟 2. CREATE ORDER
+    🌟 2. CREATE ORDER (Total = Item + Delivery ONLY)
 ===================================================== */
 exports.createOrder = async (req, res) => {
     try {
         const { items, customerId, shippingAddress, paymentMethod } = req.body;
 
-        const liveCost = await getLiveShippingRate(shippingAddress.pincode, 500, paymentMethod);
+        const liveCost = await getLiveShippingRate(pincode, 500, paymentMethod);
         let finalDeliveryCharge = Math.ceil(liveCost + ADMIN_MARGIN);
         if (finalDeliveryCharge < 80) finalDeliveryCharge = 80;
 
@@ -433,13 +433,18 @@ exports.createOrder = async (req, res) => {
             };
         });
 
-        const totalAmount = itemTotal + 4 + finalDeliveryCharge;
+        // 🌟 Grand Total strictly: Item Total + Delivery Charge (Handling Charge Removed)
+        const totalAmount = itemTotal + finalDeliveryCharge;
 
         const newOrder = new Order({
             customerId: new mongoose.Types.ObjectId(customerId),
             items: processedItems,
             sellerSplitData: Object.values(sellerWiseSplit),
-            billDetails: { itemTotal, handlingCharge: 4, deliveryCharge: finalDeliveryCharge, actualDelhiveryCost: liveCost },
+            billDetails: { 
+                itemTotal, 
+                deliveryCharge: finalDeliveryCharge, 
+                actualDelhiveryCost: liveCost 
+            },
             totalAmount,
             paymentMethod,
             shippingAddress,
