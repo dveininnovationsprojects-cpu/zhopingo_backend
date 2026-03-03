@@ -596,3 +596,28 @@ exports.bypassPaymentAndShip = async (req, res) => {
         res.json({ success: true, data: order });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
+
+// 🚚 5. Delhivery Status Sync (Automatic)
+exports.handleDelhiveryWebhook = async (req, res) => {
+    try {
+        const { waybill, status } = req.body;
+        
+        // Waybill (AWB) vachu namma database-la order-ah thedurom
+        const order = await Order.findOne({ awbNumber: waybill });
+        
+        if (order) {
+            // Delhivery status-ah namma app status-ku sync panroam
+            if (status === 'Delivered') {
+                order.status = 'Delivered';
+            } else if (status === 'In-Transit') {
+                order.status = 'Shipped';
+            }
+            await order.save();
+        }
+        
+        res.status(200).send("OK");
+    } catch (err) {
+        console.error("Webhook Error:", err);
+        res.status(500).send("Error");
+    }
+};
