@@ -36,6 +36,6 @@ router.get('/master-products/all', catalogController.getAllMasterProducts);
 router.get('/tokens/pending', catalogController.getPendingProductTokens);
 router.put('/tokens/approve-token', catalogController.approveProductToken); // 🌟 Just marking as approved
 router.post('/tokens/add-to-master', catalogController.addApprovedToMaster);
-router.post('/tokens/reject', catalogController.rejectProductRequest);
+router.put('/tokens/reject', catalogController.rejectProductRequest);
 
 module.exports = router;
