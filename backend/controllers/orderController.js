@@ -308,7 +308,6 @@
 //         res.status(500).json({ success: false, message: "Tracking failed. Try later." });
 //     }
 // };
-
 const Order = require('../models/Order');
 const User = require('../models/User');
 const DeliveryCharge = require('../models/DeliveryCharge');
@@ -321,12 +320,11 @@ const DELHI_URL_CREATE = "https://staging-express.delhivery.com/api/cmu/create.j
 const DELHI_URL_TRACK = "https://track.delhivery.com/api/v1/packages/json/";
 const DELHI_RATE_URL = "https://staging-express.delhivery.com/api/kinko/v1/invoice/charges/.json";
 
-const WAREHOUSE_PINCODE = "600001"; // Unnoda Pickup location pincode
-const ADMIN_MARGIN = 40; // Shipping rate-oda namma kootura profit
+const WAREHOUSE_PINCODE = "600001"; 
+const ADMIN_MARGIN = 40; 
 
 /* =====================================================
-    🚚 PRODUCTION HELPER: LIVE SHIPPING RATE 
-    (Indha helper existing mela irukkura functions-kku use aagum)
+    🚚 HELPER: LIVE SHIPPING RATE
 ===================================================== */
 const getLiveShippingRate = async (pincode, weight = 500, paymentMode = "Pre-paid") => {
     try {
@@ -340,45 +338,15 @@ const getLiveShippingRate = async (pincode, weight = 500, paymentMode = "Pre-pai
             },
             headers: { 'Authorization': `Token ${DELHI_TOKEN}` }
         });
-        // API return pandra amount logic
         return response.data[0]?.total_amount || 40; 
     } catch (error) {
         console.error("❌ Delhivery Rate API Error:", error.message);
-        return 40; // Fail aana fallback charge
+        return 40; 
     }
 };
 
 /* =====================================================
-    🌟 5. NEW: FRONTEND-KKAANA LIVE RATE ENDPOINT
-    (Frontend 'CartScreen' idhai dhaan koopidum)
-===================================================== */
-exports.calculateLiveDeliveryRate = async (req, res) => {
-    try {
-        const { pincode, paymentMode } = req.query;
-        if (!pincode) return res.status(400).json({ error: "Pincode required" });
-
-        // 1. Live Delhivery rate edukkurom
-        const liveCost = await getLiveShippingRate(pincode, 500, paymentMode);
-        
-        // 2. Final Charge = Live Cost + Admin Margin (Fixed ₹40)
-        // Aana user-ku eppovum minimum ₹80 katanum (Un requirement)
-        let finalCharge = Math.ceil(liveCost + ADMIN_MARGIN);
-        if (finalCharge < 80) finalCharge = 80; 
-
-        res.json({ 
-            success: true, 
-            finalCharge,
-            actualDelhiveryCost: liveCost, // For admin info
-            profit: finalCharge - liveCost 
-        });
-    } catch (err) {
-        // API crash aanaalum user-ku default-ah 80 katanum
-        res.json({ success: false, finalCharge: 80 }); 
-    }
-};
-
-/* =====================================================
-    📦 HELPER: CREATE SHIPMENT
+    📦 HELPER: CREATE DELHI SHIPMENT
 ===================================================== */
 const createDelhiveryShipment = async (order, customerPhone) => {
     try {
@@ -409,40 +377,69 @@ const createDelhiveryShipment = async (order, customerPhone) => {
 };
 
 /* =====================================================
-    🌟 1. CREATE ORDER (With Live Rates)
+    🌟 1. LIVE RATE ENDPOINT FOR FRONTEND
+===================================================== */
+exports.calculateLiveDeliveryRate = async (req, res) => {
+    try {
+        const { pincode, paymentMode } = req.query;
+        if (!pincode) return res.status(400).json({ error: "Pincode required" });
+
+        const liveCost = await getLiveShippingRate(pincode, 500, paymentMode);
+        let finalCharge = Math.ceil(liveCost + ADMIN_MARGIN);
+        if (finalCharge < 80) finalCharge = 80; 
+
+        res.json({ success: true, finalCharge, actualDelhiveryCost: liveCost });
+    } catch (err) {
+        res.json({ success: false, finalCharge: 80 }); 
+    }
+};
+
+/* =====================================================
+    🌟 2. CREATE ORDER
 ===================================================== */
 exports.createOrder = async (req, res) => {
     try {
         const { items, customerId, shippingAddress, paymentMethod } = req.body;
 
-        // A. Live Delhivery Rate + Admin Margin
         const liveCost = await getLiveShippingRate(shippingAddress.pincode, 500, paymentMethod);
-        const finalDeliveryCharge = Math.ceil(liveCost + ADMIN_MARGIN);
+        let finalDeliveryCharge = Math.ceil(liveCost + ADMIN_MARGIN);
+        if (finalDeliveryCharge < 80) finalDeliveryCharge = 80;
 
         let itemTotal = 0;
+        let sellerWiseSplit = {};
+
         const processedItems = items.map(item => {
-            itemTotal += (Number(item.price) * item.quantity);
+            const price = Number(item.price);
+            const qty = Number(item.quantity);
+            itemTotal += (price * qty);
+
+            const sIdStr = item.sellerId.toString();
+            if (!sellerWiseSplit[sIdStr]) {
+                sellerWiseSplit[sIdStr] = {
+                    sellerId: item.sellerId,
+                    sellerSubtotal: 0,
+                    allocatedDeliveryCost: finalDeliveryCharge 
+                };
+            }
+            sellerWiseSplit[sIdStr].sellerSubtotal += (price * qty);
+
             return {
                 productId: new mongoose.Types.ObjectId(item.productId || item._id),
                 name: item.name,
-                quantity: Number(item.quantity),
-                price: Number(item.price),
-                sellerId: new mongoose.Types.ObjectId(item.sellerId || "698089341dc4f60f934bb5eb"),
-                hsnCode: item.hsnCode || item.hsn || "0000"
+                quantity: qty,
+                price: price,
+                sellerId: new mongoose.Types.ObjectId(item.sellerId),
+                hsnCode: item.hsnCode || "0000"
             };
         });
 
-        const totalAmount = itemTotal + 4 + finalDeliveryCharge; // 4 handling charge
+        const totalAmount = itemTotal + 4 + finalDeliveryCharge;
 
         const newOrder = new Order({
             customerId: new mongoose.Types.ObjectId(customerId),
             items: processedItems,
-            billDetails: {
-                itemTotal,
-                handlingCharge: 4,
-                deliveryCharge: finalDeliveryCharge,
-                actualDelhiveryCost: liveCost
-            },
+            sellerSplitData: Object.values(sellerWiseSplit),
+            billDetails: { itemTotal, handlingCharge: 4, deliveryCharge: finalDeliveryCharge, actualDelhiveryCost: liveCost },
             totalAmount,
             paymentMethod,
             shippingAddress,
@@ -451,15 +448,14 @@ exports.createOrder = async (req, res) => {
 
         await newOrder.save();
 
-        // B. If Online/Wallet, process shipment immediately
         if (paymentMethod !== "COD") {
             const user = await User.findById(customerId);
             newOrder.paymentStatus = "Paid";
             const delhiRes = await createDelhiveryShipment(newOrder, user?.phone || "9876543210");
-            if (delhiRes && (delhiRes.success || delhiRes.packages?.length > 0)) {
+            if (delhiRes && (delhiRes.success || delhiRes.packages)) {
                 newOrder.awbNumber = delhiRes.packages[0].waybill;
             } else {
-                newOrder.awbNumber = "128374922"; // Backup AWB for Testing
+                newOrder.awbNumber = "128374922"; 
             }
             await newOrder.save();
         }
@@ -471,33 +467,25 @@ exports.createOrder = async (req, res) => {
 };
 
 /* =====================================================
-    ❌ 2. CANCEL ORDER (Before Shipping Only + Wallet Refund)
+    ❌ 3. CANCEL ORDER (Before Shipping Only + Wallet Refund)
 ===================================================== */
 exports.cancelOrder = async (req, res) => {
     try {
-        const orderId = req.params.orderId;
-        const order = await Order.findById(orderId);
-
+        const order = await Order.findById(req.params.orderId);
         if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
-        // 🛑 Production Rule: Shipping-ku munnadi dhaan cancel panna mudiyum
         if (order.status !== 'Placed' && order.status !== 'Pending') {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Order cannot be cancelled as it is already being processed or shipped." 
-            });
+            return res.status(400).json({ success: false, message: "Cancellation not possible once processed." });
         }
 
-        // 💸 Wallet Refund Logic
         if (order.paymentStatus === 'Paid') {
             const user = await User.findById(order.customerId);
             if (user) {
                 user.walletBalance = (user.walletBalance || 0) + order.totalAmount;
-                // Add to transaction history
                 user.walletTransactions.unshift({
                     amount: order.totalAmount,
                     type: 'CREDIT',
-                    reason: `Refund for Cancelled Order #${order._id.toString().slice(-6).toUpperCase()}`,
+                    reason: `Refund: Order #${order._id.toString().slice(-6).toUpperCase()}`,
                     date: new Date()
                 });
                 await user.save();
@@ -509,56 +497,28 @@ exports.cancelOrder = async (req, res) => {
 
         order.status = 'Cancelled';
         await order.save();
-
-        res.json({ success: true, message: "Order cancelled and amount refunded to wallet." });
+        res.json({ success: true, message: "Order cancelled and refunded to wallet." });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
 };
 
 /* =====================================================
-    📈 3. TRACKING & STATUS
+    📈 4. TRACKING & FETCHING (Sync with Delhivery)
 ===================================================== */
 exports.trackDelhivery = async (req, res) => {
     try {
         const { awb } = req.params;
         if (awb === "128374922") {
-            return res.json({
-                success: true,
-                tracking: { ShipmentData: [{ Shipment: { Status: { Status: "In Transit" }, Scans: [] } }] }
-            });
+            return res.json({ success: true, tracking: { ShipmentData: [{ Shipment: { Status: { Status: "In Transit" }, Scans: [] } }] } });
         }
         const response = await axios.get(`${DELHI_URL_TRACK}?waybill=${awb}`, {
             headers: { 'Authorization': `Token ${DELHI_TOKEN}` }
         });
         res.json({ success: true, tracking: response.data });
-    } catch (err) {
-        res.status(500).json({ success: false, message: "Tracking currently unavailable." });
-    }
+    } catch (err) { res.status(500).json({ success: false, message: "Tracking failed." }); }
 };
 
-/* =====================================================
-    ⚡ 4. BYPASS / TEST PAYMENT
-===================================================== */
-exports.bypassPaymentAndShip = async (req, res) => {
-    try {
-        const { orderId } = req.params;
-        const order = await Order.findById(orderId);
-        if (!order) return res.status(404).json({ success: false, message: "Order not found" });
-
-        const user = await User.findById(order.customerId);
-        order.paymentStatus = "Paid";
-        order.status = "Placed";
-
-        const delhiRes = await createDelhiveryShipment(order, user?.phone || "9876543210");
-        order.awbNumber = (delhiRes && (delhiRes.success || delhiRes.packages)) ? delhiRes.packages[0].waybill : "128374922";
-        
-        await order.save();
-        res.json({ success: true, message: "Test Success", data: order });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
-};
-
-// ... Rest of the helper functions (getMyOrders, getOrders, getSellerOrders, updateOrderStatus) are same as before
 exports.getMyOrders = async (req, res) => {
     try {
         const orders = await Order.find({ customerId: req.params.userId }).populate('items.productId').sort({ createdAt: -1 });
@@ -571,11 +531,11 @@ exports.getOrders = async (req, res) => {
         const orders = await Order.find().populate('customerId', 'name phone email').populate('items.productId').sort({ createdAt: -1 });
         res.json({ success: true, data: orders });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
-};
+}
 
 exports.getSellerOrders = async (req, res) => {
     try {
-        const orders = await Order.find({ "items.sellerId": req.params.sellerId }).populate('customerId', 'name phone').populate('items.productId').sort({ createdAt: -1 });
+        const orders = await Order.find({ "items.sellerId": req.params.sellerId }).populate('items.productId').sort({ createdAt: -1 });
         res.json({ success: true, data: orders });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
@@ -583,10 +543,21 @@ exports.getSellerOrders = async (req, res) => {
 exports.updateOrderStatus = async (req, res) => {
     try {
         const { status } = req.body;
-        const order = await Order.findById(req.params.orderId);
-        if (!order) return res.status(404).json({ success: false, message: "Not found" });
-        order.status = status;
+        const order = await Order.findByIdAndUpdate(req.params.orderId, { status }, { new: true });
         if (status === 'Delivered') order.paymentStatus = 'Paid';
+        await order.save();
+        res.json({ success: true, data: order });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+};
+
+exports.bypassPaymentAndShip = async (req, res) => {
+    try {
+        const order = await Order.findById(req.params.orderId);
+        const user = await User.findById(order.customerId);
+        order.paymentStatus = "Paid";
+        order.status = "Placed";
+        const delhiRes = await createDelhiveryShipment(order, user?.phone || "9876543210");
+        order.awbNumber = (delhiRes && (delhiRes.success || delhiRes.packages)) ? delhiRes.packages[0].waybill : "128374922";
         await order.save();
         res.json({ success: true, data: order });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
