@@ -325,7 +325,8 @@ const WAREHOUSE_PINCODE = "600001"; // Unnoda Pickup location pincode
 const ADMIN_MARGIN = 40; // Shipping rate-oda namma kootura profit
 
 /* =====================================================
-    🚚 HELPER: LIVE SHIPPING RATE CALCULATOR
+    🚚 PRODUCTION HELPER: LIVE SHIPPING RATE 
+    (Indha helper existing mela irukkura functions-kku use aagum)
 ===================================================== */
 const getLiveShippingRate = async (pincode, weight = 500, paymentMode = "Pre-paid") => {
     try {
@@ -339,10 +340,40 @@ const getLiveShippingRate = async (pincode, weight = 500, paymentMode = "Pre-pai
             },
             headers: { 'Authorization': `Token ${DELHI_TOKEN}` }
         });
+        // API return pandra amount logic
         return response.data[0]?.total_amount || 40; 
     } catch (error) {
         console.error("❌ Delhivery Rate API Error:", error.message);
-        return 40; // Fallback shipping charge
+        return 40; // Fail aana fallback charge
+    }
+};
+
+/* =====================================================
+    🌟 5. NEW: FRONTEND-KKAANA LIVE RATE ENDPOINT
+    (Frontend 'CartScreen' idhai dhaan koopidum)
+===================================================== */
+exports.calculateLiveDeliveryRate = async (req, res) => {
+    try {
+        const { pincode, paymentMode } = req.query;
+        if (!pincode) return res.status(400).json({ error: "Pincode required" });
+
+        // 1. Live Delhivery rate edukkurom
+        const liveCost = await getLiveShippingRate(pincode, 500, paymentMode);
+        
+        // 2. Final Charge = Live Cost + Admin Margin (Fixed ₹40)
+        // Aana user-ku eppovum minimum ₹80 katanum (Un requirement)
+        let finalCharge = Math.ceil(liveCost + ADMIN_MARGIN);
+        if (finalCharge < 80) finalCharge = 80; 
+
+        res.json({ 
+            success: true, 
+            finalCharge,
+            actualDelhiveryCost: liveCost, // For admin info
+            profit: finalCharge - liveCost 
+        });
+    } catch (err) {
+        // API crash aanaalum user-ku default-ah 80 katanum
+        res.json({ success: false, finalCharge: 80 }); 
     }
 };
 

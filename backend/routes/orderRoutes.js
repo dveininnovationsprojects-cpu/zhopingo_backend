@@ -14,5 +14,6 @@ router.get('/seller/:sellerId', protect, orderCtrl.getSellerOrders);
 router.put('/update-status/:orderId', protect, orderCtrl.updateOrderStatus);
 router.put('/bypass-pay/:orderId', protect, orderCtrl.bypassPaymentAndShip);
 router.put('/cancel/:orderId', protect, orderCtrl.cancelOrder);
+router.get('/calculate-shipping',protect, orderCtrl.calculateLiveDeliveryRate);
 
 module.exports = router;
