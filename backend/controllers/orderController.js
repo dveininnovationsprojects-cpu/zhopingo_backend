@@ -376,78 +376,75 @@ const createDelhiveryShipment = async (order, customerPhone) => {
     }
 };
 /* =====================================================
-    🌟 1. LIVE RATE ENDPOINT FOR FRONTEND (Min ₹80, No Handling)
+    🌟 1. LIVE RATE ENDPOINT FOR FRONTEND (Variable Fix)
 ===================================================== */
 exports.calculateLiveDeliveryRate = async (req, res) => {
     try {
-        const { pincode, paymentMode } = req.query;
-        if (!pincode) return res.status(400).json({ error: "Pincode required" });
+        // Postman/Frontend query params-la irundhu edukkum
+        const pincode = req.query.pincode; 
+        const paymentMode = req.query.paymentMode || "Pre-paid";
+
+        if (!pincode) return res.status(400).json({ success: false, error: "Pincode is not defined in query" });
 
         const liveCost = await getLiveShippingRate(pincode, 500, paymentMode);
-        let finalCharge = Math.ceil(liveCost + ADMIN_MARGIN);
         
-        // 🌟 Minimum ₹80 Rule
+        let finalCharge = Math.ceil(liveCost + ADMIN_MARGIN);
         if (finalCharge < 80) finalCharge = 80; 
 
         res.json({ success: true, finalCharge, actualDelhiveryCost: liveCost });
     } catch (err) {
-        res.json({ success: false, finalCharge: 80 }); 
+        res.status(500).json({ success: false, finalCharge: 80, error: err.message }); 
     }
 };
 /* =====================================================
-    🌟 2. CREATE ORDER (Total = Item + Delivery ONLY)
+    🌟 2. CREATE ORDER (Sync with your Schema)
 ===================================================== */
 exports.createOrder = async (req, res) => {
     try {
         const { items, customerId, shippingAddress, paymentMethod } = req.body;
 
-        const liveCost = await getLiveShippingRate(pincode, 500, paymentMethod);
+        // 🌟 Postman/App logic check
+        if (!shippingAddress?.pincode) {
+            return res.status(400).json({ success: false, error: "Shipping pincode missing" });
+        }
+
+        const liveCost = await getLiveShippingRate(shippingAddress.pincode, 500, paymentMethod);
         let finalDeliveryCharge = Math.ceil(liveCost + ADMIN_MARGIN);
         if (finalDeliveryCharge < 80) finalDeliveryCharge = 80;
 
         let itemTotal = 0;
-        let sellerWiseSplit = {};
-
         const processedItems = items.map(item => {
             const price = Number(item.price);
             const qty = Number(item.quantity);
             itemTotal += (price * qty);
 
-            const sIdStr = item.sellerId.toString();
-            if (!sellerWiseSplit[sIdStr]) {
-                sellerWiseSplit[sIdStr] = {
-                    sellerId: item.sellerId,
-                    sellerSubtotal: 0,
-                    allocatedDeliveryCost: finalDeliveryCharge 
-                };
-            }
-            sellerWiseSplit[sIdStr].sellerSubtotal += (price * qty);
-
             return {
-                productId: new mongoose.Types.ObjectId(item.productId || item._id),
+                productId: new mongoose.Types.ObjectId(item.productId),
                 name: item.name,
                 quantity: qty,
                 price: price,
+                mrp: Number(item.mrp || item.price),
                 sellerId: new mongoose.Types.ObjectId(item.sellerId),
-                hsnCode: item.hsnCode || "0000"
+                hsnCode: item.hsnCode || "0000",
+                image: item.image || ""
             };
         });
 
-        // 🌟 Grand Total strictly: Item Total + Delivery Charge (Handling Charge Removed)
+        // 🌟 Total = Item + Delivery (No handling charge as per your request)
         const totalAmount = itemTotal + finalDeliveryCharge;
 
         const newOrder = new Order({
             customerId: new mongoose.Types.ObjectId(customerId),
             items: processedItems,
-            sellerSplitData: Object.values(sellerWiseSplit),
             billDetails: { 
                 itemTotal, 
                 deliveryCharge: finalDeliveryCharge, 
-                actualDelhiveryCost: liveCost 
+                actualDelhiveryCost: liveCost,
+                mrpTotal: items.reduce((acc, i) => acc + (Number(i.mrp || i.price) * i.quantity), 0)
             },
             totalAmount,
             paymentMethod,
-            shippingAddress,
+            shippingAddress, // Receiver name, pincode etc will save here
             status: 'Placed'
         });
 
@@ -456,7 +453,7 @@ exports.createOrder = async (req, res) => {
         if (paymentMethod !== "COD") {
             const user = await User.findById(customerId);
             newOrder.paymentStatus = "Paid";
-            const delhiRes = await createDelhiveryShipment(newOrder, user?.phone || "9876543210");
+            const delhiRes = await createDelhiveryShipment(newOrder, user?.phone || shippingAddress.phone || "9876543210");
             if (delhiRes && (delhiRes.success || delhiRes.packages)) {
                 newOrder.awbNumber = delhiRes.packages[0].waybill;
             } else {
@@ -467,10 +464,10 @@ exports.createOrder = async (req, res) => {
 
         res.status(201).json({ success: true, order: newOrder });
     } catch (err) {
+        console.error("ORDER ERROR:", err);
         res.status(500).json({ success: false, error: err.message });
     }
 };
-
 /* =====================================================
     ❌ 3. CANCEL ORDER (Before Shipping Only + Wallet Refund)
 ===================================================== */
