@@ -20,63 +20,62 @@ const formatProductMedia = (product) => {
             : ""
     };
 };
-
-// 🌟 1. CREATE PRODUCT (Mapping with Master Catalog)
 exports.createProduct = async (req, res) => {
-    try {
-        const sellerId = req.user?.id;
-        const seller = await Seller.findById(sellerId);
-        if (!seller) return res.status(404).json({ success: false, message: "Seller not found" });
+    try {
+        const sellerId = req.user?.id;
+        const seller = await Seller.findById(sellerId);
+        if (!seller) return res.status(404).json({ success: false, message: "Seller not found" });
 
-        const { masterProductId, price, mrp, stock } = req.body;
+        const { masterProductId, price, mrp, stock } = req.body;
 
-        // 🔥 FIX: Fetching HSN/GST from MasterProduct via Populate
-        const masterData = await MasterProduct.findById(masterProductId).populate('hsnMasterId');
-        if (!masterData) return res.status(400).json({ success: false, message: "Invalid Master Product selection" });
+        // 🌟 Master Product validation
+        const masterData = await MasterProduct.findById(masterProductId).populate('hsnMasterId');
+        if (!masterData) return res.status(400).json({ success: false, message: "Invalid Master Product selection" });
 
-        const images = req.files && req.files['images'] ? req.files['images'].map(f => f.key) : [];
-        const video = req.files && req.files['video'] ? req.files['video'][0].key : "";
+        const images = req.files && req.files['images'] ? req.files['images'].map(f => f.key) : [];
+        const video = req.files && req.files['video'] ? req.files['video'][0].key : "";
 
-        // 🌟 Parsing nested objects if they come as strings from FormData
-        const highlights = typeof req.body.highlights === 'string' ? JSON.parse(req.body.highlights) : req.body.highlights;
-        const manufacturerDetails = typeof req.body.manufacturerDetails === 'string' ? JSON.parse(req.body.manufacturerDetails) : req.body.manufacturerDetails;
+        // 🔥 THE FIX: Parsing Nested Objects (Highlights & Manufacturer)
+        // FormData-la irundhu vara string-ah object-ah mathuroam
+        const parseField = (field) => {
+            if (!field) return undefined;
+            return typeof field === 'string' ? JSON.parse(field) : field;
+        };
 
-        const product = new Product({
-            // 🌟 Spreading body first to get all attributes like isFreeDelivery, isVeg, etc.
-            ...req.body,
-            
-            // 🌟 Overriding specific mapped fields
-            masterProductId: masterProductId,
-            name: req.body.name || masterData.name, 
-            category: masterData.category,
-            subCategory: masterData.subCategory,
-            hsnCode: masterData.hsnMasterId?.hsnCode || "0000",
-            gstPercentage: masterData.hsnMasterId?.gstRate || 0,
-            
-            // 🌟 Logic based fields
-            discountPercentage: mrp > price ? Math.round(((mrp - price) / mrp) * 100) : 0,
-            highlights: highlights || { productType: "", cocoaContent: "", fabricType: "" },
-            manufacturerDetails: manufacturerDetails || { countryOfOrigin: "India" },
-            
-            images,
-            video,
-            seller: sellerId,
-            isMaster: false,
-            isApproved: true, // Auto-approved as it's from master catalog
-            variants: req.body.variants ? (typeof req.body.variants === 'string' ? JSON.parse(req.body.variants) : req.body.variants) : [],
-            averageRating: (Math.random() * (5 - 3) + 3).toFixed(1)
-        });
+        const product = new Product({
+            // 1️⃣ FIRST: Spread all body fields (isFreeDelivery, isVeg, isReturnable, shelfLife, etc.)
+            ...req.body, 
 
-        await product.save();
-        res.status(201).json({ 
-            success: true, 
-            message: "Product created successfully with all advanced features!", 
-            data: product 
-        });
-    } catch (err) {
-        console.error("CREATE PRODUCT ERROR:", err);
-        res.status(400).json({ success: false, error: err.message });
-    }
+            // 2️⃣ SECOND: Strictly Map Complex Fields
+            masterProductId: masterProductId,
+            name: req.body.name || masterData.name, 
+            category: masterData.category,
+            subCategory: masterData.subCategory,
+            hsnCode: masterData.hsnMasterId?.hsnCode || "0000",
+            gstPercentage: masterData.hsnMasterId?.gstRate || 0,
+            discountPercentage: mrp > price ? Math.round(((mrp - price) / mrp) * 100) : 0,
+            images,
+            video,
+            seller: sellerId,
+            isMaster: false,
+            isApproved: true,
+            
+            // 3️⃣ THIRD: Process Parsed Fields strictly
+            variants: parseField(req.body.variants) || [],
+            highlights: parseField(req.body.highlights),
+            manufacturerDetails: parseField(req.body.manufacturerDetails),
+            nutritionInfo: parseField(req.body.nutritionInfo),
+            keyFeatures: parseField(req.body.keyFeatures) || [],
+            
+            averageRating: (Math.random() * (5 - 3) + 3).toFixed(1)
+        });
+
+        await product.save();
+        res.status(201).json({ success: true, message: "Product added with all advanced features!", data: product });
+    } catch (err) {
+        console.error("PRODUCT CREATE ERROR:", err);
+        res.status(400).json({ success: false, error: err.message });
+    }
 };
 
 exports.requestNewProduct = async (req, res) => {
@@ -142,38 +141,74 @@ exports.getAllProducts = async (req, res) => {
     }
 };
 
-
 exports.updateProduct = async (req, res) => {
     try {
         let updateData = { ...req.body };
 
-        
+        // 🌟 1. Master Product Mapping (HSN/GST Sync on Update)
         if (updateData.masterProductId) {
             const masterData = await MasterProduct.findById(updateData.masterProductId).populate('hsnMasterId');
             if (masterData) {
                 updateData.name = masterData.name;
-                updateData.hsnCode = masterData.hsnMasterId.hsnCode;
-                updateData.gstPercentage = masterData.hsnMasterId.gstRate;
+                updateData.hsnCode = masterData.hsnMasterId?.hsnCode || "0000";
+                updateData.gstPercentage = masterData.hsnMasterId?.gstRate || 0;
             }
         }
 
-        if (updateData.variants && typeof updateData.variants === 'string') {
-            updateData.variants = JSON.parse(updateData.variants);
-        }
+        // 🌟 2. Helper for Parsing (FormData logic)
+        const parseField = (field) => {
+            if (!field) return undefined;
+            try {
+                return typeof field === 'string' ? JSON.parse(field) : field;
+            } catch (e) {
+                return field; // Return as is if not a valid JSON string
+            }
+        };
+
+        // 🌟 3. Handling Complex Nested Objects strictly
+        if (updateData.variants) updateData.variants = parseField(updateData.variants);
+        if (updateData.highlights) updateData.highlights = parseField(updateData.highlights);
+        if (updateData.manufacturerDetails) updateData.manufacturerDetails = parseField(updateData.manufacturerDetails);
+        if (updateData.nutritionInfo) updateData.nutritionInfo = parseField(updateData.nutritionInfo);
+        if (updateData.keyFeatures) updateData.keyFeatures = parseField(updateData.keyFeatures);
+
+        // 🌟 4. Media Update logic
         if (req.files) {
-            if (req.files['images']) updateData.images = req.files['images'].map(f => f.key);
-            if (req.files['video']) updateData.video = req.files['video'][0].key;
+            if (req.files['images']) {
+                updateData.images = req.files['images'].map(f => f.key);
+            }
+            if (req.files['video']) {
+                updateData.video = req.files['video'][0].key;
+            }
         }
+
+        // 🌟 5. Discount Percentage Calculation
         if (updateData.mrp && updateData.price) {
-            updateData.discountPercentage = updateData.mrp > updateData.price ? Math.round(((updateData.mrp - updateData.price) / updateData.mrp) * 100) : 0;
+            updateData.discountPercentage = updateData.mrp > updateData.price 
+                ? Math.round(((updateData.mrp - updateData.price) / updateData.mrp) * 100) 
+                : 0;
         }
 
-        const updated = await Product.findByIdAndUpdate(req.params.id, updateData, { new: true });
-        if (!updated) return res.status(404).json({ success: false, message: "Product not found" });
-        res.json({ success: true, data: updated });
-    } catch (err) { res.status(400).json({ success: false, error: err.message }); }
-};
+        // 🌟 6. Final Database Update
+        const updated = await Product.findByIdAndUpdate(
+            req.params.id, 
+            { $set: updateData }, // Using $set strictly to avoid overwriting un-sent fields
+            { new: true, runValidators: true }
+        );
 
+        if (!updated) return res.status(404).json({ success: false, message: "Product not found" });
+
+        res.json({ 
+            success: true, 
+            message: "Product updated successfully with all advanced features!", 
+            data: updated 
+        });
+
+    } catch (err) { 
+        console.error("UPDATE PRODUCT ERROR:", err);
+        res.status(400).json({ success: false, error: err.message }); 
+    }
+};
 exports.deleteProduct = async (req, res) => {
     try {
         const product = await Product.findById(req.params.id);
