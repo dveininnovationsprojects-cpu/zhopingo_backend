@@ -62,7 +62,7 @@ exports.createProduct = async (req, res) => {
     }
 };
 
-// 🌟 SELLER NAME REQUEST (Token Rise) - Seller ID sethu save pannurom
+
 exports.requestNewProduct = async (req, res) => {
     try {
         const { name, category, subCategory } = req.body;
@@ -72,7 +72,7 @@ exports.requestNewProduct = async (req, res) => {
             name,
             category,
             subCategory,
-            seller: sellerId, // 🌟 Indha field dhaan mukkiam machan
+            seller: sellerId,
             isApproved: false,
             status: 'pending'
         });
@@ -83,13 +83,12 @@ exports.requestNewProduct = async (req, res) => {
         res.status(400).json({ success: false, error: err.message }); 
     }
 };
-// 🌟 Updated getAllProducts Logic (NO FILTERS - Full Product Fetch)
+
 exports.getAllProducts = async (req, res) => {
     try {
         const { category, subCategory, search, page = 1, limit = 50 } = req.query;
 
-        // 🔥 NO FILTERS: isApproved, isActive, matrum seller check ellathaiyum remove pannittaen.
-        // Database-la irukka ALL products-aiyum edukkum.
+
         let query = {}; 
 
         if (category) query.category = category;
@@ -126,12 +125,13 @@ exports.getAllProducts = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
-// 🌟 4. UPDATE PRODUCT (Syncs HSN if Master ID changes)
+
+
 exports.updateProduct = async (req, res) => {
     try {
         let updateData = { ...req.body };
 
-        // 🔥 If master product changes, update HSN and GST too
+        
         if (updateData.masterProductId) {
             const masterData = await MasterProduct.findById(updateData.masterProductId).populate('hsnMasterId');
             if (masterData) {
@@ -158,7 +158,6 @@ exports.updateProduct = async (req, res) => {
     } catch (err) { res.status(400).json({ success: false, error: err.message }); }
 };
 
-// 🌟 5. DELETE PRODUCT (With S3 Cleanup)
 exports.deleteProduct = async (req, res) => {
     try {
         const product = await Product.findById(req.params.id);

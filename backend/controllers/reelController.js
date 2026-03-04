@@ -59,26 +59,31 @@ exports.uploadReel = async (req, res) => {
     }
 };
 
-// 🌟 2. GET ALL REELS
+// 🌟 41. Fixed getAllReels with Likers & Viewers Populate
 exports.getAllReels = async (req, res) => {
     try {
         const userId = req.user ? (req.user.id || req.user._id) : null;
 
         const reels = await Reel.find({ isBlocked: false })
-            .populate('sellerId', 'shopName')
-            .populate('productId')
+            .populate('sellerId', 'shopName name')
+            .populate('productId', 'name price images')
+            .populate('likedBy', 'name phone') // 🌟 Name and Phone strictly added
+            .populate('viewers', 'name phone') // 🌟 Name and Phone strictly added
             .sort({ createdAt: -1 })
             .lean(); 
 
         const data = reels.map((reel) => {
             const formatted = formatReelMedia(reel);
             const likedByArray = Array.isArray(reel.likedBy) ? reel.likedBy : [];
+            const viewersArray = Array.isArray(reel.viewers) ? reel.viewers : [];
             
             return {
                 ...formatted,
                 likes: likedByArray.length, 
-                isLiked: userId && likedByArray.some((u) => u.toString() === userId.toString()),
-                views: reel.views || 0,
+                viewers: viewersArray, // Full objects now available
+                likedBy: likedByArray, // Full objects now available
+                isLiked: userId && likedByArray.some((u) => u._id?.toString() === userId.toString()),
+                views: reel.views || viewersArray.length,
             };
         });
 
@@ -126,9 +131,19 @@ exports.toggleLike = async (req, res) => {
 
 exports.addReelView = async (req, res) => {
     try {
-        const reel = await Reel.findByIdAndUpdate(req.params.id, { $inc: { views: 1 } }, { new: true });
+        const userId = req.user?.id;
+        const updateQuery = { $inc: { views: 1 } };
+
+        if (userId) {
+            
+            updateQuery.$addToSet = { viewers: userId };
+        }
+
+        const reel = await Reel.findByIdAndUpdate(req.params.id, updateQuery, { new: true });
         res.json({ success: true, views: reel?.views || 0 });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+    } catch (err) { 
+        res.status(500).json({ success: false, error: err.message }); 
+    }
 };
 
 exports.reportReel = async (req, res) => {
