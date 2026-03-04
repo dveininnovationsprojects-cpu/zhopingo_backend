@@ -323,7 +323,11 @@ const DELHI_URL_TRACK = "https://track.delhivery.com/api/v1/packages/json/";
 const DELHI_RATE_URL = "https://staging-express.delhivery.com/api/kinko/v1/invoice/charges/.json";
 
 const WAREHOUSE_PINCODE = "600001"; 
-const ADMIN_MARGIN = 40; 
+// const ADMIN_MARGIN = 40; 
+
+const GST_ON_COMMISSION = 18; 
+const TDS_PERCENT = 2;
+const ADMIN_MARGIN = 40;
 
 /* =====================================================
     🚚 HELPER: LIVE SHIPPING RATE (No Handling Charges)
