@@ -395,127 +395,126 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
     } catch (err) {
         res.status(500).json({ success: false, finalCharge: 80, error: err.message }); 
     }
-};
-exports.createOrder = async (req, res) => {
+};exports.createOrder = async (req, res) => {
     try {
         const { items, customerId, shippingAddress, paymentMethod } = req.body;
+
         const user = await User.findById(customerId);
         if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-        // 🌟 1. Live Delhivery Rate-ah API vazhiya edukkurom
+        // 🌟 1. Live Delhivery Rate from API (Real Cost)
         const liveShippingRate = await getLiveShippingRate(shippingAddress.pincode);
-        const standardCharge = Math.ceil(liveShippingRate + ADMIN_MARGIN);
+        const adminForwardCharge = Math.ceil(liveShippingRate + ADMIN_MARGIN);
 
         let totalItemTotal = 0;
-        let totalCustomerShipping = 0;
+        let totalCustomerPayableShipping = 0;
         let sellerWiseSplit = {};
 
-        // 🌟 2. Process Items (Nee cammand panna attributes ethuvum koraiyaadhu)
-        const processedItems = items.map(item => {
+        // 🌟 2. Process Items and Group by Seller (Dynamic Check)
+        for (const item of items) {
+            // Strictly fetch product to check "isFreeDelivery" flag
+            const productDoc = await Product.findById(item.productId || item._id);
+            const sellerDoc = await Seller.findById(item.sellerId || item.seller);
+            
+            if (!productDoc || !sellerDoc) continue;
+
             const price = Number(item.price);
             const qty = Number(item.quantity);
             const subtotal = price * qty;
             totalItemTotal += subtotal;
 
-            // 🌟 Safety: Postman-la irundhu vara sellerId-ah strictly string-ah maathuroam
-            const sId = (item.sellerId?._id || item.sellerId || item.seller).toString();
-            
+            const sId = sellerDoc._id.toString();
+
             if (!sellerWiseSplit[sId]) {
                 sellerWiseSplit[sId] = {
                     sellerId: sId,
+                    shopName: sellerDoc.shopName,
+                    commissionPercent: sellerDoc.commissionPercentage || 10, // Admin set percent
                     items: [],
                     sellerSubtotal: 0,
+                    deliveryDeductionFromSeller: 0,
+                    customerShippingForThisSeller: 0
                 };
             }
-            sellerWiseSplit[sId].items.push({ ...item, subtotal });
-            sellerWiseSplit[sId].sellerSubtotal += subtotal;
 
-            return {
-                productId: new mongoose.Types.ObjectId(item.productId || item._id),
+            // 🚚 Logic: Product level-la Free Delivery check
+            // Oru seller-oda oru product Free-nu irundhaalum andha package-ku delivery charge seller-e tharuvaaru
+            if (productDoc.isFreeDelivery) {
+                sellerWiseSplit[sId].deliveryDeductionFromSeller = adminForwardCharge;
+                sellerWiseSplit[sId].customerShippingForThisSeller = 0;
+            } else {
+                // Product free illena, customer pays
+                sellerWiseSplit[sId].customerShippingForThisSeller = adminForwardCharge;
+                sellerWiseSplit[sId].deliveryDeductionFromSeller = 0;
+            }
+
+            sellerWiseSplit[sId].items.push({
+                productId: productDoc._id,
                 name: item.name,
                 quantity: qty,
                 price: price,
-                mrp: Number(item.mrp || price),
-                sellerId: new mongoose.Types.ObjectId(sId),
-                hsnCode: item.hsnCode || "0000",
-                image: item.image || ""
-            };
-        });
+                mrp: item.mrp || price,
+                image: item.image || "",
+                hsnCode: item.hsnCode || productDoc.hsnCode || "0000"
+            });
+            sellerWiseSplit[sId].sellerSubtotal += subtotal;
+        }
 
-        // 🌟 3. Finance Calculation for Settlements (Commission, GST, TDS, Delivery Split)
-        const finalSellerSplitData = [];
-        for (const sId in sellerWiseSplit) {
-            const split = sellerWiseSplit[sId];
-            
-            // 🛑 Error Fix: Inga Seller model defined-ah irukkanum strictly
-            const sellerDoc = await mongoose.model('Seller').findById(sId);
-            
+        // 🌟 3. Final Multi-Seller Finance Split (Dynamic)
+        const finalSellerSplitData = Object.values(sellerWiseSplit).map(split => {
             const subtotal = split.sellerSubtotal;
-            const commission = (subtotal * COMMISSION_PERCENT) / 100;
+            const commission = (subtotal * split.commissionPercent) / 100;
             const gstOnComm = (commission * GST_ON_COMMISSION) / 100;
             const tds = (subtotal * TDS_PERCENT) / 100;
 
-            let sellerDeduction = 0;
-            if (subtotal >= 300) {
-                // Free Delivery for Customer -> Seller pays forward cost
-                sellerDeduction = standardCharge; 
-            } else {
-                // Customer pays logic
-                totalCustomerShipping += standardCharge;
-                sellerDeduction = 0;
-            }
+            // Update global customer shipping total
+            totalCustomerPayableShipping += split.customerShippingForThisSeller;
 
-            finalSellerSplitData.push({
-                sellerId: new mongoose.Types.ObjectId(sId),
-                shopName: sellerDoc?.shopName || "Unknown Store",
-                sellerSubtotal: subtotal,
+            return {
+                ...split,
                 commissionTotal: commission,
                 gstTotal: gstOnComm,
                 tdsTotal: tds,
-                deliveryDeduction: sellerDeduction,
-                finalPayable: subtotal - (commission + gstOnComm + tds + sellerDeduction),
+                deliveryDeduction: split.deliveryDeductionFromSeller,
+                finalPayable: subtotal - (commission + gstOnComm + tds + split.deliveryDeductionFromSeller),
                 status: 'Pending'
-            });
-        }
+            };
+        });
 
-        const totalAmount = totalItemTotal + totalCustomerShipping + 2; // +2 Handling
+        const totalAmount = totalItemTotal + totalCustomerPayableShipping + 2; // +2 Handling
 
-        // 🌟 4. Wallet Debit Logic (Secure)
+        // 🌟 4. Wallet Debit (Insuring balance deduction)
         if (paymentMethod === "WALLET") {
             if (user.walletBalance < totalAmount) {
-                return res.status(400).json({ success: false, message: "Insufficient Wallet Balance" });
+                return res.status(400).json({ success: false, message: "Insufficient Balance" });
             }
             user.walletBalance -= totalAmount;
             user.walletTransactions.unshift({
-                amount: totalAmount,
-                type: 'DEBIT',
-                reason: `Order Payment`,
-                date: new Date()
+                amount: totalAmount, type: 'DEBIT', reason: `Order Placement`, date: new Date()
             });
             await user.save();
         }
 
         const newOrder = new Order({
-            customerId: new mongoose.Types.ObjectId(customerId),
-            items: processedItems,
+            customerId: user._id,
+            items: items.map(i => ({ ...i, sellerId: new mongoose.Types.ObjectId(i.sellerId) })),
             sellerSplitData: finalSellerSplitData,
             billDetails: { 
                 itemTotal: totalItemTotal, 
-                deliveryCharge: totalCustomerShipping, 
+                deliveryCharge: totalCustomerPayableShipping, 
                 handlingCharge: 2, 
-                totalAmount: totalAmount,
-                mrpTotal: items.reduce((acc, i) => acc + (Number(i.mrp || i.price) * i.quantity), 0)
+                totalAmount: totalAmount 
             },
             totalAmount,
             paymentMethod,
             shippingAddress,
             status: 'Placed',
-            paymentStatus: (paymentMethod === 'WALLET' || paymentMethod === 'ONLINE') ? 'Paid' : 'Pending'
+            paymentStatus: (paymentMethod === 'WALLET') ? 'Paid' : 'Pending'
         });
 
         await newOrder.save();
 
-        // 🌟 5. Auto-Shipment Trigger (Paid orders only)
+        // 🌟 5. Auto-Ship if Paid
         if (newOrder.paymentStatus === 'Paid') {
             const pickupPoint = finalSellerSplitData[0]?.shopName.toLowerCase() || "benjamin";
             const delhiRes = await createDelhiveryShipment(newOrder, user.phone, pickupPoint);
@@ -526,7 +525,7 @@ exports.createOrder = async (req, res) => {
         res.status(201).json({ success: true, order: newOrder });
 
     } catch (err) {
-        console.error("Order Creation Error:", err);
+        console.error("DYNAMIC ORDER ERROR:", err);
         res.status(500).json({ success: false, error: err.message });
     }
 };
