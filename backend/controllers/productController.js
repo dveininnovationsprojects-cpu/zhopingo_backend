@@ -140,14 +140,13 @@ exports.getAllProducts = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
-
 exports.updateProduct = async (req, res) => {
     try {
         let updateData = { ...req.body };
 
-        // 🌟 1. Master Product Mapping (HSN/GST Sync on Update)
+        // 🌟 1. Master Product Mapping (HSN/GST Sync strictly)
         if (updateData.masterProductId) {
-            const masterData = await MasterProduct.findById(updateData.masterProductId).populate('hsnMasterId');
+            const masterData = await mongoose.model('MasterProduct').findById(updateData.masterProductId).populate('hsnMasterId');
             if (masterData) {
                 updateData.name = masterData.name;
                 updateData.hsnCode = masterData.hsnMasterId?.hsnCode || "0000";
@@ -155,44 +154,50 @@ exports.updateProduct = async (req, res) => {
             }
         }
 
-        // 🌟 2. Helper for Parsing (FormData logic)
-        const parseField = (field) => {
-            if (!field) return undefined;
+        // 🌟 2. THE CRITICAL FIX: Parsing & Handling Types
+        const parseSafely = (field) => {
+            if (!field || field === "" || field === "null") return undefined;
             try {
                 return typeof field === 'string' ? JSON.parse(field) : field;
             } catch (e) {
-                return field; // Return as is if not a valid JSON string
+                return field; 
             }
         };
 
-        // 🌟 3. Handling Complex Nested Objects strictly
-        if (updateData.variants) updateData.variants = parseField(updateData.variants);
-        if (updateData.highlights) updateData.highlights = parseField(updateData.highlights);
-        if (updateData.manufacturerDetails) updateData.manufacturerDetails = parseField(updateData.manufacturerDetails);
-        if (updateData.nutritionInfo) updateData.nutritionInfo = parseField(updateData.nutritionInfo);
-        if (updateData.keyFeatures) updateData.keyFeatures = parseField(updateData.keyFeatures);
+        // Strictly parse complex objects
+        if (updateData.variants) updateData.variants = parseSafely(updateData.variants);
+        if (updateData.highlights) updateData.highlights = parseSafely(updateData.highlights);
+        if (updateData.manufacturerDetails) updateData.manufacturerDetails = parseSafely(updateData.manufacturerDetails);
+        if (updateData.nutritionInfo) updateData.nutritionInfo = parseSafely(updateData.nutritionInfo);
+        if (updateData.keyFeatures) updateData.keyFeatures = parseSafely(updateData.keyFeatures);
+
+        // 🌟 3. BOOLEAN SYNC: Strings coming from FormData (Important!)
+        // FormData-la irundhu "true"/"false" strings-ah varum, adhai strictly Boolean-ah mathuroam
+        const booleanFields = ['isFreeDelivery', 'isVeg', 'isReturnable', 'isCancellable', 'isArchived'];
+        booleanFields.forEach(field => {
+            if (updateData[field] !== undefined) {
+                updateData[field] = String(updateData[field]) === 'true';
+            }
+        });
 
         // 🌟 4. Media Update logic
         if (req.files) {
-            if (req.files['images']) {
-                updateData.images = req.files['images'].map(f => f.key);
-            }
-            if (req.files['video']) {
-                updateData.video = req.files['video'][0].key;
-            }
+            if (req.files['images']) updateData.images = req.files['images'].map(f => f.key);
+            if (req.files['video']) updateData.video = req.files['video'][0].key;
         }
 
-        // 🌟 5. Discount Percentage Calculation
+        // 🌟 5. Discount Recalculation
         if (updateData.mrp && updateData.price) {
             updateData.discountPercentage = updateData.mrp > updateData.price 
                 ? Math.round(((updateData.mrp - updateData.price) / updateData.mrp) * 100) 
                 : 0;
         }
 
-        // 🌟 6. Final Database Update
+        // 🌟 6. Final Database Update with $set
+        // $set strictly use pannuradhunaala un old data overwrite aagaadhu
         const updated = await Product.findByIdAndUpdate(
             req.params.id, 
-            { $set: updateData }, // Using $set strictly to avoid overwriting un-sent fields
+            { $set: updateData }, 
             { new: true, runValidators: true }
         );
 
