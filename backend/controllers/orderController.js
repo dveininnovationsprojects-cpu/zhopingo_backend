@@ -609,19 +609,51 @@ exports.getOrders = async (req, res) => {
 }
 exports.getSellerOrders = async (req, res) => {
     try {
-        const orders = await Order.find({ "items.sellerId": req.params.sellerId }).populate('items.productId').sort({ createdAt: -1 });
-        res.json({ success: true, data: orders });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+        const orders = await Order.find({ "items.sellerId": req.params.sellerId })
+            .populate('items.productId')
+            .populate({
+                path: 'items.sellerId',
+                select: 'shopName name address city'
+            })
+            .sort({ createdAt: -1 });
+
+        // 🌟 SAFETY: SellerId null-ah irundha plain fallback object anupuroam
+        const sanitizedOrders = orders.map(order => {
+            const orderObj = order.toObject();
+            return {
+                ...orderObj,
+                items: orderObj.items.map(item => ({
+                    ...item,
+                    sellerId: item.sellerId || { shopName: "Zhopingo Seller", name: "Merchant" }
+                }))
+            };
+        });
+
+        res.json({ success: true, data: sanitizedOrders });
+    } catch (err) { 
+        res.status(500).json({ success: false, error: err.message }); 
+    }
 };
 
 exports.updateOrderStatus = async (req, res) => {
     try {
         const { status } = req.body;
-        const order = await Order.findByIdAndUpdate(req.params.orderId, { status }, { new: true });
+        // Update pannittu udanae populate panroam
+        const order = await Order.findByIdAndUpdate(req.params.orderId, { status }, { new: true })
+            .populate({
+                path: 'items.sellerId',
+                select: 'shopName name'
+            });
+
+        if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+
         if (status === 'Delivered') order.paymentStatus = 'Paid';
+        
         await order.save();
         res.json({ success: true, data: order });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+    } catch (err) { 
+        res.status(500).json({ success: false, error: err.message }); 
+    }
 };
 
 exports.bypassPaymentAndShip = async (req, res) => {
