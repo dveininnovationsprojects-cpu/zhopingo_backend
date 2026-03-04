@@ -400,9 +400,7 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
         res.status(500).json({ success: false, finalCharge: 80, error: err.message }); 
     }
 };
-//* =====================================================
-    🌟 MASTER CREATE ORDER (Dynamic & Production Ready)
-===================================================== */
+
 exports.createOrder = async (req, res) => {
     try {
         const { items, customerId, shippingAddress, paymentMethod } = req.body;
