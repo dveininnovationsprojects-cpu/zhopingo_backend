@@ -132,31 +132,29 @@ exports.getAllProducts = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
-
 exports.updateProduct = async (req, res) => {
     try {
+        // 🌟 1. Raw body-ah direct-ah updateData-va edukkurom
         let updateData = { ...req.body };
 
-        // 🌟 Master Logic: Only fallback if manual fields aren't provided
+        // 🌟 2. MASTER LOGIC FIX: 
+        // Force mapping-ah thookittaen. Master catalog values override aagaadhu.
         if (updateData.masterProductId) {
             const masterData = await mongoose.model('MasterProduct').findById(updateData.masterProductId).populate('hsnMasterId');
             if (masterData) {
-                // 🔥 THE FIX: Override only if req.body fields are empty
-                if (!updateData.name) updateData.name = masterData.name;
-                if (!updateData.hsnCode) updateData.hsnCode = masterData.hsnMasterId?.hsnCode || "0000";
-                if (!updateData.gstPercentage) updateData.gstPercentage = masterData.hsnMasterId?.gstRate || 0;
+                // Manual-ah name anuppala na mattum dhaan master catalog-la irundhu edukkum
+                updateData.name = req.body.name || masterData.name;
+                updateData.hsnCode = req.body.hsnCode || masterData.hsnMasterId?.hsnCode || "0000";
+                updateData.gstPercentage = req.body.gstPercentage || masterData.hsnMasterId?.gstRate || 0;
             }
         }
 
+        // 🌟 3. PARSING & BOOLEAN FIX (FormData Strings to actual Types)
         const parseSafely = (field) => {
             if (!field || field === "" || field === "null") return undefined;
             try { return typeof field === 'string' ? JSON.parse(field) : field; } 
             catch (e) { return field; }
         };
-
-        if (updateData.variants) updateData.variants = parseSafely(updateData.variants);
-        if (updateData.highlights) updateData.highlights = parseSafely(updateData.highlights);
-        if (updateData.manufacturerDetails) updateData.manufacturerDetails = parseSafely(updateData.manufacturerDetails);
 
         const booleanFields = ['isFreeDelivery', 'isVeg', 'isReturnable', 'isCancellable'];
         booleanFields.forEach(field => {
@@ -165,6 +163,11 @@ exports.updateProduct = async (req, res) => {
             }
         });
 
+        if (updateData.variants) updateData.variants = parseSafely(updateData.variants);
+        if (updateData.highlights) updateData.highlights = parseSafely(updateData.highlights);
+        if (updateData.manufacturerDetails) updateData.manufacturerDetails = parseSafely(updateData.manufacturerDetails);
+
+        // 🌟 4. Media & Discount Logic
         if (req.files) {
             if (req.files['images']) updateData.images = req.files['images'].map(f => f.key);
             if (req.files['video']) updateData.video = req.files['video'][0].key;
@@ -176,6 +179,7 @@ exports.updateProduct = async (req, res) => {
                 : 0;
         }
 
+        // 🌟 5. FINAL DB UPDATE (Using direct update to avoid model method issues)
         const updated = await Product.findByIdAndUpdate(
             req.params.id, 
             { $set: updateData }, 
@@ -184,12 +188,17 @@ exports.updateProduct = async (req, res) => {
 
         if (!updated) return res.status(404).json({ success: false, message: "Product not found" });
 
-        res.json({ success: true, message: "Product updated with manual overrides!", data: updated });
+        res.json({ 
+            success: true, 
+            message: "Product name and features updated successfully!", 
+            data: updated 
+        });
+
     } catch (err) { 
+        console.error("UPDATE ERROR:", err);
         res.status(400).json({ success: false, error: err.message }); 
     }
 };
-
 exports.deleteProduct = async (req, res) => {
     try {
         const product = await Product.findById(req.params.id);
