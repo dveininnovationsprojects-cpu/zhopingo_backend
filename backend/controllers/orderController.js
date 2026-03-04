@@ -311,6 +311,7 @@
 const Order = require('../models/Order');
 const User = require('../models/User');
 const DeliveryCharge = require('../models/DeliveryCharge');
+const Product = require('../models/Product')
 const axios = require('axios');
 const mongoose = require('mongoose');
 
@@ -395,7 +396,9 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
     } catch (err) {
         res.status(500).json({ success: false, finalCharge: 80, error: err.message }); 
     }
-};exports.createOrder = async (req, res) => {
+};
+
+exports.createOrder = async (req, res) => {
     try {
         const { items, customerId, shippingAddress, paymentMethod } = req.body;
 
