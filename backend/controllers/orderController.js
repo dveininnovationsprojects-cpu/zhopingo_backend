@@ -406,15 +406,15 @@ exports.createOrder = async (req, res) => {
         const user = await User.findById(customerId);
         if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-        // 🌟 1. Live Delhivery Rate-ah fetch panroam (Standard for all sellers in this order)
+        // 🌟 1. Live Rate from API (Real Cost per Seller Package)
         const liveCost = await getLiveShippingRate(shippingAddress.pincode, 500, paymentMethod);
-        const adminForwardCharge = Math.max(80, Math.ceil(liveCost + ADMIN_MARGIN));
+        const standardCharge = Math.max(80, Math.ceil(liveCost + ADMIN_MARGIN));
 
         let totalItemTotal = 0;
-        let totalCustomerPayableShipping = 0;
+        let totalCustomerPayableShipping = 0; // 🌟 Total of all sellers' shipping
         let sellerWiseSplit = {};
 
-        // 🌟 2. Group items by Seller (Multi-Seller Fix)
+        // 🌟 2. Process Items & Multi-Seller Grouping
         const processedItems = [];
         for (const item of items) {
             const productDoc = await Product.findById(item.productId || item._id);
@@ -435,18 +435,18 @@ exports.createOrder = async (req, res) => {
                     commissionPercent: sellerDoc?.commissionPercentage || 10,
                     sellerSubtotal: 0,
                     deliveryDeductionFromSeller: 0,
-                    customerShippingForThisSeller: 0
+                    customerShippingForThisSeller: 0 // 🌟 Strictly tracking per seller
                 };
             }
 
-            // 🚚 Logic: Seller "Free Delivery" check at Product Level
-            // Oru seller items 300 mela irundha (or per product free flag), customer pay panna maataru.
+            // 🚚 Delivery Logic: Per Seller Package
+            // Oru seller-oda item Free illena, andha seller package-ku 80rs kootu aagum
             if (productDoc.isFreeDelivery) {
-                sellerWiseSplit[sId].deliveryDeductionFromSeller = adminForwardCharge;
+                sellerWiseSplit[sId].deliveryDeductionFromSeller = standardCharge;
                 sellerWiseSplit[sId].customerShippingForThisSeller = 0;
             } else {
-                // Product free illena, customer pays for this seller's shipment
-                sellerWiseSplit[sId].customerShippingForThisSeller = adminForwardCharge;
+                // Seller package-ku delivery charge add aagum (Only once per seller)
+                sellerWiseSplit[sId].customerShippingForThisSeller = standardCharge;
                 sellerWiseSplit[sId].deliveryDeductionFromSeller = 0;
             }
 
@@ -463,14 +463,14 @@ exports.createOrder = async (req, res) => {
             sellerWiseSplit[sId].sellerSubtotal += subtotal;
         }
 
-        // 🌟 3. Final Multi-Seller Finance Split (Dynamic Calculation)
+        // 🌟 3. Calculate Final Multi-Seller Finance Split
         const finalSellerSplitData = Object.values(sellerWiseSplit).map(split => {
             const subtotal = split.sellerSubtotal;
             const commission = (subtotal * split.commissionPercent) / 100;
-            const gstOnComm = (commission * GST_ON_COMMISSION) / 100;
-            const tds = (subtotal * TDS_PERCENT) / 100;
+            const gstOnComm = (commission * 18) / 100;
+            const tds = (subtotal * 2) / 100;
 
-            // Important: Customer pay panna vendiya delivery total kooturoam
+            // Global customer payable-la ovvoru seller shipping-aiyum kooturoam
             totalCustomerPayableShipping += split.customerShippingForThisSeller;
 
             return {
@@ -486,18 +486,15 @@ exports.createOrder = async (req, res) => {
             };
         });
 
-        // 🌟 4. TOTAL AMOUNT FIX: Strictly Item Price + All Customer Shipping Charges
+        // 🌟 4. TOTAL AMOUNT FIX: Strictly Item Total + Dynamic Shipping (matches Cart)
         const finalTotalAmount = totalItemTotal + totalCustomerPayableShipping;
 
-        // 💳 Wallet Debit Logic
         if (paymentMethod === "WALLET") {
             if (user.walletBalance < finalTotalAmount) {
-                return res.status(400).json({ success: false, message: "Insufficient Balance" });
+                return res.status(400).json({ success: false, message: "Insufficient Wallet Balance" });
             }
             user.walletBalance -= finalTotalAmount;
-            user.walletTransactions.unshift({
-                amount: finalTotalAmount, type: 'DEBIT', reason: `Order Placement`, date: new Date()
-            });
+            user.walletTransactions.unshift({ amount: finalTotalAmount, type: 'DEBIT', reason: `Order Placement`, date: new Date() });
             await user.save();
         }
 
@@ -508,7 +505,7 @@ exports.createOrder = async (req, res) => {
             billDetails: { 
                 itemTotal: totalItemTotal, 
                 deliveryCharge: totalCustomerPayableShipping, 
-                handlingCharge: 0, // Handling 0 as per your previous total logic
+                handlingCharge: 0, // Removed as per request
                 totalAmount: finalTotalAmount 
             },
             totalAmount: finalTotalAmount,
@@ -520,7 +517,7 @@ exports.createOrder = async (req, res) => {
 
         await newOrder.save();
 
-        // 🌟 5. Auto-Shipment Trigger
+        // 🌟 5. Shipment Trigger
         if (newOrder.paymentStatus === 'Paid') {
             const pickupPoint = finalSellerSplitData[0]?.shopName.toLowerCase() || "benjamin";
             const delhiRes = await createDelhiveryShipment(newOrder, user.phone, pickupPoint);
@@ -531,7 +528,7 @@ exports.createOrder = async (req, res) => {
         res.status(201).json({ success: true, order: newOrder });
 
     } catch (err) {
-        console.error("MASTER ORDER ERROR:", err);
+        console.error("DYNAMIC ORDER ERROR:", err);
         res.status(500).json({ success: false, error: err.message });
     }
 };
