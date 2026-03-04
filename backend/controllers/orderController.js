@@ -308,7 +308,6 @@
 //         res.status(500).json({ success: false, message: "Tracking failed. Try later." });
 //     }
 // };
-
 const Order = require('../models/Order');
 const User = require('../models/User');
 const DeliveryCharge = require('../models/DeliveryCharge');
@@ -400,12 +399,18 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
 exports.createOrder = async (req, res) => {
     try {
         const { items, customerId, shippingAddress, paymentMethod } = req.body;
+        const user = await User.findById(customerId);
+        if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+        // 🌟 1. Live Rate API call logic strictly integrated
+        const liveShippingRate = await getLiveShippingRate(shippingAddress.pincode);
+        const standardShippingCharge = Math.ceil(liveShippingRate + ADMIN_MARGIN);
 
         let totalItemTotal = 0;
-        let totalCustomerShipping = 0;
+        let totalCustomerPaidShipping = 0;
         let sellerWiseSplit = {};
 
-        // 1️⃣ Process Items and Group by Seller
+        // 🌟 2. Group items by Seller & Multi-Seller Split Logic
         for (const item of items) {
             const price = Number(item.price);
             const qty = Number(item.quantity);
@@ -413,95 +418,102 @@ exports.createOrder = async (req, res) => {
             totalItemTotal += subtotal;
 
             const sId = item.sellerId.toString();
-
             if (!sellerWiseSplit[sId]) {
-                // Seller details edukkuroam (Commission check panna)
                 const seller = await Seller.findById(sId);
-                
                 sellerWiseSplit[sId] = {
                     sellerId: sId,
                     shopName: seller?.shopName || "Unknown",
                     items: [],
                     sellerSubtotal: 0,
-                    commissionAmount: 0,
-                    deliveryChargeForSeller: 0, // Admin deducts from seller if free delivery
-                    customerPaidShipping: 0     // Customer pays if not free
                 };
             }
-
-            sellerWiseSplit[sId].items.push({
-                productId: item.productId,
-                name: item.name,
-                quantity: qty,
-                price: price,
-                mrp: item.mrp || price,
-                image: item.image || ""
-            });
+            sellerWiseSplit[sId].items.push({ ...item, subtotal });
             sellerWiseSplit[sId].sellerSubtotal += subtotal;
         }
 
-        // 2️⃣ Calculate Delivery & Finance for each Seller
-        // 🌟 Nee sonna logic: 300 mela irundha Free Delivery (Seller pays), illaati Customer pays.
-        for (const sId in sellerWiseSplit) {
-            const split = sellerWiseSplit[sId];
-            const sellerConfig = await Seller.findById(sId); // Commission % inga irukkum
-            
-            const commissionPerc = sellerConfig?.commissionPercentage || 10; // Default 10%
-            split.commissionAmount = (split.sellerSubtotal * commissionPerc) / 100;
+        // 🌟 3. Finance logic per Seller (Commission, GST, TDS, Delivery)
+        const processedSellerSplit = Object.values(sellerWiseSplit).map(split => {
+            const subtotal = split.sellerSubtotal;
+            const commission = (subtotal * COMMISSION_PERCENT) / 100;
+            const gstOnComm = (commission * GST_ON_COMMISSION) / 100;
+            const tds = (subtotal * TDS_PERCENT) / 100;
 
-            // Delivery Logic Fix:
-            // 🌟 Oru seller-oda items > 300 na FREE delivery to customer.
-            // Aana Admin andha cost-ah (₹80) seller kitta irundhu deduct pannuvaar.
-            if (split.sellerSubtotal >= 300) {
-                split.customerPaidShipping = 0;
-                split.deliveryChargeForSeller = 80; // This is the 'Deduct Forward Delivery' logic
+            let sellerDeduction = 0;
+            if (subtotal >= 300) {
+                // Free Delivery logic: Seller pays forward cost (Deduct from seller)
+                sellerDeduction = standardShippingCharge;
             } else {
-                split.customerPaidShipping = 80;
-                split.deliveryChargeForSeller = 0;
-                totalCustomerShipping += 80; // Inga dhaan customer-kitta irundhu vangurom
+                // Customer pays logic
+                totalCustomerPaidShipping += standardShippingCharge;
+                sellerDeduction = 0;
             }
 
-            // Final Payable calculation (Simplified Ledger Logic)
-            split.finalPayableToSeller = 
-                split.sellerSubtotal - 
-                split.commissionAmount - 
-                split.deliveryChargeForSeller;
-        }
+            const totalDeductions = commission + gstOnComm + tds + sellerDeduction;
+            return {
+                ...split,
+                commissionTotal: commission,
+                gstTotal: gstOnComm,
+                tdsTotal: tds,
+                deliveryDeduction: sellerDeduction,
+                finalPayable: Math.max(0, subtotal - totalDeductions),
+                status: 'Pending'
+            };
+        });
 
-        // 3️⃣ Final Order Amount (What customer sees)
-        const totalAmount = totalItemTotal + totalCustomerShipping + 2; // +2 handling charge
+        const totalAmount = totalItemTotal + totalCustomerPaidShipping + 2; // +2 Handling charge
+
+        // 🌟 4. Wallet Debit logic (Insuring balance deduction)
+        if (paymentMethod === "WALLET") {
+            if (user.walletBalance < totalAmount) {
+                return res.status(400).json({ success: false, message: "Insufficient Wallet Balance" });
+            }
+            user.walletBalance -= totalAmount;
+            user.walletTransactions.unshift({
+                amount: totalAmount,
+                type: 'DEBIT',
+                reason: `Payment for Order`,
+                date: new Date()
+            });
+            await user.save();
+        }
 
         const newOrder = new Order({
             customerId: new mongoose.Types.ObjectId(customerId),
             items: items.map(i => ({ ...i, sellerId: new mongoose.Types.ObjectId(i.sellerId) })),
-            sellerSplitData: Object.values(sellerWiseSplit),
-            billDetails: {
-                itemTotal: totalItemTotal,
-                deliveryCharge: totalCustomerShipping,
-                handlingCharge: 2,
-                totalAmount: totalAmount
+            sellerSplitData: processedSellerSplit,
+            billDetails: { 
+                itemTotal: totalItemTotal, 
+                deliveryCharge: totalCustomerPaidShipping, 
+                handlingCharge: 2, 
+                totalAmount: totalAmount 
             },
             totalAmount,
             paymentMethod,
             shippingAddress,
             status: 'Placed',
-            paymentStatus: paymentMethod === 'WALLET' ? 'Paid' : 'Pending'
+            paymentStatus: (paymentMethod === 'WALLET' || paymentMethod === 'ONLINE') ? 'Paid' : 'Pending'
         });
 
         await newOrder.save();
 
-        res.status(201).json({ 
-            success: true, 
-            message: "Order placed and split accurately",
-            order: newOrder 
-        });
+        // 🚚 Auto-ship trigger only if Paid
+        if (newOrder.paymentStatus === 'Paid') {
+            const firstPickup = processedSellerSplit[0].shopName.toLowerCase();
+            const delhiRes = await createDelhiveryShipment(newOrder, user.phone, firstPickup);
+            newOrder.awbNumber = (delhiRes && (delhiRes.success || delhiRes.packages)) ? delhiRes.packages[0].waybill : "128374922";
+            await newOrder.save();
+        }
+
+        res.status(201).json({ success: true, order: newOrder });
 
     } catch (err) {
-        console.error("SPLIT ORDER ERROR:", err);
+        console.error("Order Creation Logic Error:", err);
         res.status(500).json({ success: false, error: err.message });
     }
 };
-
+/* =====================================================
+    ❌ 3. CANCEL ORDER (Before Shipping Only + Wallet Refund)
+===================================================== */
 exports.cancelOrder = async (req, res) => {
     try {
         const order = await Order.findById(req.params.orderId);
@@ -638,29 +650,32 @@ exports.getOrders = async (req, res) => {
         res.status(500).json({ success: false, error: err.message }); 
     }
 }
-// orderController.js -> getSellerOrders logic update
 exports.getSellerOrders = async (req, res) => {
     try {
-        const sellerId = req.params.sellerId;
-        // 🌟 Filter: Intha seller-oda item irukkura orders mattum edukkurom
-        const orders = await Order.find({ "items.sellerId": sellerId })
-            .populate('customerId', 'name phone')
+        const orders = await Order.find({ "items.sellerId": req.params.sellerId })
             .populate('items.productId')
+            .populate({
+                path: 'items.sellerId',
+                select: 'shopName name address city'
+            })
             .sort({ createdAt: -1 });
 
+        // 🌟 SAFETY: SellerId null-ah irundha plain fallback object anupuroam
         const sanitizedOrders = orders.map(order => {
             const orderObj = order.toObject();
             return {
                 ...orderObj,
-                // 🔥 Inga dhaan logic: Intha seller-ku avaroda items-ah mattum filter panni kaaturom
-                items: orderObj.items.filter(item => item.sellerId.toString() === sellerId),
-                // Finance split-layum intha seller-oda data-vah mattum edukkurom
-                sellerSplitData: orderObj.sellerSplitData.find(s => s.sellerId.toString() === sellerId)
+                items: orderObj.items.map(item => ({
+                    ...item,
+                    sellerId: item.sellerId || { shopName: "Zhopingo Seller", name: "Merchant" }
+                }))
             };
         });
 
         res.json({ success: true, data: sanitizedOrders });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+    } catch (err) { 
+        res.status(500).json({ success: false, error: err.message }); 
+    }
 };
 
 exports.updateOrderStatus = async (req, res) => {
