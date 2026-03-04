@@ -424,7 +424,7 @@ exports.createOrder = async (req, res) => {
                 quantity: qty,
                 price: price,
                 mrp: Number(item.mrp || item.price),
-                sellerId: item.sellerId || item.productId?.seller,
+                sellerId: new mongoose.Types.ObjectId(item.sellerId),
                 hsnCode: item.hsnCode || "0000",
                 image: item.image || ""
             };
