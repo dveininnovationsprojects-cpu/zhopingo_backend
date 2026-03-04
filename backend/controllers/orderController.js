@@ -396,118 +396,75 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
         res.status(500).json({ success: false, finalCharge: 80, error: err.message }); 
     }
 };
+/* =====================================================
+    🌟 2. CREATE ORDER (Sync with your Schema)
+===================================================== */
 exports.createOrder = async (req, res) => {
     try {
         const { items, customerId, shippingAddress, paymentMethod } = req.body;
-        const user = await User.findById(customerId);
-        if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-        // 🌟 1. Live Rate API call logic strictly integrated
-        const liveShippingRate = await getLiveShippingRate(shippingAddress.pincode);
-        const standardShippingCharge = Math.ceil(liveShippingRate + ADMIN_MARGIN);
-
-        let totalItemTotal = 0;
-        let totalCustomerPaidShipping = 0;
-        let sellerWiseSplit = {};
-
-        // 🌟 2. Group items by Seller & Multi-Seller Split Logic
-        for (const item of items) {
-            const price = Number(item.price);
-            const qty = Number(item.quantity);
-            const subtotal = price * qty;
-            totalItemTotal += subtotal;
-
-            const sId = item.sellerId.toString();
-            if (!sellerWiseSplit[sId]) {
-                const seller = await Seller.findById(sId);
-                sellerWiseSplit[sId] = {
-                    sellerId: sId,
-                    shopName: seller?.shopName || "Unknown",
-                    items: [],
-                    sellerSubtotal: 0,
-                };
-            }
-            sellerWiseSplit[sId].items.push({ ...item, subtotal });
-            sellerWiseSplit[sId].sellerSubtotal += subtotal;
+        // 🌟 Postman/App logic check
+        if (!shippingAddress?.pincode) {
+            return res.status(400).json({ success: false, error: "Shipping pincode missing" });
         }
 
-        // 🌟 3. Finance logic per Seller (Commission, GST, TDS, Delivery)
-        const processedSellerSplit = Object.values(sellerWiseSplit).map(split => {
-            const subtotal = split.sellerSubtotal;
-            const commission = (subtotal * COMMISSION_PERCENT) / 100;
-            const gstOnComm = (commission * GST_ON_COMMISSION) / 100;
-            const tds = (subtotal * TDS_PERCENT) / 100;
+        const liveCost = await getLiveShippingRate(shippingAddress.pincode, 500, paymentMethod);
+        let finalDeliveryCharge = Math.ceil(liveCost + ADMIN_MARGIN);
+        if (finalDeliveryCharge < 80) finalDeliveryCharge = 80;
 
-            let sellerDeduction = 0;
-            if (subtotal >= 300) {
-                // Free Delivery logic: Seller pays forward cost (Deduct from seller)
-                sellerDeduction = standardShippingCharge;
-            } else {
-                // Customer pays logic
-                totalCustomerPaidShipping += standardShippingCharge;
-                sellerDeduction = 0;
-            }
+        let itemTotal = 0;
+        const processedItems = items.map(item => {
+            const price = Number(item.price);
+            const qty = Number(item.quantity);
+            itemTotal += (price * qty);
 
-            const totalDeductions = commission + gstOnComm + tds + sellerDeduction;
             return {
-                ...split,
-                commissionTotal: commission,
-                gstTotal: gstOnComm,
-                tdsTotal: tds,
-                deliveryDeduction: sellerDeduction,
-                finalPayable: Math.max(0, subtotal - totalDeductions),
-                status: 'Pending'
+                productId: new mongoose.Types.ObjectId(item.productId),
+                name: item.name,
+                quantity: qty,
+                price: price,
+                mrp: Number(item.mrp || item.price),
+                sellerId: new mongoose.Types.ObjectId(item.sellerId),
+                hsnCode: item.hsnCode || "0000",
+                image: item.image || ""
             };
         });
 
-        const totalAmount = totalItemTotal + totalCustomerPaidShipping + 2; // +2 Handling charge
-
-        // 🌟 4. Wallet Debit logic (Insuring balance deduction)
-        if (paymentMethod === "WALLET") {
-            if (user.walletBalance < totalAmount) {
-                return res.status(400).json({ success: false, message: "Insufficient Wallet Balance" });
-            }
-            user.walletBalance -= totalAmount;
-            user.walletTransactions.unshift({
-                amount: totalAmount,
-                type: 'DEBIT',
-                reason: `Payment for Order`,
-                date: new Date()
-            });
-            await user.save();
-        }
+        // 🌟 Total = Item + Delivery (No handling charge as per your request)
+        const totalAmount = itemTotal + finalDeliveryCharge;
 
         const newOrder = new Order({
             customerId: new mongoose.Types.ObjectId(customerId),
-            items: items.map(i => ({ ...i, sellerId: new mongoose.Types.ObjectId(i.sellerId) })),
-            sellerSplitData: processedSellerSplit,
+            items: processedItems,
             billDetails: { 
-                itemTotal: totalItemTotal, 
-                deliveryCharge: totalCustomerPaidShipping, 
-                handlingCharge: 2, 
-                totalAmount: totalAmount 
+                itemTotal, 
+                deliveryCharge: finalDeliveryCharge, 
+                actualDelhiveryCost: liveCost,
+                mrpTotal: items.reduce((acc, i) => acc + (Number(i.mrp || i.price) * i.quantity), 0)
             },
             totalAmount,
             paymentMethod,
-            shippingAddress,
-            status: 'Placed',
-            paymentStatus: (paymentMethod === 'WALLET' || paymentMethod === 'ONLINE') ? 'Paid' : 'Pending'
+            shippingAddress, // Receiver name, pincode etc will save here
+            status: 'Placed'
         });
 
         await newOrder.save();
 
-        // 🚚 Auto-ship trigger only if Paid
-        if (newOrder.paymentStatus === 'Paid') {
-            const firstPickup = processedSellerSplit[0].shopName.toLowerCase();
-            const delhiRes = await createDelhiveryShipment(newOrder, user.phone, firstPickup);
-            newOrder.awbNumber = (delhiRes && (delhiRes.success || delhiRes.packages)) ? delhiRes.packages[0].waybill : "128374922";
+        if (paymentMethod !== "COD") {
+            const user = await User.findById(customerId);
+            newOrder.paymentStatus = "Paid";
+            const delhiRes = await createDelhiveryShipment(newOrder, user?.phone || shippingAddress.phone || "9876543210");
+            if (delhiRes && (delhiRes.success || delhiRes.packages)) {
+                newOrder.awbNumber = delhiRes.packages[0].waybill;
+            } else {
+                newOrder.awbNumber = "128374922"; 
+            }
             await newOrder.save();
         }
 
         res.status(201).json({ success: true, order: newOrder });
-
     } catch (err) {
-        console.error("Order Creation Logic Error:", err);
+        console.error("ORDER ERROR:", err);
         res.status(500).json({ success: false, error: err.message });
     }
 };
