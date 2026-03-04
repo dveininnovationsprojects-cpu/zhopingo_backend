@@ -412,7 +412,6 @@
 //     }
 // };
 
-
 const Order = require('../models/Order');
 const User = require('../models/User');
 const Seller = require('../models/Seller');
@@ -428,14 +427,13 @@ const DELHI_RATE_URL = "https://staging-express.delhivery.com/api/kinko/v1/invoi
 const WAREHOUSE_PINCODE = "600001"; 
 const ADMIN_MARGIN = 40; 
 
-// 🔑 FINANCE MANAGEMENT SETTINGS (Global Defaults)
+// 🔑 FINANCE SETTINGS (Admin Defaults)
 const COMMISSION_PERCENT = 10; 
 const GST_ON_COMMISSION = 18; 
 const TDS_PERCENT = 2;
-const FORWARD_DELIVERY_FIXED = 80;
 
 /* =====================================================
-    🚚 1. LIVE SHIPPING RATE HELPER
+    🚚 HELPER: LIVE SHIPPING RATE (Delhivery API Sync)
 ===================================================== */
 const getLiveShippingRate = async (pincode, weight = 500, paymentMode = "Pre-paid") => {
     try {
@@ -451,13 +449,13 @@ const getLiveShippingRate = async (pincode, weight = 500, paymentMode = "Pre-pai
         });
         return response.data[0]?.total_amount || 40; 
     } catch (error) {
-        console.error(" Live Rate API Error:", error.message);
+        console.error("❌ Live Rate API Error:", error.message);
         return 40; 
     }
 };
 
 /* =====================================================
-    📦 2. CREATE DELHI SHIPMENT HELPER
+    📦 HELPER: CREATE DELHI SHIPMENT
 ===================================================== */
 const createDelhiveryShipment = async (order, customerPhone, pickupName = "benjamin") => {
     try {
@@ -481,19 +479,19 @@ const createDelhiveryShipment = async (order, customerPhone, pickupName = "benja
         });
         return response.data;
     } catch (error) {
-        console.error(" Delhivery Shipment Error:", error.message);
+        console.error("❌ Delhivery Shipment Error:", error.message);
         return null;
     }
 };
 
 /* =====================================================
-    🌟 3. LIVE RATE ENDPOINT FOR FRONTEND
+    🌟 1. LIVE RATE ENDPOINT (Endpoint: /calculate-shipping)
 ===================================================== */
 exports.calculateLiveDeliveryRate = async (req, res) => {
     try {
         const pincode = req.query.pincode; 
         const paymentMode = req.query.paymentMode || "Pre-paid";
-        if (!pincode) return res.status(400).json({ success: false, error: "Pincode missing" });
+        if (!pincode) return res.status(400).json({ success: false, error: "Pincode required" });
 
         const liveCost = await getLiveShippingRate(pincode, 500, paymentMode);
         let finalCharge = Math.ceil(liveCost + ADMIN_MARGIN);
@@ -506,7 +504,7 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
 };
 
 /* =====================================================
-    🌟 4. CREATE ORDER (Finance Split + Multiple Sellers)
+    🌟 2. CREATE ORDER (Endpoint: /create)
 ===================================================== */
 exports.createOrder = async (req, res) => {
     try {
@@ -514,19 +512,19 @@ exports.createOrder = async (req, res) => {
         const user = await User.findById(customerId);
         if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-        const liveShippingRate = await getLiveShippingRate(shippingAddress.pincode);
-        const standardShippingCharge = Math.ceil(liveShippingRate + ADMIN_MARGIN);
+        // Calculate Live Rate from API for the logic
+        const liveRateFromAPI = await getLiveShippingRate(shippingAddress.pincode);
+        const standardCharge = Math.ceil(liveRateFromAPI + ADMIN_MARGIN);
 
         let totalItemTotal = 0;
-        let totalCustomerPaidShipping = 0;
+        let totalCustomerShipping = 0;
         let sellerWiseSplit = {};
 
-        // A. Step 1: Group Items by Seller
+        // A. Step 1: Multi-Seller Grouping
         for (const item of items) {
             const price = Number(item.price);
             const qty = Number(item.quantity);
-            const subtotal = price * qty;
-            totalItemTotal += subtotal;
+            totalItemTotal += (price * qty);
 
             const sId = item.sellerId.toString();
             if (!sellerWiseSplit[sId]) {
@@ -538,32 +536,23 @@ exports.createOrder = async (req, res) => {
                     sellerSubtotal: 0,
                 };
             }
-            sellerWiseSplit[sId].items.push({ ...item, subtotal });
-            sellerWiseSplit[sId].sellerSubtotal += subtotal;
+            sellerWiseSplit[sId].items.push({ ...item, subtotal: price * qty });
+            sellerWiseSplit[sId].sellerSubtotal += (price * qty);
         }
 
-        // B. Step 2: Calculate Finance Split (Settlement Ready)
-        const processedSellerSplit = Object.values(sellerWiseSplit).map(split => {
+        // B. Step 2: Finance Logic per Seller
+        const processedSplit = Object.values(sellerWiseSplit).map(split => {
             const subtotal = split.sellerSubtotal;
-            
-            // Commission & Taxes Logic
             const commission = (subtotal * COMMISSION_PERCENT) / 100;
             const gstOnComm = (commission * GST_ON_COMMISSION) / 100;
             const tds = (subtotal * TDS_PERCENT) / 100;
 
-            // 🚚 Delivery Charge Split (300 Threshold)
             let sellerDeduction = 0;
             if (subtotal >= 300) {
-                // Free Delivery for Customer, Seller pays the cost
-                sellerDeduction = standardShippingCharge;
+                sellerDeduction = standardCharge; // Free Delivery logic: Seller pays forward
             } else {
-                // Customer pays for this seller's shipment
-                totalCustomerPaidShipping += standardShippingCharge;
-                sellerDeduction = 0;
+                totalCustomerShipping += standardCharge; // Customer pays logic
             }
-
-            const totalDeductions = commission + gstOnComm + tds + sellerDeduction;
-            const finalPayable = subtotal - totalDeductions;
 
             return {
                 ...split,
@@ -571,76 +560,58 @@ exports.createOrder = async (req, res) => {
                 gstTotal: gstOnComm,
                 tdsTotal: tds,
                 deliveryDeduction: sellerDeduction,
-                finalPayable: Math.max(0, finalPayable),
-                settlementStatus: 'Pending'
+                finalPayable: subtotal - (commission + gstOnComm + tds + sellerDeduction),
+                status: 'Pending'
             };
         });
 
-        const totalAmount = totalItemTotal + totalCustomerPaidShipping + 2; // +2 handling
+        const totalAmount = totalItemTotal + totalCustomerShipping + 2;
 
-        // C. Step 3: Wallet Debit Protection
+        // C. Step 3: Wallet Safety Debit
         if (paymentMethod === "WALLET") {
-            if (user.walletBalance < totalAmount) {
-                return res.status(400).json({ success: false, message: "Insufficient Wallet Balance" });
-            }
+            if (user.walletBalance < totalAmount) return res.status(400).json({ success: false, message: "Insufficient Balance" });
             user.walletBalance -= totalAmount;
-            user.walletTransactions.unshift({
-                amount: totalAmount,
-                type: 'DEBIT',
-                reason: `Payment for Order`,
-                date: new Date()
-            });
+            user.walletTransactions.unshift({ amount: totalAmount, type: 'DEBIT', reason: `Order Placement`, date: new Date() });
             await user.save();
         }
 
         const newOrder = new Order({
             customerId: new mongoose.Types.ObjectId(customerId),
             items: items.map(i => ({ ...i, sellerId: new mongoose.Types.ObjectId(i.sellerId) })),
-            sellerSplitData: processedSellerSplit,
+            sellerSplitData: processedSplit,
             billDetails: { 
                 itemTotal: totalItemTotal, 
-                deliveryCharge: totalCustomerPaidShipping, 
+                deliveryCharge: totalCustomerShipping, 
                 handlingCharge: 2, 
                 totalAmount: totalAmount 
             },
-            totalAmount,
-            paymentMethod,
-            shippingAddress,
-            status: 'Placed',
-            paymentStatus: (paymentMethod === 'WALLET' || paymentMethod === 'ONLINE') ? 'Paid' : 'Pending'
+            totalAmount, paymentMethod, shippingAddress, status: 'Placed',
+            paymentStatus: (paymentMethod === 'WALLET') ? 'Paid' : 'Pending'
         });
 
         await newOrder.save();
 
-        // D. Step 4: Delhivery Auto-Ship if Paid
+        // D. Step 4: Shipment Sync
         if (newOrder.paymentStatus === 'Paid') {
-            const firstPickup = processedSellerSplit[0].shopName.toLowerCase();
-            const delhiRes = await createDelhiveryShipment(newOrder, user.phone, firstPickup);
+            const pickup = processedSplit[0].shopName.toLowerCase();
+            const delhiRes = await createDelhiveryShipment(newOrder, user.phone, pickup);
             newOrder.awbNumber = (delhiRes && (delhiRes.success || delhiRes.packages)) ? delhiRes.packages[0].waybill : "128374922";
             await newOrder.save();
         }
 
         res.status(201).json({ success: true, order: newOrder });
-
-    } catch (err) {
-        console.error("MASTER ORDER ERROR:", err);
-        res.status(500).json({ success: false, error: err.message });
-    }
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
 /* =====================================================
-    📈 5. FETCHING FUNCTIONS (Admin/User/Seller)
+    📉 3. FETCHING & TRACKING (Endpoints: /all, /my, /seller, /track)
 ===================================================== */
 exports.getMyOrders = async (req, res) => {
     try {
-        const orders = await Order.find({ customerId: req.params.userId })
-            .populate('items.productId')
-            .populate({ path: 'items.sellerId', select: 'shopName name address city' })
-            .sort({ createdAt: -1 });
-
+        const orders = await Order.find({ customerId: req.params.userId }).populate('items.productId').populate({ path: 'items.sellerId', select: 'shopName name' }).sort({ createdAt: -1 });
         const sanitized = orders.map(o => {
             const obj = o.toObject();
-            return { ...obj, items: obj.items.map(i => ({ ...i, sellerId: i.sellerId || { shopName: "Zhopingo Store" } })) };
+            return { ...obj, items: obj.items.map(item => ({ ...item, sellerId: item.sellerId || { shopName: "Zhopingo Store" } })) };
         });
         res.json({ success: true, data: sanitized });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
@@ -648,12 +619,7 @@ exports.getMyOrders = async (req, res) => {
 
 exports.getOrders = async (req, res) => {
     try {
-        const orders = await Order.find()
-            .populate('customerId', 'name phone email')
-            .populate('items.productId')
-            .populate({ path: 'items.sellerId', select: 'name shopName city phone' })
-            .sort({ createdAt: -1 });
-
+        const orders = await Order.find().populate('customerId', 'name phone email').populate('items.productId').populate({ path: 'items.sellerId', select: 'name shopName city' }).sort({ createdAt: -1 });
         const sanitized = orders.map(o => ({
             ...o._doc,
             items: o.items.map(i => ({ ...i._doc, sellerId: i.sellerId || { shopName: "Zhopingo Store", name: "Admin" } }))
@@ -665,11 +631,7 @@ exports.getOrders = async (req, res) => {
 exports.getSellerOrders = async (req, res) => {
     try {
         const sellerId = req.params.sellerId;
-        const orders = await Order.find({ "items.sellerId": sellerId })
-            .populate('customerId', 'name phone')
-            .populate('items.productId')
-            .sort({ createdAt: -1 });
-
+        const orders = await Order.find({ "items.sellerId": sellerId }).populate('customerId', 'name phone').populate('items.productId').sort({ createdAt: -1 });
         const sanitized = orders.map(o => {
             const obj = o.toObject();
             return {
@@ -682,27 +644,6 @@ exports.getSellerOrders = async (req, res) => {
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
-/* =====================================================
-    📦 6. STATUS UPDATES & WEBHOOKS
-===================================================== */
-exports.updateOrderStatus = async (req, res) => {
-    try {
-        const { status } = req.body; // 'Shipped', 'Delivered', 'Cancelled'
-        const order = await Order.findById(req.params.orderId);
-        if (!order) return res.status(404).json({ success: false, message: "Order not found" });
-
-        // Protection: Block cancel after Shipped
-        if (order.status === 'Shipped' && status === 'Cancelled') {
-            return res.status(400).json({ success: false, message: "Shipped orders cannot be cancelled." });
-        }
-
-        order.status = status;
-        if (status === 'Delivered') order.paymentStatus = 'Paid';
-        await order.save();
-        res.json({ success: true, data: order });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
-};
-
 exports.trackDelhivery = async (req, res) => {
     try {
         const { awb } = req.params;
@@ -712,6 +653,42 @@ exports.trackDelhivery = async (req, res) => {
         const response = await axios.get(`${DELHI_URL_TRACK}?waybill=${awb}`, { headers: { 'Authorization': `Token ${DELHI_TOKEN}` } });
         res.json({ success: true, tracking: response.data });
     } catch (err) { res.status(500).json({ success: false, error: "Tracking failed" }); }
+};
+
+/* =====================================================
+    📦 4. UPDATES & CANCEL (Endpoints: /update-status, /cancel)
+===================================================== */
+exports.updateOrderStatus = async (req, res) => {
+    try {
+        const { status } = req.body;
+        const order = await Order.findById(req.params.orderId);
+        if (order.status === 'Shipped' && status === 'Cancelled') return res.status(400).json({ success: false, message: "Cannot cancel after Shipped" });
+        order.status = status;
+        if (status === 'Delivered') order.paymentStatus = 'Paid';
+        await order.save();
+        res.json({ success: true, data: order });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+};
+
+exports.cancelOrder = async (req, res) => {
+    try {
+        const order = await Order.findById(req.params.orderId);
+        if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+        if (order.status !== 'Placed' && order.status !== 'Pending') return res.status(400).json({ success: false, message: "Cannot cancel." });
+
+        if (order.paymentStatus === 'Paid') {
+            const user = await User.findById(order.customerId);
+            if (user) {
+                user.walletBalance += order.totalAmount;
+                user.walletTransactions.unshift({ amount: order.totalAmount, type: 'CREDIT', reason: `Refund: Order Cancelled`, date: new Date() });
+                await user.save();
+                order.paymentStatus = 'Refunded';
+            }
+        }
+        order.status = 'Cancelled';
+        await order.save();
+        res.json({ success: true, message: "Cancelled and Refunded" });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
 exports.handleDelhiveryWebhook = async (req, res) => {
