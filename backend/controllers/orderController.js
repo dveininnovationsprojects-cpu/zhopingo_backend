@@ -312,6 +312,7 @@ const Order = require('../models/Order');
 const User = require('../models/User');
 const DeliveryCharge = require('../models/DeliveryCharge');
 const Product = require('../models/Product')
+const Seller = require('../models/Seller');
 const axios = require('axios');
 const mongoose = require('mongoose');
 
