@@ -556,14 +556,27 @@ exports.trackDelhivery = async (req, res) => {
 exports.getMyOrders = async (req, res) => {
     try {
         const orders = await Order.find({ customerId: req.params.userId })
-            .populate('items.productId') // Product details edukkudhu
+            .populate('items.productId') // Product details
             .populate({
-                path: 'items.sellerId', // 🌟 THE FIX: strictly items kulla irukka sellerId field
-                select: 'shopName name address city' // Intha details mattum edukkuroam
+                path: 'items.sellerId', // 🌟 THE FIX: Strictly items kulla irukka sellerId
+                select: 'shopName name address city' // Intha fields mattum edukkuroam
             })
             .sort({ createdAt: -1 });
 
-        res.json({ success: true, data: orders });
+        // 🌟 SAFETY CHECK: Existing orders-la sellerId null-ah irundha safety object kootitu varrom
+        const sanitizedOrders = orders.map(order => {
+            const orderObj = order.toObject(); // Mongoose document-ah plain object-ah maathuroam
+            return {
+                ...orderObj,
+                items: orderObj.items.map(item => ({
+                    ...item,
+                    // Oru vaelai seller details null-ah irundha fallback kaattum
+                    sellerId: item.sellerId || { shopName: "Zhopingo Store", name: "Admin" }
+                }))
+            };
+        });
+
+        res.json({ success: true, data: sanitizedOrders });
     } catch (err) { 
         res.status(500).json({ success: false, error: err.message }); 
     }
@@ -572,19 +585,28 @@ exports.getMyOrders = async (req, res) => {
 exports.getOrders = async (req, res) => {
     try {
         const orders = await Order.find()
-            .populate('customerId', 'name phone email')
-            .populate('items.productId')
+            .populate('customerId', 'name phone email') // Customer details
+            .populate('items.productId') // Product details
             .populate({
-                path: 'items.sellerId', // 🌟 Same fix here
-                select: 'shopName name address city'
+                path: 'items.sellerId', // 🌟 THE CRITICAL FIX: Nested path for items
+                select: 'name shopName city phone' // Intha fields mattum edukkuroam
             })
             .sort({ createdAt: -1 });
 
-        res.json({ success: true, data: orders });
+        // 🌟 SAFETY CHECK: Existing orders-la sellerId null-ah irundha handle panna:
+        const sanitizedOrders = orders.map(order => ({
+            ...order._doc,
+            items: order.items.map(item => ({
+                ...item._doc,
+                sellerId: item.sellerId || { shopName: "Zhopingo Store", name: "Admin" }
+            }))
+        }));
+
+        res.json({ success: true, data: sanitizedOrders });
     } catch (err) { 
         res.status(500).json({ success: false, error: err.message }); 
     }
-};
+}
 exports.getSellerOrders = async (req, res) => {
     try {
         const orders = await Order.find({ "items.sellerId": req.params.sellerId }).populate('items.productId').sort({ createdAt: -1 });
