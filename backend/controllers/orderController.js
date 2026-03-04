@@ -555,14 +555,17 @@ exports.trackDelhivery = async (req, res) => {
 };
 exports.getMyOrders = async (req, res) => {
     try {
-        const orders = await Order.find({ customerId: req.params.userId }).populate('items.productId').sort({ createdAt: -1 });
+        const orders = await Order.find({ customerId: req.params.userId })
+        .populate('items.productId')
+        .sort({ createdAt: -1 })
+        .populate('seller', 'shopName name address');
         res.json({ success: true, data: orders });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
 exports.getOrders = async (req, res) => {
     try {
-        const orders = await Order.find().populate('customerId', 'name phone email').populate('items.productId').sort({ createdAt: -1 });
+        const orders = await Order.find().populate('customerId', 'name phone email').populate('items.productId').populate('seller', 'shopName name address').sort({ createdAt: -1 });
         res.json({ success: true, data: orders });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 }
