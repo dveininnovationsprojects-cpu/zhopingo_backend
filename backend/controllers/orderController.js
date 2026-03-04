@@ -400,29 +400,23 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
         res.status(500).json({ success: false, finalCharge: 80, error: err.message }); 
     }
 };
-
 exports.createOrder = async (req, res) => {
     try {
         const { items, customerId, shippingAddress, paymentMethod } = req.body;
-
-        // 1. User check strictly
         const user = await User.findById(customerId);
         if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-        // 2. Shipping Pincode check strictly
-        if (!shippingAddress?.pincode) {
-            return res.status(400).json({ success: false, error: "Shipping pincode missing" });
-        }
-
-        // 3. Live Rate API call for accurate calculation
+        // 🌟 1. Live Delhivery Rate-ah API vazhiya fetch panroam
         const liveCost = await getLiveShippingRate(shippingAddress.pincode, 500, paymentMethod);
+        
+        // Logic: 80-ku mela irundha adhu, illana strictly 80 (As per your Cart screen)
         let finalDeliveryCharge = Math.ceil(liveCost + ADMIN_MARGIN);
         if (finalDeliveryCharge < 80) finalDeliveryCharge = 80;
 
         let itemTotal = 0;
         let sellerWiseSplit = {};
 
-        // 4. Process Items (Maintaining mrp, image, hsnCode, isFreeDelivery logic)
+        // 🌟 2. Process Items (Nee cammand panna attributes ethuvum koraiyaadhu)
         const processedItems = [];
         for (const item of items) {
             const productDoc = await Product.findById(item.productId || item._id);
@@ -433,22 +427,22 @@ exports.createOrder = async (req, res) => {
             const subtotal = price * qty;
             itemTotal += subtotal;
 
-            // Grouping for Finance Split
-            const sId = (item.sellerId?._id || item.sellerId || item.seller).toString();
+            const sId = (item.sellerId?._id || item.sellerId || item.seller || "698089341dc4f60f934bb5eb").toString();
+            
             if (!sellerWiseSplit[sId]) {
                 const sellerDoc = await Seller.findById(sId);
                 sellerWiseSplit[sId] = {
                     sellerId: sId,
-                    shopName: sellerDoc?.shopName || "Unknown",
+                    shopName: sellerDoc?.shopName || "Unknown Store",
                     commissionPercent: sellerDoc?.commissionPercentage || 10,
                     sellerSubtotal: 0,
                     deliveryDeductionFromSeller: 0
                 };
             }
 
-            // 🚚 Logic: Seller "Free Delivery" check at Product Level
+            // 🚚 Logic: Seller "isFreeDelivery" check at Product Level
             if (productDoc.isFreeDelivery) {
-                // If product is free delivery, Admin deducts from Seller Payout later
+                // If product is free delivery, Admin deducts from Seller Payout
                 sellerWiseSplit[sId].deliveryDeductionFromSeller = finalDeliveryCharge;
             }
 
@@ -465,10 +459,10 @@ exports.createOrder = async (req, res) => {
             sellerWiseSplit[sId].sellerSubtotal += subtotal;
         }
 
-        // 5. Total Amount Calculation (Strictly Item + Delivery, NO handling charge as per request)
+        // 🌟 3. TOTAL AMOUNT FIX: Strictly Items + Delivery (No handling charge as per request)
         const finalTotalAmount = itemTotal + finalDeliveryCharge;
 
-        // 6. Multi-Seller Finance Split Data (Internal Ledger Ready)
+        // 🌟 4. Finance Split Data (Internal Ledger Ready)
         const finalSellerSplitData = Object.values(sellerWiseSplit).map(split => {
             const subtotal = split.sellerSubtotal;
             const commission = (subtotal * split.commissionPercent) / 100;
@@ -490,7 +484,7 @@ exports.createOrder = async (req, res) => {
             };
         });
 
-        // 7. Wallet Debit logic (Insuring balance deduction before saving order)
+        // 🌟 5. Wallet Safety Check & Debit
         if (paymentMethod === "WALLET") {
             if (user.walletBalance < finalTotalAmount) {
                 return res.status(400).json({ success: false, message: "Insufficient Wallet Balance" });
@@ -499,20 +493,19 @@ exports.createOrder = async (req, res) => {
             user.walletTransactions.unshift({
                 amount: finalTotalAmount,
                 type: 'DEBIT',
-                reason: `Payment for Order`,
+                reason: `Order Payment`,
                 date: new Date()
             });
             await user.save();
         }
 
-        // 8. Final Order Creation
         const newOrder = new Order({
             customerId: user._id,
             items: processedItems,
             sellerSplitData: finalSellerSplitData,
             billDetails: { 
-                itemTotal, 
-                deliveryCharge: finalTotalCharge, 
+                itemTotal: itemTotal, 
+                deliveryCharge: finalDeliveryCharge, 
                 actualDelhiveryCost: liveCost,
                 mrpTotal: items.reduce((acc, i) => acc + (Number(i.mrp || i.price) * i.quantity), 0)
             },
@@ -525,7 +518,7 @@ exports.createOrder = async (req, res) => {
 
         await newOrder.save();
 
-        // 9. Auto-Ship Trigger for Paid Orders
+        // 🌟 6. Shipment Trigger
         if (newOrder.paymentStatus === 'Paid') {
             const pickupPoint = finalSellerSplitData[0]?.shopName.toLowerCase() || "benjamin";
             const delhiRes = await createDelhiveryShipment(newOrder, user.phone, pickupPoint);
@@ -536,7 +529,7 @@ exports.createOrder = async (req, res) => {
         res.status(201).json({ success: true, order: newOrder });
 
     } catch (err) {
-        console.error("Master Order Error:", err);
+        console.error("Order Creation Error:", err);
         res.status(500).json({ success: false, error: err.message });
     }
 };
