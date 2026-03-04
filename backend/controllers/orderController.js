@@ -556,20 +556,35 @@ exports.trackDelhivery = async (req, res) => {
 exports.getMyOrders = async (req, res) => {
     try {
         const orders = await Order.find({ customerId: req.params.userId })
-        .populate('items.productId')
-        .sort({ createdAt: -1 })
-        .populate('seller', 'shopName name address');
+            .populate('items.productId') // Product details edukkudhu
+            .populate({
+                path: 'items.sellerId', // 🌟 THE FIX: strictly items kulla irukka sellerId field
+                select: 'shopName name address city' // Intha details mattum edukkuroam
+            })
+            .sort({ createdAt: -1 });
+
         res.json({ success: true, data: orders });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+    } catch (err) { 
+        res.status(500).json({ success: false, error: err.message }); 
+    }
 };
 
 exports.getOrders = async (req, res) => {
     try {
-        const orders = await Order.find().populate('customerId', 'name phone email').populate('items.productId').populate('seller', 'shopName name address').sort({ createdAt: -1 });
-        res.json({ success: true, data: orders });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
-}
+        const orders = await Order.find()
+            .populate('customerId', 'name phone email')
+            .populate('items.productId')
+            .populate({
+                path: 'items.sellerId', // 🌟 Same fix here
+                select: 'shopName name address city'
+            })
+            .sort({ createdAt: -1 });
 
+        res.json({ success: true, data: orders });
+    } catch (err) { 
+        res.status(500).json({ success: false, error: err.message }); 
+    }
+};
 exports.getSellerOrders = async (req, res) => {
     try {
         const orders = await Order.find({ "items.sellerId": req.params.sellerId }).populate('items.productId').sort({ createdAt: -1 });
