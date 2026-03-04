@@ -132,15 +132,33 @@ exports.toggleLike = async (req, res) => {
 exports.addReelView = async (req, res) => {
     try {
         const userId = req.user?.id;
-        const updateQuery = { $inc: { views: 1 } };
+        const reelId = req.params.id;
 
-        if (userId) {
-            
-            updateQuery.$addToSet = { viewers: userId };
+        // 🌟 If User is not logged in, just increment view (Guest view)
+        if (!userId) {
+            const reel = await Reel.findByIdAndUpdate(reelId, { $inc: { views: 1 } }, { new: true });
+            return res.json({ success: true, views: reel?.views || 0 });
         }
 
-        const reel = await Reel.findByIdAndUpdate(req.params.id, updateQuery, { new: true });
-        res.json({ success: true, views: reel?.views || 0 });
+        // 🌟 Logged in User: Unique View Logic
+        // 'viewers' array-la userId illaati mattum views-ah 1 increment pannu
+        const reel = await Reel.findOneAndUpdate(
+            { _id: reelId, viewers: { $ne: userId } }, // Check: User innum intha reel-ah paakala nu
+            { 
+                $inc: { views: 1 }, 
+                $addToSet: { viewers: userId } 
+            },
+            { new: true }
+        );
+
+        // Oru vaelai reel null-ah vandha, user munnadiye paathuttaar-nu artham. 
+        // Appo views-ah increment pannaama current count-ah mattum anuppuvom.
+        if (!reel) {
+            const existingReel = await Reel.findById(reelId);
+            return res.json({ success: true, views: existingReel?.views || 0, alreadyViewed: true });
+        }
+
+        res.json({ success: true, views: reel.views });
     } catch (err) { 
         res.status(500).json({ success: false, error: err.message }); 
     }
