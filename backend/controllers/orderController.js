@@ -417,6 +417,7 @@ exports.createOrder = async (req, res) => {
             const subtotal = price * qty;
             totalItemTotal += subtotal;
 
+            // 🌟 Safety: Postman-la irundhu vara sellerId-ah strictly string-ah maathuroam
             const sId = (item.sellerId?._id || item.sellerId || item.seller).toString();
             
             if (!sellerWiseSplit[sId]) {
@@ -445,7 +446,9 @@ exports.createOrder = async (req, res) => {
         const finalSellerSplitData = [];
         for (const sId in sellerWiseSplit) {
             const split = sellerWiseSplit[sId];
-            const sellerDoc = await Seller.findById(sId);
+            
+            // 🛑 Error Fix: Inga Seller model defined-ah irukkanum strictly
+            const sellerDoc = await mongoose.model('Seller').findById(sId);
             
             const subtotal = split.sellerSubtotal;
             const commission = (subtotal * COMMISSION_PERCENT) / 100;
@@ -454,7 +457,7 @@ exports.createOrder = async (req, res) => {
 
             let sellerDeduction = 0;
             if (subtotal >= 300) {
-                // Free Delivery for Customer -> Deduct from Seller
+                // Free Delivery for Customer -> Seller pays forward cost
                 sellerDeduction = standardCharge; 
             } else {
                 // Customer pays logic
@@ -500,7 +503,8 @@ exports.createOrder = async (req, res) => {
                 itemTotal: totalItemTotal, 
                 deliveryCharge: totalCustomerShipping, 
                 handlingCharge: 2, 
-                totalAmount: totalAmount 
+                totalAmount: totalAmount,
+                mrpTotal: items.reduce((acc, i) => acc + (Number(i.mrp || i.price) * i.quantity), 0)
             },
             totalAmount,
             paymentMethod,
