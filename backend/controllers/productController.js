@@ -37,31 +37,47 @@ exports.createProduct = async (req, res) => {
         const images = req.files && req.files['images'] ? req.files['images'].map(f => f.key) : [];
         const video = req.files && req.files['video'] ? req.files['video'][0].key : "";
 
+        // 🌟 Parsing nested objects if they come as strings from FormData
+        const highlights = typeof req.body.highlights === 'string' ? JSON.parse(req.body.highlights) : req.body.highlights;
+        const manufacturerDetails = typeof req.body.manufacturerDetails === 'string' ? JSON.parse(req.body.manufacturerDetails) : req.body.manufacturerDetails;
+
         const product = new Product({
+            // 🌟 Spreading body first to get all attributes like isFreeDelivery, isVeg, etc.
             ...req.body,
+            
+            // 🌟 Overriding specific mapped fields
             masterProductId: masterProductId,
-            name: req.body.name, 
+            name: req.body.name || masterData.name, 
             category: masterData.category,
             subCategory: masterData.subCategory,
-            hsnCode: masterData.hsnMasterId.hsnCode, // Copied from HSN Master
-            gstPercentage: masterData.hsnMasterId.gstRate, // Copied from HSN Master
+            hsnCode: masterData.hsnMasterId?.hsnCode || "0000",
+            gstPercentage: masterData.hsnMasterId?.gstRate || 0,
+            
+            // 🌟 Logic based fields
             discountPercentage: mrp > price ? Math.round(((mrp - price) / mrp) * 100) : 0,
+            highlights: highlights || { productType: "", cocoaContent: "", fabricType: "" },
+            manufacturerDetails: manufacturerDetails || { countryOfOrigin: "India" },
+            
             images,
             video,
             seller: sellerId,
             isMaster: false,
-            isApproved: true,
+            isApproved: true, // Auto-approved as it's from master catalog
             variants: req.body.variants ? (typeof req.body.variants === 'string' ? JSON.parse(req.body.variants) : req.body.variants) : [],
             averageRating: (Math.random() * (5 - 3) + 3).toFixed(1)
         });
 
         await product.save();
-        res.status(201).json({ success: true, message: "Product created successfully!", data: product });
+        res.status(201).json({ 
+            success: true, 
+            message: "Product created successfully with all advanced features!", 
+            data: product 
+        });
     } catch (err) {
+        console.error("CREATE PRODUCT ERROR:", err);
         res.status(400).json({ success: false, error: err.message });
     }
 };
-
 
 exports.requestNewProduct = async (req, res) => {
     try {
@@ -108,7 +124,7 @@ exports.getAllProducts = async (req, res) => {
         // media formatting and fallback values for UI
         const data = products.map(p => ({
             ...formatProductMedia(p),
-            stock: p.stock !== undefined ? p.stock : 100, 
+            stock: p.stock !== undefined ? p.stock : 0, 
             price: p.price || 99, 
             mrp: p.mrp || 150,
             availability: "Available",
