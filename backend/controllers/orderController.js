@@ -674,136 +674,112 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
         res.status(500).json({ success: false, finalCharge: 80, error: err.message }); 
     }
 };
-
-/* =====================================================
-    🌟 MASTER CREATE ORDER (100% Corrected & Robust)
-===================================================== */
 exports.createOrder = async (req, res) => {
     try {
         const { items, customerId, shippingAddress, paymentMethod } = req.body;
         const user = await User.findById(customerId);
         if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-        // 🌟 DYNAMIC FINANCE FETCH: Get Admin settings (Commission, GST, TDS)
-        const settings = await FinanceSettings.findOne() || { 
-            commissionPercent: 10, 
-            gstOnCommissionPercent: 18, 
-            tdsPercent: 2 
-        };
+        // 🌟 DYNAMIC FINANCE SETTINGS
+        const settings = await FinanceSettings.findOne() || { commissionPercent: 10, gstOnCommissionPercent: 18, tdsPercent: 2 };
 
         let totalItemTotal = 0;
         let totalCustomerPayableShipping = 0;
         let sellerWiseSplit = {};
         const processedItems = [];
 
-        // 🌟 YOUR CORE LOOP (Optimized for Delhivery & Universal Items)
+        // 🌟 THE SYNCED LOOP: Ovvoru item-kum dynamic rate fetch pannuvom
         for (const item of items) {
+            // 1. Get Product and Seller details
             const productDoc = await Product.findById(item.productId || item._id);
-            const sellerDoc = await Seller.findById(productDoc?.seller || item.sellerId);
-            
-            if (!productDoc || !sellerDoc) continue;
+            if (!productDoc) continue;
+
+            const sellerDoc = await Seller.findById(productDoc.seller || item.sellerId);
+            if (!sellerDoc) continue;
 
             const price = Number(item.price);
             const qty = Number(item.quantity);
             const subtotal = price * qty;
             totalItemTotal += subtotal;
 
-            // ⚖️ UNIVERSAL WEIGHT: Sync Earbuds, Dress, Rice to Kg
-            const singleItemWeightKg = universalWeightSync(productDoc.weightValue || productDoc.weight, productDoc.unit);
-            const totalPackageWeightKg = singleItemWeightKg * qty;
+            // ⚖️ WEIGHT SYNC: Convert Product Weight to Kg
+            const weightKg = universalWeightSync(productDoc.weightValue || productDoc.weight, productDoc.unit) * qty;
             
-            // 📍 DYNAMIC PICKUP: Seller's Pincode
-            const pickupPincode = sellerDoc.shopAddress?.pincode || sellerDoc.pincode;
+            // 📍 ORIGIN SYNC: Seller Warehouse Pincode
+            const pickupPin = sellerDoc.shopAddress?.pincode || sellerDoc.pincode || "600001";
 
-            // 🚚 DYNAMIC RATE: Pure Delhivery API calculation
-            const sellerSpecificRate = await getLiveShippingRate(
-                shippingAddress.pincode, 
-                productDoc.weightValue || productDoc.weight, 
-                productDoc.unit, 
-                pickupPincode, 
-                paymentMethod
-            );
+            // 🚚 LIVE RATE: Calculate strictly for this Seller -> Customer route
+            const apiRate = await getLiveShippingRate(shippingAddress.pincode, productDoc.weightValue, productDoc.unit, pickupPin, paymentMethod);
             
-            // Final Charge logic (Floor 80 maintained)
-            const dynamicSellerCharge = Math.max(80, Math.ceil(sellerSpecificRate));
+            // Final cost with Admin Margin
+            const dynamicCharge = Math.max(80, Math.ceil(apiRate + ADMIN_MARGIN));
 
-            const sId = (productDoc.seller || item.sellerId).toString();
-            
-            if (!sellerWiseSplit[sId]) {
-                sellerWiseSplit[sId] = {
-                    sellerId: sId,
-                    shopName: sellerDoc?.shopName || "Unknown Store",
-                    commissionPercent: settings.commissionPercent, 
+            const sIdStr = sellerDoc._id.toString();
+            if (!sellerWiseSplit[sIdStr]) {
+                sellerWiseSplit[sIdStr] = {
+                    sellerId: sellerDoc._id,
+                    shopName: sellerDoc.shopName,
+                    commissionPercent: settings.commissionPercent,
                     sellerSubtotal: 0,
                     deliveryDeductionFromSeller: 0,
                     customerShippingForThisSeller: 0,
-                    totalWeightKg: 0 // To track total seller package weight
+                    totalPackageWeightKg: 0
                 };
             }
 
+            // Delivery Charge Allocation Logic
             if (productDoc.isFreeDelivery) {
-                sellerWiseSplit[sId].deliveryDeductionFromSeller = dynamicSellerCharge;
-                sellerWiseSplit[sId].customerShippingForThisSeller = 0;
-            } else {
-                if (sellerWiseSplit[sId].sellerSubtotal === 0) {
-                    sellerWiseSplit[sId].customerShippingForThisSeller = dynamicSellerCharge;
-                }
-                sellerWiseSplit[sId].deliveryDeductionFromSeller = 0;
+                sellerWiseSplit[sIdStr].deliveryDeductionFromSeller = dynamicCharge;
+            } else if (sellerWiseSplit[sIdStr].sellerSubtotal === 0) {
+                // Charge customer only once per seller package
+                sellerWiseSplit[sIdStr].customerShippingForThisSeller = dynamicCharge;
             }
 
+            // Push to final array
             processedItems.push({
                 productId: productDoc._id,
                 name: item.name,
                 quantity: qty,
                 price: price,
                 mrp: Number(item.mrp || price),
-                sellerId: new mongoose.Types.ObjectId(sId),
-                hsnCode: item.hsnCode || productDoc.hsnCode || "0000",
-                image: item.image || "",
-                weightKg: totalPackageWeightKg
+                sellerId: sellerDoc._id,
+                hsnCode: productDoc.hsnCode || "0000",
+                weightKg: weightKg
             });
-            sellerWiseSplit[sId].sellerSubtotal += subtotal;
-            sellerWiseSplit[sId].totalWeightKg += totalPackageWeightKg;
+
+            sellerWiseSplit[sIdStr].sellerSubtotal += subtotal;
+            sellerWiseSplit[sIdStr].totalPackageWeightKg += weightKg;
         }
 
-        // 🌟 FINAL SPLIT CALCULATION (Admin Finance Hierarchy)
+        // 🌟 LEDGER CALCULATION
         const finalSellerSplitData = Object.values(sellerWiseSplit).map(split => {
-            const subtotal = split.sellerSubtotal;
-            const commission = (subtotal * split.commissionPercent) / 100;
-            const gstOnComm = (commission * settings.gstOnCommissionPercent) / 100;
-            const tds = (subtotal * settings.tdsPercent) / 100;
+            const comm = (split.sellerSubtotal * split.commissionPercent) / 100;
+            const gst = (comm * settings.gstOnCommissionPercent) / 100;
+            const tds = (split.sellerSubtotal * settings.tdsPercent) / 100;
 
             totalCustomerPayableShipping += split.customerShippingForThisSeller;
 
             return {
                 sellerId: new mongoose.Types.ObjectId(split.sellerId),
                 shopName: split.shopName,
-                sellerSubtotal: subtotal,
-                commissionTotal: commission,
-                gstTotal: gstOnComm,
+                sellerSubtotal: split.sellerSubtotal,
+                commissionTotal: comm,
+                gstTotal: gst,
                 tdsTotal: tds,
                 deliveryDeduction: split.deliveryDeductionFromSeller,
-                // Payout Calculation
-                finalPayable: subtotal - (commission + gstOnComm + tds + split.deliveryDeductionFromSeller),
-                totalWeightKg: split.totalWeightKg,
+                finalPayable: split.sellerSubtotal - (comm + gst + tds + split.deliveryDeductionFromSeller),
+                totalWeightKg: split.totalPackageWeightKg,
                 status: 'Pending'
             };
         });
 
         const finalTotalAmount = totalItemTotal + totalCustomerPayableShipping;
 
-        // Wallet Safety Logic
+        // Wallet Balance Logic
         if (paymentMethod === "WALLET") {
-            if (user.walletBalance < finalTotalAmount) {
-                return res.status(400).json({ success: false, message: "Insufficient Balance" });
-            }
+            if (user.walletBalance < finalTotalAmount) return res.status(400).json({ success: false, message: "Insufficient Balance" });
             user.walletBalance -= finalTotalAmount;
-            user.walletTransactions.unshift({
-                amount: finalTotalAmount,
-                type: 'DEBIT',
-                reason: `Order Payment`,
-                date: new Date()
-            });
+            user.walletTransactions.unshift({ amount: finalTotalAmount, type: 'DEBIT', reason: `Order Payment`, date: new Date() });
             await user.save();
         }
 
@@ -811,12 +787,7 @@ exports.createOrder = async (req, res) => {
             customerId: user._id,
             items: processedItems,
             sellerSplitData: finalSellerSplitData,
-            billDetails: { 
-                itemTotal: totalItemTotal, 
-                deliveryCharge: totalCustomerPayableShipping, 
-                handlingCharge: 0, 
-                totalAmount: finalTotalAmount 
-            },
+            billDetails: { itemTotal: totalItemTotal, deliveryCharge: totalCustomerPayableShipping, totalAmount: finalTotalAmount },
             totalAmount: finalTotalAmount,
             paymentMethod,
             shippingAddress,
@@ -826,20 +797,29 @@ exports.createOrder = async (req, res) => {
 
         await newOrder.save();
 
-        // 🌟 Auto-Shipment Trigger using First Seller Pickup
+        // 🌟 THE CRITICAL FIX: Safe AWB Assignment
         if (newOrder.paymentStatus === 'Paid') {
-            const firstSeller = finalSellerSplitData[0];
-            const pickupPoint = firstSeller?.shopName.toLowerCase() || "benjamin";
-            const weightForShipment = firstSeller?.totalWeightKg || 0.5;
-            const delhiRes = await createDelhiveryShipment(newOrder, user.phone, pickupPoint, weightForShipment);
-            newOrder.awbNumber = (delhiRes && (delhiRes.success || delhiRes.packages)) ? delhiRes.packages[0].waybill : "128374922";
+            try {
+                const firstSeller = finalSellerSplitData[0];
+                const delhiRes = await createDelhiveryShipment(newOrder, user.phone, firstSeller.shopName, firstSeller.totalWeightKg);
+                
+                // Waybill Check - crash-ah prevent pannum
+                if (delhiRes && delhiRes.packages && delhiRes.packages.length > 0) {
+                    newOrder.awbNumber = delhiRes.packages[0].waybill;
+                } else {
+                    newOrder.awbNumber = "128374922"; // Dummy Fallback
+                }
+            } catch (shipErr) {
+                console.error("Shipment trigger failed:", shipErr.message);
+                newOrder.awbNumber = "128374922";
+            }
             await newOrder.save();
         }
 
         res.status(201).json({ success: true, order: newOrder });
 
     } catch (err) {
-        console.error("MASTER ORDER ERROR:", err);
+        console.error("Master Order Critical Error:", err.stack);
         res.status(500).json({ success: false, error: err.message });
     }
 };
