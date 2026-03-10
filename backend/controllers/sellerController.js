@@ -272,7 +272,6 @@ exports.getAllBrands = async (req, res) => {
 };
 
 // controllers/sellerController.js
-
 exports.addSellerAddress = async (req, res) => {
   try {
     const sellerId = req.params.id || req.user?.id;

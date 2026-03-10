@@ -30,7 +30,7 @@ router.post(
 
 
 router.get("/dashboard/:id", sellerCtrl.getSellerDashboard);
-
+router.put("/add-address/:id", protect, sellerCtrl.addSellerAddress);
 
 router.get("/new-orders/:sellerId", sellerCtrl.getSellerNewOrders);
 
