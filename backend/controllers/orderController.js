@@ -539,6 +539,8 @@
 //         res.status(500).send("Error");
 //     }
 // };
+
+
 const Order = require('../models/Order');
 const User = require('../models/User');
 const Product = require('../models/Product'); 
@@ -547,7 +549,6 @@ const FinanceSettings = require('../models/FinanceSettings');
 const axios = require('axios');
 const mongoose = require('mongoose');
 
-// 🔑 API CONFIGURATION
 const DELHI_TOKEN = "9b44fee45422e3fe8073dee9cfe7d51f9fff7629";
 const ADMIN_MARGIN = 40;
 
@@ -569,13 +570,7 @@ const getLiveShippingRate = async (destPincode, weightValue, unit, sellerPincode
     try {
         const weightInKg = universalWeightSync(weightValue, unit).toFixed(2);
         const response = await axios.get("https://staging-express.delhivery.com/api/kinko/v1/invoice/charges/.json", {
-            params: {
-                ss: "R", 
-                pt: paymentMode === "COD" ? "Cash" : "Pre-paid",
-                o_pin: sellerPincode, 
-                d_pin: destPincode,   
-                weight: weightInKg,  
-            },
+            params: { ss: "R", pt: paymentMode === "COD" ? "Cash" : "Pre-paid", o_pin: sellerPincode, d_pin: destPincode, weight: weightInKg },
             headers: { 'Authorization': `Token ${DELHI_TOKEN}` }
         });
         return response.data?.[0]?.total_amount || response.data?.[0]?.gross_amount || 0;
@@ -583,7 +578,7 @@ const getLiveShippingRate = async (destPincode, weightValue, unit, sellerPincode
 };
 
 /* =====================================================
-    🌟 1. LIVE RATE ENDPOINT (Cart Logic)
+    🌟 1. LIVE RATE ENDPOINT (Cart Screen Logic)
 ===================================================== */
 exports.calculateLiveDeliveryRate = async (req, res) => {
     try {
@@ -644,7 +639,7 @@ exports.createOrder = async (req, res) => {
             processedItems.push({
                 productId: productDoc._id, name: item.name, quantity: item.quantity,
                 price: item.price, mrp: item.mrp || item.price, sellerId: sellerDoc._id,
-                hsnCode: productDoc.hsnCode || "0000", weightKg: weightKg
+                hsnCode: productDoc.hsnCode || "0000", weightKg: weightKg, image: item.image || ""
             });
 
             sellerWiseSplit[sIdStr].sellerSubtotal += subtotal;
@@ -690,52 +685,105 @@ exports.createOrder = async (req, res) => {
 };
 
 /* =====================================================
-    ❌ 3. CANCEL ORDER (Unnaoda Strict Logic - Restored)
+    ❌ 3. CANCEL ORDER (Refund Logic)
 ===================================================== */
 exports.cancelOrder = async (req, res) => {
     try {
         const order = await Order.findById(req.params.orderId);
         if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
-        // Check if status allows cancellation
         if (order.status !== 'Placed' && order.status !== 'Pending') {
-            return res.status(400).json({ success: false, message: "Cancellation not possible at this stage." });
+            return res.status(400).json({ success: false, message: "Cancellation not possible." });
         }
 
-        // Wallet Refund Logic - 100% un logic thaan
         if (order.paymentStatus === 'Paid') {
             const user = await User.findById(order.customerId);
             if (user) {
                 user.walletBalance = (user.walletBalance || 0) + order.totalAmount;
-                user.walletTransactions.unshift({
-                    amount: order.totalAmount,
-                    type: 'CREDIT',
-                    reason: `Refund: Order #${order._id.toString().slice(-6).toUpperCase()}`,
-                    date: new Date()
-                });
+                user.walletTransactions.unshift({ amount: order.totalAmount, type: 'CREDIT', reason: `Refund: Order #${order._id.toString().slice(-6).toUpperCase()}`, date: new Date() });
                 await user.save();
                 order.paymentStatus = 'Refunded';
             }
-        } else {
-            order.paymentStatus = 'Cancelled';
-        }
+        } else { order.paymentStatus = 'Cancelled'; }
 
         order.status = 'Cancelled';
         await order.save();
-        res.json({ success: true, message: "Order cancelled and refunded successfully." });
+        res.json({ success: true, message: "Order cancelled and refunded." });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
 /* =====================================================
-    📈 4. TRACKING, STATUS & WEBHOOK
+    🔍 4. THE PERIYA CRT FETCH LOGIC (Restored for Admin & User)
+===================================================== */
+exports.getMyOrders = async (req, res) => {
+    try {
+        const orders = await Order.find({ customerId: req.params.userId })
+            .populate('items.productId')
+            .populate({ path: 'items.sellerId', select: 'shopName name address city' })
+            .sort({ createdAt: -1 });
+
+        const sanitizedOrders = orders.map(order => {
+            const orderObj = order.toObject();
+            return {
+                ...orderObj,
+                items: orderObj.items.map(item => ({
+                    ...item,
+                    sellerId: item.sellerId || { shopName: "Zhopingo Store", name: "Admin" }
+                }))
+            };
+        });
+        res.json({ success: true, data: sanitizedOrders });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+};
+
+exports.getOrders = async (req, res) => {
+    try {
+        const orders = await Order.find()
+            .populate('customerId', 'name phone email')
+            .populate('items.productId')
+            .populate({ path: 'items.sellerId', select: 'name shopName city phone' })
+            .sort({ createdAt: -1 });
+
+        const sanitizedOrders = orders.map(order => ({
+            ...order._doc,
+            items: order.items.map(item => ({
+                ...item._doc,
+                sellerId: item.sellerId || { shopName: "Zhopingo Store", name: "Admin" }
+            }))
+        }));
+        res.json({ success: true, data: sanitizedOrders });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+};
+
+exports.getSellerOrders = async (req, res) => {
+    try {
+        const orders = await Order.find({ "items.sellerId": req.params.sellerId })
+            .populate('items.productId')
+            .populate({ path: 'items.sellerId', select: 'shopName name address city' })
+            .sort({ createdAt: -1 });
+
+        const sanitizedOrders = orders.map(order => {
+            const orderObj = order.toObject();
+            return {
+                ...orderObj,
+                items: orderObj.items.map(item => ({
+                    ...item,
+                    sellerId: item.sellerId || { shopName: "Zhopingo Seller", name: "Merchant" }
+                }))
+            };
+        });
+        res.json({ success: true, data: sanitizedOrders });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+};
+
+/* =====================================================
+    📈 5. TRACKING & STATUS
 ===================================================== */
 exports.trackDelhivery = async (req, res) => {
     try {
         const { awb } = req.params;
         if (awb === "128374922") return res.json({ success: true, tracking: { ShipmentData: [{ Shipment: { Status: { Status: "In Transit" }, Scans: [{ ScanDetail: { Instructions: "Facility reached" } }] } }] } });
-        const response = await axios.get(`https://staging-express.delhivery.com/api/v1/packages/json/?waybill=${awb}`, {
-            headers: { 'Authorization': `Token ${DELHI_TOKEN}` }
-        });
+        const response = await axios.get(`https://staging-express.delhivery.com/api/v1/packages/json/?waybill=${awb}`, { headers: { 'Authorization': `Token ${DELHI_TOKEN}` } });
         res.json({ success: true, tracking: response.data });
     } catch (err) { res.status(500).json({ success: false, error: "Tracking failed" }); }
 };
@@ -743,7 +791,7 @@ exports.trackDelhivery = async (req, res) => {
 exports.updateOrderStatus = async (req, res) => {
     try {
         const { status } = req.body;
-        const order = await Order.findByIdAndUpdate(req.params.orderId, { status }, { new: true });
+        const order = await Order.findByIdAndUpdate(req.params.orderId, { status }, { new: true }).populate({ path: 'items.sellerId', select: 'shopName name' });
         if (status === 'Delivered') order.paymentStatus = 'Paid';
         await order.save();
         res.json({ success: true, data: order });
@@ -762,32 +810,10 @@ exports.handleDelhiveryWebhook = async (req, res) => {
     } catch (err) { res.status(500).send("Error"); }
 };
 
-exports.getMyOrders = async (req, res) => {
-    try {
-        const orders = await Order.find({ customerId: req.params.userId }).populate('items.productId').sort({ createdAt: -1 });
-        res.json({ success: true, data: orders });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
-};
-
-exports.getOrders = async (req, res) => {
-    try {
-        const orders = await Order.find().populate('customerId', 'name phone').populate('items.productId').sort({ createdAt: -1 });
-        res.json({ success: true, data: orders });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
-};
-
-exports.getSellerOrders = async (req, res) => {
-    try {
-        const orders = await Order.find({ "items.sellerId": req.params.sellerId }).populate('items.productId').sort({ createdAt: -1 });
-        res.json({ success: true, data: orders });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
-};
-
 exports.bypassPaymentAndShip = async (req, res) => {
     try {
         const order = await Order.findById(req.params.orderId);
-        order.paymentStatus = "Paid";
-        order.status = "Placed";
+        order.paymentStatus = "Paid"; order.status = "Placed";
         await order.save();
         res.json({ success: true, data: order });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
