@@ -543,9 +543,9 @@
 const Order = require('../models/Order');
 const User = require('../models/User');
 const DeliveryCharge = require('../models/DeliveryCharge');
-const Product = require('../models/Product');
+const Product = require('../models/Product'); 
 const Seller = require('../models/Seller');
-const FinanceSettings = require('../models/FinanceSettings'); // 🌟 Added
+const FinanceSettings = require('../models/FinanceSettings'); // 🌟 Added for dynamic sync
 const axios = require('axios');
 const mongoose = require('mongoose');
 
@@ -558,86 +558,107 @@ const DELHI_RATE_URL = "https://staging-express.delhivery.com/api/kinko/v1/invoi
 const ADMIN_MARGIN = 40;
 
 /* =====================================================
-    ⚖️ UNIVERSAL UNIT CONVERTER: Syncs Solids & Liquids
+    ⚖️ UNIVERSAL UNIT CONVERTER: Convert All Units to Kg
 ===================================================== */
 const universalWeightSync = (value, unit) => {
     const val = Number(value) || 0;
     const unitLower = unit?.toLowerCase() || 'g';
+
+    // Logistics logic: 1 Liter ≈ 1 Kg calculation
     if (['kg', 'l', 'liter', 'kilogram'].includes(unitLower)) {
-        return val; // 1kg or 1L -> 1.0kg Weight
+        return val; // Already in base unit (Ex: 1kg -> 1.0)
     } else if (['g', 'gram', 'ml', 'milliliter'].includes(unitLower)) {
-        return val / 1000; // 500g or 500ml -> 0.5kg Weight
+        return val / 1000; // Convert to Kg (Ex: 500g/ml -> 0.5)
     } else {
-        return val > 0 ? val / 1000 : 0.2; // Fallback for small items like earbuds
+        // Earbuds/Makeup/Small items fallback (Default to 200g if invalid)
+        return val > 0 ? val / 1000 : 0.2; 
     }
 };
 
 /* =====================================================
-    🚚 HELPER: DYNAMIC SHIPPING RATE
+    🚚 HELPER: DYNAMIC SHIPPING RATE (Everything Store Ready)
 ===================================================== */
 const getLiveShippingRate = async (destPincode, weightValue = 500, unit = 'g', sellerPincode, paymentMode = "Pre-paid") => {
     try {
+        // 🌟 Convert any unit (Dress, Earbuds, Rice) to Delhivery-standard Kilograms
         const weightInKg = universalWeightSync(weightValue, unit).toFixed(2);
+
         const response = await axios.get(DELHI_RATE_URL, {
             params: {
-                ss: "R", 
+                ss: "R", // Surface Mode
                 pt: paymentMode === "Pre-paid" ? "Pre-paid" : "Cash",
                 o_pin: sellerPincode, 
                 d_pin: destPincode,   
-                weight: weightInKg,  
+                weight: weightInKg,  // Passed as Standard Kg (Ex: 0.05, 0.5, 5.0)
             },
             headers: { 'Authorization': `Token ${DELHI_TOKEN}` }
         });
+
         const rateData = response.data?.[0];
-        return Math.ceil(rateData?.total_amount || rateData?.gross_amount || 80); 
+        const finalRate = rateData?.total_amount || rateData?.gross_amount || 80;
+
+        return Math.ceil(finalRate); 
+
     } catch (error) {
-        console.error("❌ Delhivery Dynamic Rate Error:", error.message);
-        return 80;
+        console.error("❌ Delhivery Dynamic Rate Error:", error.response?.data || error.message);
+        return 80; // Safety fallback
     }
 };
 
 /* =====================================================
-    📦 HELPER: CREATE DELHI SHIPMENT
+    📦 HELPER: CREATE DELHI SHIPMENT (Dynamic Weight & Pickup)
 ===================================================== */
 const createDelhiveryShipment = async (order, customerPhone, pickupLocationName, totalWeightKg = 0.5) => {
     try {
         const shipmentData = {
             "shipments": [{
-                "name": order.shippingAddress?.receiverName,
-                "add": `${order.shippingAddress?.flatNo}, ${order.shippingAddress?.addressLine}`,
+                "name": order.shippingAddress?.receiverName || "Customer",
+                "add": `${order.shippingAddress?.flatNo || ""}, ${order.shippingAddress?.addressLine || ""}`,
                 "pin": order.shippingAddress?.pincode,
                 "phone": customerPhone,
                 "order": order._id.toString(),
                 "payment_mode": order.paymentMethod === "COD" ? "Cash" : "Pre-paid",
                 "amount": order.totalAmount,
+                // 🌟 Total package weight in Kg passed dynamically
                 "weight": totalWeightKg > 0 ? totalWeightKg : 0.5, 
                 "hsn_code": order.items?.[0]?.hsnCode || "0000"
             }],
-            "pickup_location": { "name": pickupLocationName }
+            "pickup_location": { "name": pickupLocationName } // Seller Shop Name
         };
+
         const response = await axios.post(DELHI_URL_CREATE, `format=json&data=${JSON.stringify(shipmentData)}`, {
-            headers: { 'Authorization': `Token ${DELHI_TOKEN}`, 'Content-Type': 'application/x-www-form-urlencoded' }
+            headers: { 
+                'Authorization': `Token ${DELHI_TOKEN}`, 
+                'Content-Type': 'application/x-www-form-urlencoded' 
+            }
         });
+
+        console.log("✅ Delhivery Shipment Success:", response.data);
         return response.data;
+        
     } catch (error) {
-        console.error("❌ Delhivery Shipment Error:", error.message);
+        console.error("❌ Delhivery Shipment Error Log:", error.response?.data || error.message);
         return null;
     }
 };
 
 /* =====================================================
-    🌟 1. LIVE RATE ENDPOINT FOR FRONTEND
+    🌟 1. LIVE RATE ENDPOINT FOR FRONTEND (Sync with Weight & Unit)
 ===================================================== */
 exports.calculateLiveDeliveryRate = async (req, res) => {
     try {
         const { pincode, paymentMode = "Pre-paid", weightValue, unit } = req.query;
-        if (!pincode) return res.status(400).json({ success: false, error: "Pincode is required" });
+
+        if (!pincode) {
+            return res.status(400).json({ success: false, error: "Pincode is required" });
+        }
 
         const weight = weightValue || 500;
         const unitType = unit || 'g';
-        const sellerPincode = "600001"; 
+        const sellerPincode = "600001"; // Default store origin
 
         const liveCost = await getLiveShippingRate(pincode, weight, unitType, sellerPincode, paymentMode);
+        
         let finalCharge = Math.ceil(liveCost);
         if (finalCharge < 80) finalCharge = 80; 
 
@@ -647,13 +668,15 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
             actualDelhiveryCost: liveCost,
             appliedWeightKg: (universalWeightSync(weight, unitType)).toFixed(2) + " kg"
         });
+
     } catch (err) {
+        console.error("Frontend Rate API Error:", err.message);
         res.status(500).json({ success: false, finalCharge: 80, error: err.message }); 
     }
 };
 
 /* =====================================================
-    🌟 MASTER CREATE ORDER (100% Core Maintained)
+    🌟 MASTER CREATE ORDER (100% Corrected & Robust)
 ===================================================== */
 exports.createOrder = async (req, res) => {
     try {
@@ -661,7 +684,7 @@ exports.createOrder = async (req, res) => {
         const user = await User.findById(customerId);
         if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-        // 🌟 DYNAMIC FINANCE FETCH: Admin settings
+        // 🌟 DYNAMIC FINANCE FETCH: Get Admin settings (Commission, GST, TDS)
         const settings = await FinanceSettings.findOne() || { 
             commissionPercent: 10, 
             gstOnCommissionPercent: 18, 
@@ -673,7 +696,7 @@ exports.createOrder = async (req, res) => {
         let sellerWiseSplit = {};
         const processedItems = [];
 
-        // 🌟 YOUR CORE LOOP (No original logic removed)
+        // 🌟 YOUR CORE LOOP (Optimized for Delhivery & Universal Items)
         for (const item of items) {
             const productDoc = await Product.findById(item.productId || item._id);
             const sellerDoc = await Seller.findById(productDoc?.seller || item.sellerId);
@@ -685,12 +708,14 @@ exports.createOrder = async (req, res) => {
             const subtotal = price * qty;
             totalItemTotal += subtotal;
 
-            // ⚖️ UNIVERSAL DYNAMIC WEIGHT: Converts Dress, Earbuds, Grocery to Kg
+            // ⚖️ UNIVERSAL WEIGHT: Sync Earbuds, Dress, Rice to Kg
             const singleItemWeightKg = universalWeightSync(productDoc.weightValue || productDoc.weight, productDoc.unit);
             const totalPackageWeightKg = singleItemWeightKg * qty;
             
+            // 📍 DYNAMIC PICKUP: Seller's Pincode
             const pickupPincode = sellerDoc.shopAddress?.pincode || sellerDoc.pincode;
 
+            // 🚚 DYNAMIC RATE: Pure Delhivery API calculation
             const sellerSpecificRate = await getLiveShippingRate(
                 shippingAddress.pincode, 
                 productDoc.weightValue || productDoc.weight, 
@@ -699,7 +724,7 @@ exports.createOrder = async (req, res) => {
                 paymentMethod
             );
             
-            // Note: Minimum 80 maintain panraen floor price logic-ku
+            // Final Charge logic (Floor 80 maintained)
             const dynamicSellerCharge = Math.max(80, Math.ceil(sellerSpecificRate));
 
             const sId = (productDoc.seller || item.sellerId).toString();
@@ -712,7 +737,7 @@ exports.createOrder = async (req, res) => {
                     sellerSubtotal: 0,
                     deliveryDeductionFromSeller: 0,
                     customerShippingForThisSeller: 0,
-                    totalWeightKg: 0 
+                    totalWeightKg: 0 // To track total seller package weight
                 };
             }
 
@@ -741,7 +766,7 @@ exports.createOrder = async (req, res) => {
             sellerWiseSplit[sId].totalWeightKg += totalPackageWeightKg;
         }
 
-        // 🌟 FINAL SPLIT CALCULATION (Admin Setting based)
+        // 🌟 FINAL SPLIT CALCULATION (Admin Finance Hierarchy)
         const finalSellerSplitData = Object.values(sellerWiseSplit).map(split => {
             const subtotal = split.sellerSubtotal;
             const commission = (subtotal * split.commissionPercent) / 100;
@@ -758,6 +783,7 @@ exports.createOrder = async (req, res) => {
                 gstTotal: gstOnComm,
                 tdsTotal: tds,
                 deliveryDeduction: split.deliveryDeductionFromSeller,
+                // Payout Calculation
                 finalPayable: subtotal - (commission + gstOnComm + tds + split.deliveryDeductionFromSeller),
                 totalWeightKg: split.totalWeightKg,
                 status: 'Pending'
@@ -766,10 +792,18 @@ exports.createOrder = async (req, res) => {
 
         const finalTotalAmount = totalItemTotal + totalCustomerPayableShipping;
 
+        // Wallet Safety Logic
         if (paymentMethod === "WALLET") {
-            if (user.walletBalance < finalTotalAmount) return res.status(400).json({ success: false, message: "Insufficient Balance" });
+            if (user.walletBalance < finalTotalAmount) {
+                return res.status(400).json({ success: false, message: "Insufficient Balance" });
+            }
             user.walletBalance -= finalTotalAmount;
-            user.walletTransactions.unshift({ amount: finalTotalAmount, type: 'DEBIT', reason: `Order Payment`, date: new Date() });
+            user.walletTransactions.unshift({
+                amount: finalTotalAmount,
+                type: 'DEBIT',
+                reason: `Order Payment`,
+                date: new Date()
+            });
             await user.save();
         }
 
@@ -792,6 +826,7 @@ exports.createOrder = async (req, res) => {
 
         await newOrder.save();
 
+        // 🌟 Auto-Shipment Trigger using First Seller Pickup
         if (newOrder.paymentStatus === 'Paid') {
             const firstSeller = finalSellerSplitData[0];
             const pickupPoint = firstSeller?.shopName.toLowerCase() || "benjamin";
@@ -810,62 +845,168 @@ exports.createOrder = async (req, res) => {
 };
 
 /* =====================================================
-    📈 TRACKING & WEBHOOK (Core preserved)
+    ❌ 3. CANCEL ORDER (Before Shipping + Wallet Refund)
+===================================================== */
+exports.cancelOrder = async (req, res) => {
+    try {
+        const order = await Order.findById(req.params.orderId);
+        if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+
+        if (order.status !== 'Placed' && order.status !== 'Pending') {
+            return res.status(400).json({ success: false, message: "Cancellation not possible once processed." });
+        }
+
+        if (order.paymentStatus === 'Paid') {
+            const user = await User.findById(order.customerId);
+            if (user) {
+                user.walletBalance = (user.walletBalance || 0) + order.totalAmount;
+                user.walletTransactions.unshift({
+                    amount: order.totalAmount,
+                    type: 'CREDIT',
+                    reason: `Refund: Order #${order._id.toString().slice(-6).toUpperCase()}`,
+                    date: new Date()
+                });
+                await user.save();
+                order.paymentStatus = 'Refunded';
+            }
+        } else {
+            order.paymentStatus = 'Cancelled';
+        }
+
+        order.status = 'Cancelled';
+        await order.save();
+        res.json({ success: true, message: "Order cancelled and refunded to wallet." });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+/* =====================================================
+    📈 4. TRACKING & FETCHING (Sync with Delhivery)
 ===================================================== */
 exports.trackDelhivery = async (req, res) => {
     try {
         const { awb } = req.params;
+
         if (awb === "128374922") {
             return res.json({ 
                 success: true, 
                 tracking: { 
-                    ShipmentData: [{ Shipment: { Status: { Status: "In Transit" }, Scans: [{ ScanDetail: { Instructions: "Facility reached" } }] } }] 
+                    ShipmentData: [{ 
+                        Shipment: { 
+                            Status: { Status: "In Transit", StatusDateTime: new Date().toISOString() }, 
+                            Scans: [
+                                { ScanDetail: { Instructions: "Reached Chennai Hub", ScannedLocation: "Chennai", ScanDateTime: new Date().toISOString() } },
+                                { ScanDetail: { Instructions: "Out for Delivery", ScannedLocation: "Siruseri" } }
+                            ] 
+                        } 
+                    }] 
                 } 
             });
         }
-        const response = await axios.get(`${DELHI_URL_TRACK}?waybill=${awb}`, { headers: { 'Authorization': `Token ${DELHI_TOKEN}` } });
+
+        const response = await axios.get(`${DELHI_URL_TRACK}?waybill=${awb}`, {
+            headers: { 'Authorization': `Token ${DELHI_TOKEN}` }
+        });
         res.json({ success: true, tracking: response.data });
-    } catch (err) { res.status(500).json({ success: false, message: "Tracking failed." }); }
+    } catch (err) { 
+        res.status(500).json({ success: false, message: "Tracking failed." }); 
+    }
 };
 
 exports.getMyOrders = async (req, res) => {
     try {
-        const orders = await Order.find({ customerId: req.params.userId }).populate('items.productId').populate({ path: 'items.sellerId', select: 'shopName name address city' }).sort({ createdAt: -1 });
-        res.json({ success: true, data: orders });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+        const orders = await Order.find({ customerId: req.params.userId })
+            .populate('items.productId')
+            .populate({ path: 'items.sellerId', select: 'shopName name address city' })
+            .sort({ createdAt: -1 });
+
+        const sanitizedOrders = orders.map(order => {
+            const orderObj = order.toObject();
+            return {
+                ...orderObj,
+                items: orderObj.items.map(item => ({
+                    ...item,
+                    sellerId: item.sellerId || { shopName: "Zhopingo Store", name: "Admin" }
+                }))
+            };
+        });
+
+        res.json({ success: true, data: sanitizedOrders });
+    } catch (err) { 
+        res.status(500).json({ success: false, error: err.message }); 
+    }
 };
 
 exports.getOrders = async (req, res) => {
     try {
-        const orders = await Order.find().populate('customerId', 'name phone email').populate('items.productId').populate({ path: 'items.sellerId', select: 'name shopName city phone' }).sort({ createdAt: -1 });
-        res.json({ success: true, data: orders });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
-}
+        const orders = await Order.find()
+            .populate('customerId', 'name phone email')
+            .populate('items.productId')
+            .populate({ path: 'items.sellerId', select: 'name shopName city phone' })
+            .sort({ createdAt: -1 });
+
+        const sanitizedOrders = orders.map(order => ({
+            ...order._doc,
+            items: order.items.map(item => ({
+                ...item._doc,
+                sellerId: item.sellerId || { shopName: "Zhopingo Store", name: "Admin" }
+            }))
+        }));
+
+        res.json({ success: true, data: sanitizedOrders });
+    } catch (err) { 
+        res.status(500).json({ success: false, error: err.message }); 
+    }
+};
 
 exports.getSellerOrders = async (req, res) => {
     try {
-        const orders = await Order.find({ "items.sellerId": req.params.sellerId }).populate('items.productId').populate({ path: 'items.sellerId', select: 'shopName name address city' }).sort({ createdAt: -1 });
-        res.json({ success: true, data: orders });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+        const orders = await Order.find({ "items.sellerId": req.params.sellerId })
+            .populate('items.productId')
+            .populate({ path: 'items.sellerId', select: 'shopName name address city' })
+            .sort({ createdAt: -1 });
+
+        const sanitizedOrders = orders.map(order => {
+            const orderObj = order.toObject();
+            return {
+                ...orderObj,
+                items: orderObj.items.map(item => ({
+                    ...item,
+                    sellerId: item.sellerId || { shopName: "Zhopingo Seller", name: "Merchant" }
+                }))
+            };
+        });
+
+        res.json({ success: true, data: sanitizedOrders });
+    } catch (err) { 
+        res.status(500).json({ success: false, error: err.message }); 
+    }
 };
 
 exports.updateOrderStatus = async (req, res) => {
     try {
         const { status } = req.body;
-        const order = await Order.findByIdAndUpdate(req.params.orderId, { status }, { new: true }).populate({ path: 'items.sellerId', select: 'shopName name' });
+        const order = await Order.findByIdAndUpdate(req.params.orderId, { status }, { new: true })
+            .populate({ path: 'items.sellerId', select: 'shopName name' });
+
         if (!order) return res.status(404).json({ success: false, message: "Order not found" });
         if (status === 'Delivered') order.paymentStatus = 'Paid';
+        
         await order.save();
         res.json({ success: true, data: order });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+    } catch (err) { 
+        res.status(500).json({ success: false, error: err.message }); 
+    }
 };
 
 exports.bypassPaymentAndShip = async (req, res) => {
     try {
         const order = await Order.findById(req.params.orderId);
         const user = await User.findById(order.customerId);
-        order.paymentStatus = "Paid"; order.status = "Placed";
-        const delhiRes = await createDelhiveryShipment(order, user?.phone || "9876543210");
+        order.paymentStatus = "Paid";
+        order.status = "Placed";
+        const delhiRes = await createDelhiveryShipment(order, user?.phone || "9876543210", "Zhopingo Store", 0.5);
         order.awbNumber = (delhiRes && (delhiRes.success || delhiRes.packages)) ? delhiRes.packages[0].waybill : "128374922";
         await order.save();
         res.json({ success: true, data: order });
@@ -882,5 +1023,7 @@ exports.handleDelhiveryWebhook = async (req, res) => {
             await order.save();
         }
         res.status(200).send("OK");
-    } catch (err) { res.status(500).send("Error"); }
+    } catch (err) {
+        res.status(500).send("Error");
+    }
 };

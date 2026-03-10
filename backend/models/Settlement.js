@@ -1,3 +1,5 @@
+const mongoose = require('mongoose');
+
 const settlementSchema = new mongoose.Schema({
     sellerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Seller' },
     weekRange: { type: String }, // Ex: "Mar 01 - Mar 07"
