@@ -8,6 +8,7 @@ const { protect, optionalProtect } = require('../middleware/authMiddleware');
 
 router.get('/', optionalProtect, reelCtrl.getAllReels);
 
+
 // 🔥 THE FIX: upload.single('video') mattum podhum
 router.post('/upload', protect, upload.single('video'), reelCtrl.uploadReel);
 

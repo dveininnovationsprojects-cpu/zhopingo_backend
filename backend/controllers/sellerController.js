@@ -270,3 +270,47 @@ exports.getAllBrands = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
+
+// controllers/sellerController.js
+
+exports.addSellerAddress = async (req, res) => {
+  try {
+    const sellerId = req.params.id || req.user?.id;
+    if (!sellerId) return res.status(400).json({ success: false, message: "Seller identity missing" });
+
+    const { receiverName, flatNo, area, pincode, phone, addressType } = req.body;
+
+    // 🌟 Check mandatory fields for Delhivery
+    if (!flatNo || !area || !pincode) {
+      return res.status(400).json({ success: false, message: "Pickup pincode and address are required" });
+    }
+
+    const updatedSeller = await Seller.findByIdAndUpdate(
+      sellerId,
+      {
+        $set: {
+          shopAddress: {
+            receiverName: receiverName || "Seller Pickup Point",
+            flatNo,
+            area,
+            pincode,
+            phone,
+            addressType: addressType || "Shop"
+          }
+        }
+      },
+      { new: true }
+    );
+
+    if (!updatedSeller) return res.status(404).json({ success: false, message: "Seller not found" });
+
+    res.json({ 
+      success: true, 
+      message: "Pickup address saved successfully for shipping",
+      data: updatedSeller.shopAddress 
+    });
+
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};

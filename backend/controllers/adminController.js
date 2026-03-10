@@ -4,6 +4,10 @@ const User = require("../models/User");
 const jwt = require("jsonwebtoken");
 const { sendReelBlockNotification } = require("../utils/emailService");
 const bcrypt = require("bcryptjs");
+const FinanceSettings = require('../models/FinanceSettings');
+const Settlement = require('../models/Settlement');
+const WeightSlab = require('../models/WeightSlab');
+const Order = require('../models/Order');
 
 const JWT_SECRET = process.env.JWT_SECRET || "secret123";
 
@@ -243,4 +247,116 @@ exports.changeAdminPassword = async (req, res) => {
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
+};
+
+// 1. Get/Update Finance Settings
+exports.getFinanceSettings = async (req, res) => {
+    try {
+        let settings = await FinanceSettings.findOne();
+        if (!settings) settings = await FinanceSettings.create({});
+        res.json({ success: true, data: settings });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+};
+
+exports.updateFinanceSettings = async (req, res) => {
+    try {
+        const settings = await FinanceSettings.findOneAndUpdate({}, req.body, { upsert: true, new: true });
+        res.json({ success: true, message: "Finance Settings Updated!", data: settings });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+};
+
+// 2. Weekly Settlement Generation Logic (The Big One)
+exports.generateWeeklySettlement = async (req, res) => {
+    try {
+        const { sellerId, startDate, endDate } = req.body;
+        const settings = await FinanceSettings.findOne();
+
+        // Orders fetch panni loop panna porom
+        const orders = await Order.find({
+            "sellerSplitData.sellerId": sellerId,
+            status: 'Delivered',
+            createdAt: { $gte: new Date(startDate), $lte: new Date(endDate) }
+        });
+
+        let stats = {
+            sales: 0, count: 0, commission: 0, gst: 0, tds: 0, delivery: 0, payable: 0
+        };
+
+      orders.forEach(order => {
+            const sellerData = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId);
+            if (sellerData) {
+                const subtotal = sellerData.sellerSubtotal || 0;
+                
+                // 🌟 Logic Fix: Using settings with fallbacks to avoid NaN errors
+                const commBase = (subtotal * (settings.commissionPercent || 10)) / 100;
+                const tdsAmount = (subtotal * (settings.tdsPercent || 2)) / 100;
+                const gstOnComm = (commBase * (settings.gstOnCommissionPercent || 18)) / 100;
+                
+                const delivery = sellerData.deliveryDeduction || 0;
+
+                stats.sales += subtotal;
+                stats.count++;
+                stats.commission += commBase;
+                stats.tds += tdsAmount;
+                stats.gst += gstOnComm;
+                stats.delivery += delivery;
+                
+                // Final Payable strictly follows your logic
+                stats.payable += (subtotal - (commBase + gstOnComm + tdsAmount + delivery));
+            }
+        });
+        const newSettlement = await Settlement.create({
+            sellerId,
+            weekRange: `${startDate} to ${endDate}`,
+            totalSales: stats.sales,
+            orderCount: stats.count,
+            commissionTotal: stats.commission,
+            gstTotal: stats.gst,
+            tdsTotal: stats.tds,
+            deliveryTotal: stats.delivery,
+            finalPayable: stats.payable
+        });
+
+        res.json({ success: true, message: "Settlement Generated!", data: newSettlement });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+};
+
+// 3. Mark as Paid (UTR Entry)
+exports.markSettlementAsPaid = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { utrNumber, paymentDate } = req.body;
+        const settlement = await Settlement.findByIdAndUpdate(id, {
+            status: 'Paid', utrNumber, paymentDate: paymentDate || new Date()
+        }, { new: true });
+        res.json({ success: true, message: "Payment recorded!", data: settlement });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+};
+// 3. WEIGHT SLABS (For Admin reference & Manual Override if API fails)
+exports.manageWeightSlabs = async (req, res) => {
+    try {
+        const slabs = await WeightSlab.find();
+        res.json({ success: true, data: slabs });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+};
+
+// Add or Update Weight Slab
+exports.upsertWeightSlab = async (req, res) => {
+    try {
+        const { label, minWeight, maxWeight, rate } = req.body;
+        const slab = await WeightSlab.findOneAndUpdate(
+            { label }, 
+            { minWeight, maxWeight, rate }, 
+            { upsert: true, new: true }
+        );
+        res.json({ success: true, message: "Weight slab updated!", data: slab });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+};
+
+// Delete Slab
+exports.deleteWeightSlab = async (req, res) => {
+    try {
+        await WeightSlab.findByIdAndDelete(req.params.id);
+        res.json({ success: true, message: "Slab removed!" });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
