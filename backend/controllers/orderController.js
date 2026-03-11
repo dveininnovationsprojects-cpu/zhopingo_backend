@@ -784,11 +784,15 @@ exports.createOrder = async (req, res) => {
             );
 
             /* =====================================================
-                💰 PROFIT MODEL: Min ₹80 rule (Sync with Cart ₹85)
-                If API 45 -> Customer pays 85 (Admin gets 40).
+                💰 PROFIT MODEL SYNC (The PhonePe Fix):
+                Rule: API Cost + ADMIN_MARGIN (40rs). 
+                Min floor strictly 80.
+                Example: API 45 + 40 = ₹85 (Ippo katchithama DB-la vizhum!)
             ===================================================== */
-            const customerShippingCharge = split.isFreeDeliveryPackage ? 0 : Math.max(80, apiRate);
-            const deliveryDeductionFromSeller = split.isFreeDeliveryPackage ? Math.max(80, apiRate) : 0;
+            const dynamicCharge = Math.max(80, (apiRate + 40)); 
+            
+            const customerShippingCharge = split.isFreeDeliveryPackage ? 0 : dynamicCharge;
+            const deliveryDeductionFromSeller = split.isFreeDeliveryPackage ? dynamicCharge : 0;
             
             finalCustomerShippingTotal += customerShippingCharge; // 👈 Handshake ippo katchithama vizhum
 
@@ -812,7 +816,7 @@ exports.createOrder = async (req, res) => {
             };
         }));
 
-        // 🌟 FINAL TOTAL CALCULATION (Syncing strictly with Postman ₹85)
+        // 🌟 FINAL TOTAL CALCULATION (Strictly syncing: 800 + 85 = 885)
         const finalTotalAmount = totalItemTotal + finalCustomerShippingTotal;
 
         // 🌟 STEP 3: Payment Status Logic
