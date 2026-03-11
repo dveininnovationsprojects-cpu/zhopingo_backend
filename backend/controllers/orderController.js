@@ -729,6 +729,7 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
 
 //     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 // };
+
 /* =====================================================
     🌟 MASTER CREATE ORDER (All Logics Integrated)
 ===================================================== */
@@ -745,7 +746,6 @@ exports.createOrder = async (req, res) => {
         };
 
         let totalItemTotal = 0;
-        let totalCustomerPayableShipping = 0;
         let sellerWiseSplit = {};
         const processedItems = [];
 
@@ -784,8 +784,10 @@ exports.createOrder = async (req, res) => {
         }
 
         // 🌟 STEP 2: Calculate Dynamic Rates & Finance for Each Seller Package
+        let finalCustomerShippingTotal = 0; // 👈 Fresh Counter for Grand Total
+
         const finalSellerSplitData = await Promise.all(Object.values(sellerWiseSplit).map(async (split) => {
-            // 🚚 API Handshake: Sending Accumulated Weight (e.g., 1000g)
+            // 🚚 API Handshake: Sending Accumulated Weight (e.g., 2000g for noodles)
             const apiRate = await getLiveShippingRate(
                 shippingAddress.pincode, 
                 split.totalWeightGrams, 
@@ -795,13 +797,13 @@ exports.createOrder = async (req, res) => {
             );
 
             /* =====================================================
-                💰 PROFIT MODEL: Min ₹80 rule
-                If API 30 -> Customer pays 80 (Admin gets 50).
+                💰 PROFIT MODEL: Min ₹80 rule (Sync with Cart ₹85)
+                If API 45 -> Customer pays 85 (Admin gets 40).
             ===================================================== */
             const customerShippingCharge = split.isFreeDeliveryPackage ? 0 : Math.max(80, apiRate);
             const deliveryDeductionFromSeller = split.isFreeDeliveryPackage ? Math.max(80, apiRate) : 0;
             
-            totalCustomerPayableShipping += customerShippingCharge;
+            finalCustomerShippingTotal += customerShippingCharge; // 👈 Handshake ippo katchithama vizhum
 
             // Finance Splits (GST/Commission)
             const comm = (split.sellerSubtotal * settings.commissionPercent) / 100;
@@ -823,7 +825,8 @@ exports.createOrder = async (req, res) => {
             };
         }));
 
-        const finalTotalAmount = totalItemTotal + totalCustomerPayableShipping;
+        // 🌟 FINAL TOTAL CALCULATION (Syncing strictly with Postman ₹85)
+        const finalTotalAmount = totalItemTotal + finalCustomerShippingTotal;
 
         // 🌟 STEP 3: Payment Status Logic
         let paymentStatus = "Pending";
@@ -843,10 +846,10 @@ exports.createOrder = async (req, res) => {
             sellerSplitData: finalSellerSplitData,
             billDetails: { 
                 itemTotal: totalItemTotal, 
-                deliveryCharge: totalCustomerPayableShipping, 
+                deliveryCharge: finalCustomerShippingTotal, // 👈 Dynamically synced ippo ₹85 vizhum
                 totalAmount: finalTotalAmount 
             },
-            totalAmount: finalTotalAmount,
+            totalAmount: finalTotalAmount, // 🌟 THIS IS WHAT PHONEPE READS (₹885)
             paymentMethod,
             shippingAddress,
             status: orderStatus, 
