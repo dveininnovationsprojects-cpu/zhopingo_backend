@@ -590,50 +590,40 @@ const getLiveShippingRate = async (destPincode, weightValue, unit, sellerPincode
 
 
 /* =====================================================
-    🌟 1. LIVE RATE ENDPOINT (Integrated with Weight Multiplication)
+    🌟 1. LIVE RATE ENDPOINT (Integrated with Margin Fix)
 ===================================================== */
 exports.calculateLiveDeliveryRate = async (req, res) => {
     try {
         const { pincode, paymentMode, weightValue, unit, sellerPincode } = req.query;
         const origin = sellerPincode || "600001"; 
-
-        // ⚖️ Frontend-la irundhu kooti anuppuna total weight (Ex: 1000)
         const totalWeight = Number(weightValue) || 500;
-        const weightUnit = unit || 'g';
 
-        // 📡 Step 1: Get Direct API Cost from Delhivery
-        let actualApiCost = await getLiveShippingRate(pincode, totalWeight, weightUnit, origin, paymentMode);
+        // 📡 Step 1: Get Direct API Cost
+        let actualApiCost = await getLiveShippingRate(pincode, totalWeight, unit || 'g', origin, paymentMode);
         
-        /* =====================================================
-            ⚠️ STAGING SAFETY logic:
-            Delhivery staging API 0 kudutha, namma logic-ah trigger panroam.
-            Weight-ku yetha maari amount kootra logic idhu dhaan.
-        ===================================================== */
+        // ⚠️ STAGING SAFETY: API 0 vandha manual slab
         if (actualApiCost === 0) {
-            console.log("⚠️ Staging API returned 0. Calculating based on Manual Weight Slabs...");
-            const kg = universalWeightSync(totalWeight, weightUnit);
-            // Manual Rule: 500g-ku 40rs base, every extra 500g-ku +15rs (Ex: 1kg = 55rs)
+            const kg = universalWeightSync(totalWeight, unit || 'g');
             actualApiCost = 40 + (Math.max(0, Math.ceil((kg - 0.5) / 0.5)) * 15);
         }
         
         /* =====================================================
-            💰 THE PROFIT RULE:
-            Rule: Customer-ku minimum ₹80 kaatanum. 
-            If actualApiCost is ₹55 -> Customer pays ₹80 (Admin gets ₹25).
-            If actualApiCost is ₹120 -> Customer pays ₹120 (Admin gets ₹0).
+            💰 NEW PROFIT MODEL:
+            Old Rule (Force 80) logic-ah remove pannittaen.
+            New Rule: API Cost + 40rs (Margin).
+            Min floor strictly 80.
         ===================================================== */
-        const customerPayableCharge = Math.max(80, actualApiCost);
-        const adminProfitFromDelivery = customerPayableCharge - actualApiCost;
+        // Example: 45 (API) + 40 (Margin) = ₹85
+        const customerPayableCharge = Math.max(80, actualApiCost + 40); 
 
         res.json({ 
             success: true, 
-            finalCharge: customerPayableCharge,      // 👈 Screen-la kaata vendiyadhu
-            actualLogisticsCost: actualApiCost,        // 👈 Delhivery partner-ku poguradhu
-            adminLogisticsProfit: adminProfitFromDelivery, // 👈 Admin-ku vara profit
-            appliedWeight: totalWeight + weightUnit
+            finalCharge: customerPayableCharge, // 👈 Ippo katchithama ₹85 varum
+            actualLogisticsCost: actualApiCost,
+            adminLogisticsProfit: customerPayableCharge - actualApiCost,
+            appliedWeight: totalWeight + (unit || 'g')
         });
     } catch (err) {
-        console.error("Rate API Error:", err.message);
         res.status(500).json({ success: false, finalCharge: 80 });
     }
 };
