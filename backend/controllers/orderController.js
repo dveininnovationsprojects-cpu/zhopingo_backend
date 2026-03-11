@@ -576,20 +576,31 @@ const getLiveShippingRate = async (destPincode, weightValue, unit, sellerPincode
         return response.data?.[0]?.total_amount || response.data?.[0]?.gross_amount || 0;
     } catch (error) { return 0; }
 };
-
-/* =====================================================
-    🌟 1. LIVE RATE ENDPOINT (Cart Screen Logic)
-===================================================== */
+// orderController.js - calculateLiveDeliveryRate check
 exports.calculateLiveDeliveryRate = async (req, res) => {
     try {
-        const { pincode, paymentMode = "Pre-paid", weightValue, unit, sellerPincode } = req.query;
-        if (!pincode) return res.status(400).json({ success: false, error: "Pincode is required" });
+        const { pincode, paymentMode, weightValue, unit, sellerPincode } = req.query;
+        
+        // 🌟 Connection Fix: Standardize incoming values
+        const weight = Number(weightValue) || 500;
+        const weightUnit = unit || 'g';
         const origin = sellerPincode || "600001"; 
-        const liveCost = await getLiveShippingRate(pincode, weightValue || 500, unit || 'g', origin, paymentMode);
+
+        const liveCost = await getLiveShippingRate(pincode, weight, weightUnit, origin, paymentMode || 'Pre-paid');
+        
+        // Final logic sync
         let finalCharge = Math.ceil(Number(liveCost) + ADMIN_MARGIN);
         if (finalCharge < 80) finalCharge = 80; 
-        res.json({ success: true, finalCharge, actualDelhiveryCost: liveCost });
-    } catch (err) { res.status(500).json({ success: false, finalCharge: 80, error: err.message }); }
+
+        res.json({ 
+            success: true, 
+            finalCharge, 
+            actualDelhiveryCost: liveCost,
+            appliedWeight: weight + weightUnit
+        });
+    } catch (err) { 
+        res.status(500).json({ success: false, finalCharge: 80 }); 
+    }
 };
 
 /* =====================================================
