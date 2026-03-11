@@ -564,61 +564,156 @@ const universalWeightSync = (value, unit) => {
 };
 
 /* =====================================================
-    🚚 DELHI LIVE RATE API
+    🚚 HELPER: DYNAMIC SHIPPING RATE (Pure API Cost Only)
 ===================================================== */
 const getLiveShippingRate = async (destPincode, weightValue, unit, sellerPincode, paymentMode) => {
     try {
         const weightInKg = universalWeightSync(weightValue, unit).toFixed(2);
         const response = await axios.get("https://staging-express.delhivery.com/api/kinko/v1/invoice/charges/.json", {
-            params: { ss: "R", pt: paymentMode === "COD" ? "Cash" : "Pre-paid", o_pin: sellerPincode, d_pin: destPincode, weight: weightInKg },
+            params: { 
+                ss: "R", 
+                pt: paymentMode === "COD" ? "Cash" : "Pre-paid", 
+                o_pin: sellerPincode, 
+                d_pin: destPincode, 
+                weight: weightInKg 
+            },
             headers: { 'Authorization': `Token ${DELHI_TOKEN}` }
         });
-        return response.data?.[0]?.total_amount || response.data?.[0]?.gross_amount || 0;
-    } catch (error) { return 0; }
+
+        // 🌟 Pure API Cost Mattum Edukkuroam (No hidden margins here)
+        const apiRate = response.data?.[0]?.total_amount || response.data?.[0]?.gross_amount || 0;
+        return Math.ceil(apiRate);
+    } catch (error) {
+        return 0; // If API fails
+    }
 };
 // orderController.js - calculateLiveDeliveryRate Logic Update
 
+/* =====================================================
+    🌟 1. LIVE RATE ENDPOINT (Cart Screen Sync)
+===================================================== */
 exports.calculateLiveDeliveryRate = async (req, res) => {
     try {
         const { pincode, paymentMode, weightValue, unit, sellerPincode } = req.query;
-        
-        const weight = Number(weightValue) || 500;
-        const weightUnit = unit || 'g';
         const origin = sellerPincode || "600001"; 
 
-        // 📡 API Rate Call
-        const liveCost = await getLiveShippingRate(pincode, weight, weightUnit, origin, paymentMode || 'Pre-paid');
+        // API-la irundhu vara base delivery charge (Ex: ₹30)
+        const actualApiCost = await getLiveShippingRate(pincode, weightValue || 500, unit || 'g', origin, paymentMode);
         
         /* =====================================================
-            🌟 THE DYNAMIC SYNC FIX: 
-            If API returns 0 (Staging Issue), use manual weight logic
+            🌟 THE PROFIT LOGIC:
+            Rule: Customer-ku minimum ₹80 kaatanum. 
+            If API is ₹30 -> Customer pays ₹80 (Admin gets ₹50 profit).
+            If API is ₹100 -> Customer pays ₹100 (Admin gets ₹0 profit).
         ===================================================== */
-        let baseCharge = Number(liveCost);
-
-        if (baseCharge === 0) {
-            console.log("⚠️ Staging API returned 0. Applying Manual Weight Logic...");
-            // Manual Logic: 500g-ku ₹40, every extra 500g-ku +₹20 (Example)
-            const weightInKg = universalWeightSync(weight, weightUnit);
-            baseCharge = 40 + (Math.ceil(weightInKg * 2) * 10); 
-        }
-
-        // Final logic: Charge + Admin Margin (Total should be at least 80)
-        let finalCharge = Math.ceil(baseCharge + ADMIN_MARGIN);
-        if (finalCharge < 80) finalCharge = 80; 
+        const customerPayableCharge = Math.max(80, actualApiCost);
+        const adminProfitFromDelivery = customerPayableCharge - actualApiCost;
 
         res.json({ 
             success: true, 
-            finalCharge, 
-            actualDelhiveryCost: liveCost, // Staging-la 0-nu vandhalum finalCharge dynamic-ah irukkum
-            appliedWeight: weight + weightUnit
+            finalCharge: customerPayableCharge, // 👈 Customer-ku idhu dhaan theriyaum
+            actualLogisticsCost: actualApiCost,   // 👈 Delivery partner-ku pogura kasu
+            adminLogisticsProfit: adminProfitFromDelivery // 👈 Unakku vara profit
         });
-    } catch (err) { 
-        res.status(500).json({ success: false, finalCharge: 80 }); 
+    } catch (err) {
+        res.status(500).json({ success: false, finalCharge: 80 });
     }
 };
 
+// /* =====================================================
+//     🌟 2. MASTER CREATE ORDER (Finance & Multi-Seller)
+// ===================================================== */
+// exports.createOrder = async (req, res) => {
+//     try {
+//         const { items, customerId, shippingAddress, paymentMethod } = req.body;
+//         const user = await User.findById(customerId);
+//         if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+//         const settings = await FinanceSettings.findOne() || { commissionPercent: 10, gstOnCommissionPercent: 18, tdsPercent: 2 };
+
+//         let totalItemTotal = 0;
+//         let totalCustomerPayableShipping = 0;
+//         let sellerWiseSplit = {};
+//         const processedItems = [];
+
+//         for (const item of items) {
+//             const productDoc = await Product.findById(item.productId || item._id);
+//             const sellerDoc = await Seller.findById(productDoc?.seller || item.sellerId);
+//             if (!productDoc || !sellerDoc) continue;
+
+//             const subtotal = Number(item.price) * Number(item.quantity);
+//             totalItemTotal += subtotal;
+//             const weightKg = universalWeightSync(productDoc.weightValue || productDoc.weight, productDoc.unit) * item.quantity;
+//             const pickupPin = sellerDoc.shopAddress?.pincode || sellerDoc.pincode || "600001";
+
+//             const apiRate = await getLiveShippingRate(shippingAddress.pincode, productDoc.weightValue, productDoc.unit, pickupPin, paymentMethod);
+//             const dynamicCharge = Math.max(80, Math.ceil(apiRate + ADMIN_MARGIN));
+
+//             const sIdStr = sellerDoc._id.toString();
+//             if (!sellerWiseSplit[sIdStr]) {
+//                 sellerWiseSplit[sIdStr] = {
+//                     sellerId: sellerDoc._id, shopName: sellerDoc.shopName,
+//                     commissionPercent: settings.commissionPercent, sellerSubtotal: 0,
+//                     deliveryDeductionFromSeller: 0, customerShippingForThisSeller: 0, totalWeightKg: 0
+//                 };
+//             }
+
+//             if (productDoc.isFreeDelivery) {
+//                 sellerWiseSplit[sIdStr].deliveryDeductionFromSeller = dynamicCharge; 
+//             } else if (sellerWiseSplit[sIdStr].sellerSubtotal === 0) {
+//                 sellerWiseSplit[sIdStr].customerShippingForThisSeller = dynamicCharge; 
+//             }
+
+//             processedItems.push({
+//                 productId: productDoc._id, name: item.name, quantity: item.quantity,
+//                 price: item.price, mrp: item.mrp || item.price, sellerId: sellerDoc._id,
+//                 hsnCode: productDoc.hsnCode || "0000", weightKg: weightKg, image: item.image || ""
+//             });
+
+//             sellerWiseSplit[sIdStr].sellerSubtotal += subtotal;
+//             sellerWiseSplit[sIdStr].totalWeightKg += weightKg;
+//         }
+
+//         const finalSellerSplitData = Object.values(sellerWiseSplit).map(split => {
+//             const comm = (split.sellerSubtotal * split.commissionPercent) / 100;
+//             const gst = (comm * settings.gstOnCommissionPercent) / 100;
+//             const tds = (split.sellerSubtotal * settings.tdsPercent) / 100;
+//             totalCustomerPayableShipping += split.customerShippingForThisSeller;
+
+//             return {
+//                 sellerId: split.sellerId, shopName: split.shopName, sellerSubtotal: split.sellerSubtotal,
+//                 commissionTotal: comm, gstTotal: gst, tdsTotal: tds,
+//                 deliveryDeduction: split.deliveryDeductionFromSeller,
+//                 finalPayable: split.sellerSubtotal - (comm + gst + tds + split.deliveryDeductionFromSeller),
+//                 totalWeightKg: split.totalWeightKg, status: 'Pending'
+//             };
+//         });
+
+//         const finalTotalAmount = totalItemTotal + totalCustomerPayableShipping;
+
+//         let paymentStatus = "Pending";
+//         if (paymentMethod === "WALLET") {
+//             if (user.walletBalance < finalTotalAmount) return res.status(400).json({ success: false, message: "Insufficient Balance" });
+//             user.walletBalance -= finalTotalAmount;
+//             user.walletTransactions.unshift({ amount: finalTotalAmount, type: 'DEBIT', reason: `Order Payment`, date: new Date() });
+//             await user.save();
+//             paymentStatus = "Paid";
+//         }
+
+//         const newOrder = new Order({
+//             customerId: user._id, items: processedItems, sellerSplitData: finalSellerSplitData,
+//             billDetails: { itemTotal: totalItemTotal, deliveryCharge: totalCustomerPayableShipping, totalAmount: finalTotalAmount },
+//             totalAmount: finalTotalAmount, paymentMethod, shippingAddress, status: 'Placed', paymentStatus
+//         });
+
+//         await newOrder.save();
+//         res.status(201).json({ success: true, order: newOrder });
+
+//     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+// };
+
 /* =====================================================
-    🌟 2. MASTER CREATE ORDER (Finance & Multi-Seller)
+    🌟 2. MASTER CREATE ORDER (Profit Model & Dynamic Weight)
 ===================================================== */
 exports.createOrder = async (req, res) => {
     try {
@@ -626,87 +721,124 @@ exports.createOrder = async (req, res) => {
         const user = await User.findById(customerId);
         if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-        const settings = await FinanceSettings.findOne() || { commissionPercent: 10, gstOnCommissionPercent: 18, tdsPercent: 2 };
+        const settings = await FinanceSettings.findOne() || { 
+            commissionPercent: 10, 
+            gstOnCommissionPercent: 18, 
+            tdsPercent: 2 
+        };
 
         let totalItemTotal = 0;
         let totalCustomerPayableShipping = 0;
         let sellerWiseSplit = {};
         const processedItems = [];
 
+        // 🌟 STEP 1: CALCULATE TOTALS & PACKAGE WEIGHT
         for (const item of items) {
             const productDoc = await Product.findById(item.productId || item._id);
             const sellerDoc = await Seller.findById(productDoc?.seller || item.sellerId);
             if (!productDoc || !sellerDoc) continue;
 
-            const subtotal = Number(item.price) * Number(item.quantity);
+            const qty = Number(item.quantity);
+            const subtotal = Number(item.price) * qty;
             totalItemTotal += subtotal;
-            const weightKg = universalWeightSync(productDoc.weightValue || productDoc.weight, productDoc.unit) * item.quantity;
-            const pickupPin = sellerDoc.shopAddress?.pincode || sellerDoc.pincode || "600001";
 
-            const apiRate = await getLiveShippingRate(shippingAddress.pincode, productDoc.weightValue, productDoc.unit, pickupPin, paymentMethod);
-            const dynamicCharge = Math.max(80, Math.ceil(apiRate + ADMIN_MARGIN));
-
+            // ⚖️ WEIGHT LOGIC: unit weight * quantity (Ex: 500g * 2 = 1000g)
+            const itemBaseWeight = Number(productDoc.weightValue || productDoc.weight || 500);
+            const totalWeightForThisItemGrams = itemBaseWeight * qty;
+            
             const sIdStr = sellerDoc._id.toString();
             if (!sellerWiseSplit[sIdStr]) {
+                const pickupPin = sellerDoc.shopAddress?.pincode || sellerDoc.pincode || "600001";
+                
+                // 🚚 GET PURE API RATE (Strictly for total package weight)
+                const apiRate = await getLiveShippingRate(
+                    shippingAddress.pincode, 
+                    totalWeightForThisItemGrams, 
+                    'g', 
+                    pickupPin, 
+                    paymentMethod
+                );
+
+                /* =====================================================
+                    💰 THE PROFIT RULE: Minimum ₹80 for Customer. 
+                    If API is ₹30 -> Customer pays ₹80 (Admin gets ₹50).
+                ===================================================== */
+                const customerPayableCharge = Math.max(80, apiRate);
+
                 sellerWiseSplit[sIdStr] = {
-                    sellerId: sellerDoc._id, shopName: sellerDoc.shopName,
-                    commissionPercent: settings.commissionPercent, sellerSubtotal: 0,
-                    deliveryDeductionFromSeller: 0, customerShippingForThisSeller: 0, totalWeightKg: 0
+                    sellerId: sellerDoc._id,
+                    shopName: sellerDoc.shopName,
+                    commissionPercent: settings.commissionPercent,
+                    sellerSubtotal: 0,
+                    customerShippingForThisSeller: customerPayableCharge, // Bill amount
+                    actualLogisticsCost: apiRate, // What we pay Delhivery
+                    adminLogisticsProfit: customerPayableCharge - apiRate, // Your Profit
+                    totalWeightKg: 0
                 };
             }
 
-            if (productDoc.isFreeDelivery) {
-                sellerWiseSplit[sIdStr].deliveryDeductionFromSeller = dynamicCharge; 
-            } else if (sellerWiseSplit[sIdStr].sellerSubtotal === 0) {
-                sellerWiseSplit[sIdStr].customerShippingForThisSeller = dynamicCharge; 
-            }
-
             processedItems.push({
-                productId: productDoc._id, name: item.name, quantity: item.quantity,
+                productId: productDoc._id, name: item.name, quantity: qty,
                 price: item.price, mrp: item.mrp || item.price, sellerId: sellerDoc._id,
-                hsnCode: productDoc.hsnCode || "0000", weightKg: weightKg, image: item.image || ""
+                hsnCode: productDoc.hsnCode || "0000", 
+                weightKg: totalWeightForThisItemGrams / 1000,
+                image: item.image || ""
             });
 
             sellerWiseSplit[sIdStr].sellerSubtotal += subtotal;
-            sellerWiseSplit[sIdStr].totalWeightKg += weightKg;
+            sellerWiseSplit[sIdStr].totalWeightKg += (totalWeightForThisItemGrams / 1000);
         }
 
-        const finalSellerSplitData = Object.values(sellerWiseSplit).map(split => {
-            const comm = (split.sellerSubtotal * split.commissionPercent) / 100;
-            const gst = (comm * settings.gstOnCommissionPercent) / 100;
-            const tds = (split.sellerSubtotal * settings.tdsPercent) / 100;
-            totalCustomerPayableShipping += split.customerShippingForThisSeller;
-
-            return {
-                sellerId: split.sellerId, shopName: split.shopName, sellerSubtotal: split.sellerSubtotal,
-                commissionTotal: comm, gstTotal: gst, tdsTotal: tds,
-                deliveryDeduction: split.deliveryDeductionFromSeller,
-                finalPayable: split.sellerSubtotal - (comm + gst + tds + split.deliveryDeductionFromSeller),
-                totalWeightKg: split.totalWeightKg, status: 'Pending'
-            };
+        // 🌟 STEP 2: CONSOLIDATE TOTAL SHIPPING
+        Object.values(sellerWiseSplit).forEach(s => {
+            totalCustomerPayableShipping += s.customerShippingForThisSeller;
         });
 
         const finalTotalAmount = totalItemTotal + totalCustomerPayableShipping;
 
+        // 🌟 STEP 3: PAYMENT & STATUS (Strictly Pending for PhonePe)
         let paymentStatus = "Pending";
+        let orderStatus = "Pending"; 
+
         if (paymentMethod === "WALLET") {
             if (user.walletBalance < finalTotalAmount) return res.status(400).json({ success: false, message: "Insufficient Balance" });
             user.walletBalance -= finalTotalAmount;
             user.walletTransactions.unshift({ amount: finalTotalAmount, type: 'DEBIT', reason: `Order Payment`, date: new Date() });
             await user.save();
             paymentStatus = "Paid";
+            orderStatus = "Placed"; 
         }
 
         const newOrder = new Order({
-            customerId: user._id, items: processedItems, sellerSplitData: finalSellerSplitData,
-            billDetails: { itemTotal: totalItemTotal, deliveryCharge: totalCustomerPayableShipping, totalAmount: finalTotalAmount },
-            totalAmount: finalTotalAmount, paymentMethod, shippingAddress, status: 'Placed', paymentStatus
+            customerId: user._id,
+            items: processedItems,
+            sellerSplitData: Object.values(sellerWiseSplit).map(split => ({
+                sellerId: split.sellerId,
+                shopName: split.shopName,
+                sellerSubtotal: split.sellerSubtotal,
+                // Partner Payout Calculation
+                finalPayable: split.sellerSubtotal - ((split.sellerSubtotal * split.commissionPercent) / 100),
+                adminProfitFromShipping: split.adminLogisticsProfit,
+                status: 'Pending'
+            })),
+            billDetails: { 
+                itemTotal: totalItemTotal, 
+                deliveryCharge: totalCustomerPayableShipping, 
+                totalAmount: finalTotalAmount 
+            },
+            totalAmount: finalTotalAmount,
+            paymentMethod,
+            shippingAddress,
+            status: orderStatus, 
+            paymentStatus: paymentStatus
         });
 
         await newOrder.save();
         res.status(201).json({ success: true, order: newOrder });
 
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+    } catch (err) { 
+        res.status(500).json({ success: false, error: err.message }); 
+    }
 };
 
 /* =====================================================
