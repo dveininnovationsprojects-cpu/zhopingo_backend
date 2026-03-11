@@ -576,26 +576,40 @@ const getLiveShippingRate = async (destPincode, weightValue, unit, sellerPincode
         return response.data?.[0]?.total_amount || response.data?.[0]?.gross_amount || 0;
     } catch (error) { return 0; }
 };
-// orderController.js - calculateLiveDeliveryRate check
+// orderController.js - calculateLiveDeliveryRate Logic Update
+
 exports.calculateLiveDeliveryRate = async (req, res) => {
     try {
         const { pincode, paymentMode, weightValue, unit, sellerPincode } = req.query;
         
-        // 🌟 Connection Fix: Standardize incoming values
         const weight = Number(weightValue) || 500;
         const weightUnit = unit || 'g';
         const origin = sellerPincode || "600001"; 
 
+        // 📡 API Rate Call
         const liveCost = await getLiveShippingRate(pincode, weight, weightUnit, origin, paymentMode || 'Pre-paid');
         
-        // Final logic sync
-        let finalCharge = Math.ceil(Number(liveCost) + ADMIN_MARGIN);
+        /* =====================================================
+            🌟 THE DYNAMIC SYNC FIX: 
+            If API returns 0 (Staging Issue), use manual weight logic
+        ===================================================== */
+        let baseCharge = Number(liveCost);
+
+        if (baseCharge === 0) {
+            console.log("⚠️ Staging API returned 0. Applying Manual Weight Logic...");
+            // Manual Logic: 500g-ku ₹40, every extra 500g-ku +₹20 (Example)
+            const weightInKg = universalWeightSync(weight, weightUnit);
+            baseCharge = 40 + (Math.ceil(weightInKg * 2) * 10); 
+        }
+
+        // Final logic: Charge + Admin Margin (Total should be at least 80)
+        let finalCharge = Math.ceil(baseCharge + ADMIN_MARGIN);
         if (finalCharge < 80) finalCharge = 80; 
 
         res.json({ 
             success: true, 
             finalCharge, 
-            actualDelhiveryCost: liveCost,
+            actualDelhiveryCost: liveCost, // Staging-la 0-nu vandhalum finalCharge dynamic-ah irukkum
             appliedWeight: weight + weightUnit
         });
     } catch (err) { 
