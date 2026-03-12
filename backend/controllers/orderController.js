@@ -718,142 +718,143 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
 //     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 // };
 /* =====================================================
-    🌟 MASTER CREATE ORDER (All Logics Integrated)
+    🌟 MASTER CREATE ORDER (All Logics Integrated)
 ===================================================== */
 exports.createOrder = async (req, res) => {
-    try {
-        const { items, customerId, shippingAddress, paymentMethod } = req.body;
-        const user = await User.findById(customerId);
-        if (!user) return res.status(404).json({ success: false, message: "User not found" });
+    try {
+        const { items, customerId, shippingAddress, paymentMethod } = req.body;
+        const user = await User.findById(customerId);
+        if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-        const settings = await FinanceSettings.findOne() || { 
-            commissionPercent: 10, 
-            gstOnCommissionPercent: 18, 
-            tdsPercent: 2 
-        };
+        const settings = await FinanceSettings.findOne() || { 
+            commissionPercent: 10, 
+            gstOnCommissionPercent: 18, 
+            tdsPercent: 2 
+        };
 
-        let totalItemTotal = 0;
-        let sellerWiseSplit = {};
-        const processedItems = [];
+        let totalItemTotal = 0;
+        let sellerWiseSplit = {};
+        const processedItems = [];
 
-        // 🌟 STEP 1: Process Items & Sum up Weight per Seller
-        for (const item of items) {
-            const productDoc = await Product.findById(item.productId || item._id);
-            const sellerDoc = await Seller.findById(productDoc?.seller || item.sellerId);
-            if (!productDoc || !sellerDoc) continue;
+        // 🌟 STEP 1: Process Items & Sum up Weight per Seller
+        for (const item of items) {
+            const productDoc = await Product.findById(item.productId || item._id);
+            const sellerDoc = await Seller.findById(productDoc?.seller || item.sellerId);
+            if (!productDoc || !sellerDoc) continue;
 
-            const qty = Number(item.quantity);
-            const subtotal = Number(item.price) * qty;
-            totalItemTotal += subtotal;
+            const qty = Number(item.quantity);
+            const subtotal = Number(item.price) * qty;
+            totalItemTotal += subtotal;
 
-            const sIdStr = sellerDoc._id.toString();
-            if (!sellerWiseSplit[sIdStr]) {
-                sellerWiseSplit[sIdStr] = {
-                    sellerId: sellerDoc._id,
-                    shopName: sellerDoc.shopName,
-                    pickupPincode: sellerDoc.shopAddress?.pincode || sellerDoc.pincode || "600001",
-                    sellerSubtotal: 0,
-                    totalWeightGrams: 0,
-                    isFreeDeliveryPackage: productDoc.isFreeDelivery // Logic sync
-                };
-            }
+            const sIdStr = sellerDoc._id.toString();
+            if (!sellerWiseSplit[sIdStr]) {
+                sellerWiseSplit[sIdStr] = {
+                    sellerId: sellerDoc._id,
+                    shopName: sellerDoc.shopName,
+                    pickupPincode: sellerDoc.shopAddress?.pincode || sellerDoc.pincode || "600001",
+      0             sellerSubtotal: 0,
+                    totalWeightGrams: 0,
+                    isFreeDeliveryPackage: productDoc.isFreeDelivery // Logic sync
+                };
+            }
 
-            // ⚖️ Weight Fix: unit weight * quantity (Ex: 500g * 2 = 1000g)
-            sellerWiseSplit[sIdStr].totalWeightGrams += (Number(productDoc.weightValue || productDoc.weight || 500) * qty);
-            sellerWiseSplit[sIdStr].sellerSubtotal += subtotal;
+            // ⚖️ Weight Fix: unit weight * quantity (Ex: 500g * 2 = 1000g)
+            sellerWiseSplit[sIdStr].totalWeightGrams += (Number(productDoc.weightValue || productDoc.weight || 500) * qty);
+            sellerWiseSplit[sIdStr].sellerSubtotal += subtotal;
 
-            processedItems.push({
-                productId: productDoc._id, name: item.name, quantity: qty,
-                price: item.price, mrp: item.mrp || item.price, sellerId: sellerDoc._id,
-                hsnCode: productDoc.hsnCode || "0000",
-                image: item.image || ""
-            });
-        }
+            processedItems.push({
+                productId: productDoc._id, name: item.name, quantity: qty,
+                price: item.price, mrp: item.mrp || item.price, sellerId: sellerDoc._id,
+                hsnCode: productDoc.hsnCode || "0000",
+                image: item.image || ""
+            });
+        }
 
-        // 🌟 STEP 2: Calculate Dynamic Rates & Finance for Each Seller Package
-        let finalCustomerShippingTotal = 0; // 👈 Fresh Counter for Grand Total
+        // 🌟 STEP 2: Calculate Dynamic Rates & Finance for Each Seller Package
+        let finalCustomerShippingTotal = 0; // 👈 Fresh Counter for Grand Total
 
-        const finalSellerSplitData = await Promise.all(Object.values(sellerWiseSplit).map(async (split) => {
-            // 🚚 API Handshake: Sending Accumulated Weight (e.g., 2000g for noodles)
-            const apiRate = await getLiveShippingRate(
-                shippingAddress.pincode, 
-                split.totalWeightGrams, 
-                'g', 
-                split.pickupPincode, 
-                paymentMethod
-            );
+        const finalSellerSplitData = await Promise.all(Object.values(sellerWiseSplit).map(async (split) => {
+            // 🚚 API Handshake: Sending Accumulated Weight (e.g., 2000g for noodles)
+            const apiRate = await getLiveShippingRate(
+                shippingAddress.pincode, 
+                split.totalWeightGrams, 
+                'g', 
+                split.pickupPincode, 
+                paymentMethod
+            );
 
-            /* =====================================================
-                💰 PROFIT MODEL SYNC (The PhonePe Fix):
-                Rule: API Cost + ADMIN_MARGIN (40rs). 
-                Min floor strictly 80.
-                Example: API 45 + 40 = ₹85 (Ippo katchithama DB-la vizhum!)
-            ===================================================== */
-            const dynamicCharge = Math.max(80, (apiRate + 40)); 
-            
-            const customerShippingCharge = split.isFreeDeliveryPackage ? 0 : dynamicCharge;
-            const deliveryDeductionFromSeller = split.isFreeDeliveryPackage ? dynamicCharge : 0;
-            
-            finalCustomerShippingTotal += customerShippingCharge; // 👈 Handshake ippo katchithama vizhum
+            /* =====================================================
+                💰 PROFIT MODEL SYNC (The PhonePe Fix):
+                Rule: API Cost + ADMIN_MARGIN (40rs). 
+                Min floor strictly 80.
+                Example: API 45 + 40 = ₹85 (Ippo katchithama DB-la vizhum!)
+            ===================================================== */
+            const dynamicCharge = Math.max(80, (apiRate + 40)); 
+            
+            const customerShippingCharge = split.isFreeDeliveryPackage ? 0 : dynamicCharge;
+            const deliveryDeductionFromSeller = split.isFreeDeliveryPackage ? dynamicCharge : 0;
+            
+            finalCustomerShippingTotal += customerShippingCharge; // 👈 Handshake ippo katchithama vizhum
 
-            // Finance Splits (GST/Commission)
-            const comm = (split.sellerSubtotal * settings.commissionPercent) / 100;
-            const gst = (comm * settings.gstOnCommissionPercent) / 100;
-            const tds = (split.sellerSubtotal * settings.tdsPercent) / 100;
+            // Finance Splits (GST/Commission)
+            const comm = (split.sellerSubtotal * settings.commissionPercent) / 100;
+            const gst = (comm * settings.gstOnCommissionPercent) / 100;
+            const tds = (split.sellerSubtotal * settings.tdsPercent) / 100;
 
-            return {
-                sellerId: split.sellerId,
-                shopName: split.shopName,
-                sellerSubtotal: split.sellerSubtotal,
-                commissionTotal: comm,
-                gstTotal: gst,
-                tdsTotal: tds,
-                deliveryDeduction: deliveryDeductionFromSeller,
-                adminProfitFromShipping: (customerShippingCharge > 0) ? (customerShippingCharge - apiRate) : 0,
-                // Final Partner Payout
-                finalPayable: split.sellerSubtotal - (comm + gst + tds + deliveryDeductionFromSeller),
-                status: 'Pending'
-            };
-        }));
+            return {
+                sellerId: split.sellerId,
+                shopName: split.shopName,
+                sellerSubtotal: split.sellerSubtotal,
+                commissionTotal: comm,
+                gstTotal: gst,
+                tdsTotal: tds,
+                deliveryDeduction: deliveryDeductionFromSeller,
+                adminProfitFromShipping: (customerShippingCharge > 0) ? (customerShippingCharge - apiRate) : 0,
+                // Final Partner Payout
+                finalPayable: split.sellerSubtotal - (comm + gst + tds + deliveryDeductionFromSeller),
+                status: 'Pending'
+            };
+        }));
 
-        // 🌟 FINAL TOTAL CALCULATION (Strictly syncing: 800 + 85 = 885)
-        const finalTotalAmount = totalItemTotal + finalCustomerShippingTotal;
+        // 🌟 FINAL TOTAL CALCULATION (Strictly syncing: 800 + 85 = 885)
+        const finalTotalAmount = totalItemTotal + finalCustomerShippingTotal;
 
-        // 🌟 STEP 3: Payment Status Logic
-        let paymentStatus = "Pending";
-        let orderStatus = "Pending"; 
+        // 🌟 STEP 3: Payment Status Logic
+        let paymentStatus = "Pending";
+        let orderStatus = "Pending"; 
 
-        if (paymentMethod === "WALLET") {
-            if (user.walletBalance < finalTotalAmount) return res.status(400).json({ success: false, message: "Insufficient Balance" });
-            user.walletBalance -= finalTotalAmount;
-            user.walletTransactions.unshift({ amount: finalTotalAmount, type: 'DEBIT', reason: `Order Payment`, date: new Date() });
-            await user.save();
-            paymentStatus = "Paid"; orderStatus = "Placed";
-        }
+        if (paymentMethod === "WALLET") {
+            if (user.walletBalance < finalTotalAmount) return res.status(400).json({ success: false, message: "Insufficient Balance" });
+            user.walletBalance -= finalTotalAmount;
+            user.walletTransactions.unshift({ amount: finalTotalAmount, type: 'DEBIT', reason: `Order Payment`, date: new Date() });
+            await user.save();
+            paymentStatus = "Paid"; orderStatus = "Placed";
+        }
 
-        const newOrder = new Order({
-            customerId: user._id,
-            items: processedItems,
-            sellerSplitData: finalSellerSplitData,
-            billDetails: { 
-                itemTotal: totalItemTotal, 
-                deliveryCharge: finalCustomerShippingTotal, // 👈 Dynamically synced ippo ₹85 vizhum
-                totalAmount: finalTotalAmount 
-            },
-            totalAmount: finalTotalAmount, // 🌟 THIS IS WHAT PHONEPE READS (₹885)
-            paymentMethod,
-            shippingAddress,
-            status: orderStatus, 
-            paymentStatus: paymentStatus
-        });
+        const newOrder = new Order({
+            customerId: user._id,
+            items: processedItems,
+            sellerSplitData: finalSellerSplitData,
+            billDetails: { 
+                itemTotal: totalItemTotal, 
+                deliveryCharge: finalCustomerShippingTotal, // 👈 Dynamically synced ippo ₹85 vizhum
+                totalAmount: finalTotalAmount 
+            },
+            totalAmount: finalTotalAmount, // 🌟 THIS IS WHAT PHONEPE READS (₹885)
+            paymentMethod,
+            shippingAddress,
+            status: orderStatus, 
+            paymentStatus: paymentStatus
+        });
 
-        await newOrder.save();
-        res.status(201).json({ success: true, order: newOrder });
+        await newOrder.save();
+        res.status(201).json({ success: true, order: newOrder });
 
-    } catch (err) { 
-        res.status(500).json({ success: false, error: err.message }); 
-    }
+    } catch (err) { 
+        res.status(500).json({ success: false, error: err.message }); 
+    }
 };
+
 
 /* =====================================================
     ❌ 3. CANCEL ORDER (Refund Logic)
