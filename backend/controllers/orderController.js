@@ -717,10 +717,10 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
 
 //     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 // };
-
 /* =====================================================
     🌟 MASTER CREATE ORDER (PhonePe & DB Sync Fix)
 ===================================================== */
+
 exports.createOrder = async (req, res) => {
     try {
         const { items, customerId, shippingAddress, paymentMethod } = req.body;
@@ -754,7 +754,7 @@ exports.createOrder = async (req, res) => {
                     shopName: sellerDoc.shopName,
                     pickupPincode: sellerDoc.shopAddress?.pincode || sellerDoc.pincode || "600001",
                     sellerSubtotal: 0,
-                    totalWeightGrams: 0, // ⚖️ Counter for Postman sync
+                    totalWeightGrams: 0, // 👈 Weight counter for Postman sync
                     isFreeDeliveryPackage: productDoc.isFreeDelivery
                 };
             }
@@ -772,8 +772,9 @@ exports.createOrder = async (req, res) => {
             });
         }
 
-        // 🌟 STEP 2: Calculate Dynamic Rates & Finance Splits (The Master Sync)
-        let accumulatedShippingTotal = 0; // 👈 Fresh Counter for DB Grand Total
+        // 🌟 STEP 2: Calculate Dynamic Rates & Finance Splits
+        // Use a local variable to sum shipping costs safely
+        let accumulatedShippingTotal = 0; 
 
         const finalSellerSplitData = await Promise.all(Object.values(sellerWiseSplit).map(async (split) => {
             const apiRate = await getLiveShippingRate(
@@ -812,7 +813,7 @@ exports.createOrder = async (req, res) => {
             };
         }));
 
-        // 🌟 FINAL TOTAL CALCULATION: 800 (Items) + 85 (Shipping) = 885
+        // 🌟 FINAL CALCULATION: itemTotal (800) + shippingTotal (85) = 885
         const finalGrandTotal = totalItemTotal + accumulatedShippingTotal;
 
         // 🌟 STEP 3: Payment Status Logic
@@ -833,7 +834,7 @@ exports.createOrder = async (req, res) => {
             sellerSplitData: finalSellerSplitData,
             billDetails: { 
                 itemTotal: totalItemTotal, 
-                deliveryCharge: accumulatedShippingTotal, // 👈 DB-la ippo katchithama ₹85 vizhum
+                deliveryCharge: accumulatedShippingTotal, // 👈 DB-la ippo ₹85 vizhum machan
                 totalAmount: finalGrandTotal 
             },
             totalAmount: finalGrandTotal, // 🌟 THIS IS WHAT PHONEPE READS (₹885)
