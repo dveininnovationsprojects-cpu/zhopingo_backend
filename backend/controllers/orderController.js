@@ -720,7 +720,9 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
 /* =====================================================
     🌟 MASTER CREATE ORDER (PhonePe & DB Sync Fix)
 ===================================================== */
-
+/* =====================================================
+    🌟 MASTER CREATE ORDER (PhonePe & DB Sync Fix)
+===================================================== */
 exports.createOrder = async (req, res) => {
     try {
         const { items, customerId, shippingAddress, paymentMethod } = req.body;
@@ -737,7 +739,7 @@ exports.createOrder = async (req, res) => {
         let sellerWiseSplit = {};
         const processedItems = [];
 
-        // 🌟 STEP 1: Process Items & Strictly Sum up Weights per Seller
+        // STEP 1: Sum up Item Prices & Initial Weights
         for (const item of items) {
             const productDoc = await Product.findById(item.productId || item._id);
             const sellerDoc = await Seller.findById(productDoc?.seller || item.sellerId);
@@ -754,12 +756,11 @@ exports.createOrder = async (req, res) => {
                     shopName: sellerDoc.shopName,
                     pickupPincode: sellerDoc.shopAddress?.pincode || sellerDoc.pincode || "600001",
                     sellerSubtotal: 0,
-                    totalWeightGrams: 0, // 👈 Weight counter for Postman sync
+                    totalWeightGrams: 0,
                     isFreeDeliveryPackage: productDoc.isFreeDelivery
                 };
             }
 
-            // ⚖️ Weight Fix: unit weight * quantity (Ex: 500g * 4 = 2000g)
             const unitWeight = Number(productDoc.weightValue || productDoc.weight || 500);
             sellerWiseSplit[sIdStr].totalWeightGrams += (unitWeight * qty);
             sellerWiseSplit[sIdStr].sellerSubtotal += subtotal;
@@ -767,14 +768,12 @@ exports.createOrder = async (req, res) => {
             processedItems.push({
                 productId: productDoc._id, name: item.name, quantity: qty,
                 price: item.price, mrp: item.mrp || item.price, sellerId: sellerDoc._id,
-                hsnCode: productDoc.hsnCode || "0000",
-                image: item.image || ""
+                hsnCode: productDoc.hsnCode || "0000", image: item.image || ""
             });
         }
 
-        // 🌟 STEP 2: Calculate Dynamic Rates & Finance Splits
-        // Use a local variable to sum shipping costs safely
-        let accumulatedShippingTotal = 0; 
+        // 🌟 STEP 2: CALCULATE SHIPPING (Wait for ALL Sellers)
+        let totalCalculatedShipping = 0; // Fresh Counter
 
         const finalSellerSplitData = await Promise.all(Object.values(sellerWiseSplit).map(async (split) => {
             const apiRate = await getLiveShippingRate(
@@ -785,27 +784,21 @@ exports.createOrder = async (req, res) => {
                 paymentMethod
             );
 
-            /* =====================================================
-                💰 PROFIT MODEL SYNC (The PhonePe Fix):
-                API Cost (₹45) + ADMIN_MARGIN (₹40) = ₹85.
-                Min floor strictly 80.
-            ===================================================== */
+            // Postman logic: API + 40 Margin
             const dynamicCharge = Math.max(80, (apiRate + 40)); 
             
             const customerCharge = split.isFreeDeliveryPackage ? 0 : dynamicCharge;
-            accumulatedShippingTotal += customerCharge; // 👈 Syncing for Grand Total
+            
+            // 🌟 THE SYNC: Forcefully adding to local total inside Promise.all
+            totalCalculatedShipping += customerCharge;
 
             const comm = (split.sellerSubtotal * settings.commissionPercent) / 100;
             const gst = (comm * settings.gstOnCommissionPercent) / 100;
             const tds = (split.sellerSubtotal * settings.tdsPercent) / 100;
 
             return {
-                sellerId: split.sellerId,
-                shopName: split.shopName,
-                sellerSubtotal: split.sellerSubtotal,
-                commissionTotal: comm,
-                gstTotal: gst,
-                tdsTotal: tds,
+                sellerId: split.sellerId, shopName: split.shopName, sellerSubtotal: split.sellerSubtotal,
+                commissionTotal: comm, gstTotal: gst, tdsTotal: tds,
                 deliveryDeduction: split.isFreeDeliveryPackage ? dynamicCharge : 0,
                 adminProfitFromShipping: (customerCharge > 0) ? (customerCharge - apiRate) : 0,
                 finalPayable: split.sellerSubtotal - (comm + gst + tds + (split.isFreeDeliveryPackage ? dynamicCharge : 0)),
@@ -813,20 +806,8 @@ exports.createOrder = async (req, res) => {
             };
         }));
 
-        // 🌟 FINAL CALCULATION: itemTotal (800) + shippingTotal (85) = 885
-        const finalGrandTotal = totalItemTotal + accumulatedShippingTotal;
-
-        // 🌟 STEP 3: Payment Status Logic
-        let paymentStatus = "Pending";
-        let orderStatus = "Pending"; 
-
-        if (paymentMethod === "WALLET") {
-            if (user.walletBalance < finalGrandTotal) return res.status(400).json({ success: false, message: "Insufficient Balance" });
-            user.walletBalance -= finalGrandTotal;
-            user.walletTransactions.unshift({ amount: finalGrandTotal, type: 'DEBIT', reason: `Order Payment`, date: new Date() });
-            await user.save();
-            paymentStatus = "Paid"; orderStatus = "Placed";
-        }
+        // 🌟 STEP 3: FINAL CALCULATED TOTAL (800 + 85 = 885)
+        const finalGrandTotal = totalItemTotal + totalCalculatedShipping;
 
         const newOrder = new Order({
             customerId: user._id,
@@ -834,22 +815,20 @@ exports.createOrder = async (req, res) => {
             sellerSplitData: finalSellerSplitData,
             billDetails: { 
                 itemTotal: totalItemTotal, 
-                deliveryCharge: accumulatedShippingTotal, // 👈 DB-la ippo ₹85 vizhum machan
+                deliveryCharge: totalCalculatedShipping, 
                 totalAmount: finalGrandTotal 
             },
-            totalAmount: finalGrandTotal, // 🌟 THIS IS WHAT PHONEPE READS (₹885)
+            totalAmount: finalGrandTotal, // 🌟 THIS SAVES AS 885 IN ATLAS
             paymentMethod,
             shippingAddress,
-            status: orderStatus, 
-            paymentStatus: paymentStatus
+            status: "Pending", 
+            paymentStatus: "Pending"
         });
 
         await newOrder.save();
         res.status(201).json({ success: true, order: newOrder });
 
-    } catch (err) { 
-        res.status(500).json({ success: false, error: err.message }); 
-    }
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 /* =====================================================
     ❌ 3. CANCEL ORDER (Refund Logic)
