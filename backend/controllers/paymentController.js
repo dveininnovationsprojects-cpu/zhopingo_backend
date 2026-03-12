@@ -335,31 +335,53 @@ exports.verifyPayment = async (req, res) => {
   }
 };
 
+// exports.phonepeReturn = async (req, res) => {
+//   try {
+//     const { orderId } = req.params;
+//     await updateOrderSuccess(orderId); 
+
+//     const deepLink = `zhopingo://payment-verify/${orderId}`;
+
+//     res.send(`
+//       <!DOCTYPE html>
+//       <html>
+//         <head>
+//           <meta name="viewport" content="width=device-width, initial-scale=1.0">
+//           <title>Zhopingo Payment</title>
+//         </head>
+//         <body style="text-align:center; padding-top:50px; font-family:sans-serif;">
+//           <h2 style="color: #0c831f;">Payment Successful!</h2>
+//           <p>Redirecting you back to the app...</p>
+//           <a href="${deepLink}" id="redirectBtn" style="background:#0c831f; color:#fff; padding:15px 30px; text-decoration:none; border-radius:10px; font-weight:bold;">Return to App</a>
+//           <script>
+//             window.location.href = "${deepLink}";
+//             setTimeout(function() { document.getElementById('redirectBtn').click(); }, 1500);
+//           </script>
+//         </body>
+//       </html>
+//     `);
+//   } catch (error) {
+//     res.status(500).send("Internal Server Error");
+//   }
+// };
+
+
 exports.phonepeReturn = async (req, res) => {
   try {
     const { orderId } = req.params;
-    await updateOrderSuccess(orderId); 
 
-    const deepLink = `zhopingo://payment-verify/${orderId}`;
+    // 📡 PhonePe status check panroam
+    const response = await client.getOrderStatus(orderId);
 
-    res.send(`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Zhopingo Payment</title>
-        </head>
-        <body style="text-align:center; padding-top:50px; font-family:sans-serif;">
-          <h2 style="color: #0c831f;">Payment Successful!</h2>
-          <p>Redirecting you back to the app...</p>
-          <a href="${deepLink}" id="redirectBtn" style="background:#0c831f; color:#fff; padding:15px 30px; text-decoration:none; border-radius:10px; font-weight:bold;">Return to App</a>
-          <script>
-            window.location.href = "${deepLink}";
-            setTimeout(function() { document.getElementById('redirectBtn').click(); }, 1500);
-          </script>
-        </body>
-      </html>
-    `);
+    if (response.state === "COMPLETED") {
+        await updateOrderSuccess(orderId); // Status -> Placed, Payment -> Paid
+        const deepLink = `zhopingo://payment-verify/${orderId}?status=success`;
+        return res.redirect(deepLink); // 🌟 Direct redirect to App Success
+    } else {
+        // Payment fail aana status-ah thirumba 'Pending' or 'Failed' nu mathanum
+        const deepLink = `zhopingo://payment-verify/${orderId}?status=failed`;
+        return res.redirect(deepLink); // 🌟 Direct redirect to App Failure
+    }
   } catch (error) {
     res.status(500).send("Internal Server Error");
   }
