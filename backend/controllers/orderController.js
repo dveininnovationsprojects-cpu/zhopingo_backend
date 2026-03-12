@@ -718,140 +718,98 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
 //     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 // };
 /* =====================================================
-    🌟 MASTER CREATE ORDER (PhonePe & DB Sync Fix)
-===================================================== */
-/* =====================================================
-    🌟 MASTER CREATE ORDER (PhonePe & DB Sync Fix)
+    🌟 MASTER CREATE ORDER (Direct Payload Sync Fix)
 ===================================================== */
 exports.createOrder = async (req, res) => {
-    try {
-        const { items, customerId, shippingAddress, paymentMethod } = req.body;
-        const user = await User.findById(customerId);
-        if (!user) return res.status(404).json({ success: false, message: "User not found" });
+    try {
+        // 🌟 THE MASTER SYNC: Frontend payload-la irundhu values-ah direct-ah edukkuroam
+        const { items, customerId, shippingAddress, paymentMethod, deliveryCharge } = req.body;
+        
+        const user = await User.findById(customerId);
+        if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-        const settings = await FinanceSettings.findOne() || { 
-            commissionPercent: 10, 
-            gstOnCommissionPercent: 18, 
-            tdsPercent: 2 
-        };
+        const settings = await FinanceSettings.findOne() || { 
+            commissionPercent: 10, 
+            gstOnCommissionPercent: 18, 
+            tdsPercent: 2 
+        };
 
-        let totalItemTotal = 0;
-        let sellerWiseSplit = {};
-        const processedItems = [];
+        let totalItemTotal = 0;
+        let sellerWiseSplit = {};
+        const processedItems = [];
 
-        // 🌟 STEP 1: Process Items & Strictly Sum up Weights per Seller
-        for (const item of items) {
-            const productDoc = await Product.findById(item.productId || item._id);
-            const sellerDoc = await Seller.findById(productDoc?.seller || item.sellerId);
-            if (!productDoc || !sellerDoc) continue;
+        // Step 1: Process Items & Calculate Item Subtotal
+        for (const item of items) {
+            const productDoc = await Product.findById(item.productId || item._id);
+            const sellerDoc = await Seller.findById(productDoc?.seller || item.sellerId);
+            if (!productDoc || !sellerDoc) continue;
 
-            const qty = Number(item.quantity);
-            const subtotal = Number(item.price) * qty;
-            totalItemTotal += subtotal;
+            const qty = Number(item.quantity);
+            const subtotal = Number(item.price) * qty;
+            totalItemTotal += subtotal;
 
-            const sIdStr = sellerDoc._id.toString();
-            if (!sellerWiseSplit[sIdStr]) {
-                sellerWiseSplit[sIdStr] = {
-                    sellerId: sellerDoc._id,
-                    shopName: sellerDoc.shopName,
-                    pickupPincode: sellerDoc.shopAddress?.pincode || sellerDoc.pincode || "600001",
-                    sellerSubtotal: 0,
-                    totalWeightGrams: 0, // 👈 Weight counter for Postman sync
-                    isFreeDeliveryPackage: productDoc.isFreeDelivery
-                };
-            }
+            const sIdStr = sellerDoc._id.toString();
+            if (!sellerWiseSplit[sIdStr]) {
+                sellerWiseSplit[sIdStr] = {
+                    sellerId: sellerDoc._id,
+                    shopName: sellerDoc.shopName,
+                    sellerSubtotal: 0,
+                };
+            }
+            sellerWiseSplit[sIdStr].sellerSubtotal += subtotal;
 
-            // ⚖️ Weight Fix: unit weight * quantity (Ex: 500g * 4 = 2000g)
-            const unitWeight = Number(productDoc.weightValue || productDoc.weight || 500);
-            sellerWiseSplit[sIdStr].totalWeightGrams += (unitWeight * qty);
-            sellerWiseSplit[sIdStr].sellerSubtotal += subtotal;
+            processedItems.push({
+                productId: productDoc._id, name: item.name, quantity: qty,
+                price: item.price, mrp: item.mrp || item.price, sellerId: sellerDoc._id,
+                hsnCode: productDoc.hsnCode || "0000", image: item.image || ""
+            });
+        }
 
-            processedItems.push({
-                productId: productDoc._id, name: item.name, quantity: qty,
-                price: item.price, mrp: item.mrp || item.price, sellerId: sellerDoc._id,
-                hsnCode: productDoc.hsnCode || "0000",
-                image: item.image || ""
-            });
-        }
+        // 🌟 THE CRITICAL SYNC: 
+        // Frontend anuppuna deliveryCharge-ah Number-ah maathi use panrom. 
+        // Backend ippo thirumba API call pannaathu, margin logic check pannaathu.
+        const frontendDeliveryAmount = Number(deliveryCharge) || 0;
+        const finalGrandTotal = totalItemTotal + frontendDeliveryAmount;
 
-        // 🌟 STEP 2: Calculate Dynamic Rates & Finance Splits
-        // Use a local variable to sum shipping costs safely
-        let accumulatedShippingTotal = 0; 
+        const finalSellerSplitData = Object.values(sellerWiseSplit).map((split) => {
+            const comm = (split.sellerSubtotal * settings.commissionPercent) / 100;
+            const gst = (comm * settings.gstOnCommissionPercent) / 100;
+            const tds = (split.sellerSubtotal * settings.tdsPercent) / 100;
 
-        const finalSellerSplitData = await Promise.all(Object.values(sellerWiseSplit).map(async (split) => {
-            const apiRate = await getLiveShippingRate(
-                shippingAddress.pincode, 
-                split.totalWeightGrams, 
-                'g', 
-                split.pickupPincode, 
-                paymentMethod
-            );
+            return {
+                sellerId: split.sellerId,
+                shopName: split.shopName,
+                sellerSubtotal: split.sellerSubtotal,
+                commissionTotal: comm,
+                gstTotal: gst,
+                tdsTotal: tds,
+                finalPayable: split.sellerSubtotal - (comm + gst + tds),
+                status: 'Pending'
+            };
+        });
 
-            /* =====================================================
-                💰 PROFIT MODEL SYNC (The PhonePe Fix):
-                API Cost (₹45) + ADMIN_MARGIN (₹40) = ₹85.
-                Min floor strictly 80.
-            ===================================================== */
-            const dynamicCharge = Math.max(80, (apiRate + 40)); 
-            
-            const customerCharge = split.isFreeDeliveryPackage ? 0 : dynamicCharge;
-            accumulatedShippingTotal += customerCharge; // 👈 Syncing for Grand Total
+        const newOrder = new Order({
+            customerId: user._id,
+            items: processedItems,
+            sellerSplitData: finalSellerSplitData,
+            billDetails: { 
+                itemTotal: totalItemTotal, 
+                deliveryCharge: frontendDeliveryAmount, // 👈 Ippo katchithama ₹160 vizhum
+                totalAmount: finalGrandTotal 
+            },
+            totalAmount: finalGrandTotal, // 🌟 PhonePe will now read correctly (₹1380)
+            paymentMethod,
+            shippingAddress,
+            status: "Pending", 
+            paymentStatus: "Pending"
+        });
 
-            const comm = (split.sellerSubtotal * settings.commissionPercent) / 100;
-            const gst = (comm * settings.gstOnCommissionPercent) / 100;
-            const tds = (split.sellerSubtotal * settings.tdsPercent) / 100;
+        await newOrder.save();
+        res.status(201).json({ success: true, order: newOrder });
 
-            return {
-                sellerId: split.sellerId,
-                shopName: split.shopName,
-                sellerSubtotal: split.sellerSubtotal,
-                commissionTotal: comm,
-                gstTotal: gst,
-                tdsTotal: tds,
-                deliveryDeduction: split.isFreeDeliveryPackage ? dynamicCharge : 0,
-                adminProfitFromShipping: (customerCharge > 0) ? (customerCharge - apiRate) : 0,
-                finalPayable: split.sellerSubtotal - (comm + gst + tds + (split.isFreeDeliveryPackage ? dynamicCharge : 0)),
-                status: 'Pending'
-            };
-        }));
-
-        // 🌟 FINAL CALCULATION: itemTotal (800) + shippingTotal (85) = 885
-        const finalGrandTotal = totalItemTotal + accumulatedShippingTotal;
-
-        // 🌟 STEP 3: Payment Status Logic
-        let paymentStatus = "Pending";
-        let orderStatus = "Pending"; 
-
-        if (paymentMethod === "WALLET") {
-            if (user.walletBalance < finalGrandTotal) return res.status(400).json({ success: false, message: "Insufficient Balance" });
-            user.walletBalance -= finalGrandTotal;
-            user.walletTransactions.unshift({ amount: finalGrandTotal, type: 'DEBIT', reason: `Order Payment`, date: new Date() });
-            await user.save();
-            paymentStatus = "Paid"; orderStatus = "Placed";
-        }
-
-        const newOrder = new Order({
-            customerId: user._id,
-            items: processedItems,
-            sellerSplitData: finalSellerSplitData,
-            billDetails: { 
-                itemTotal: totalItemTotal, 
-                deliveryCharge: accumulatedShippingTotal, // 👈 DB-la ippo katchithama vizhum
-                totalAmount: finalGrandTotal 
-            },
-            totalAmount: finalGrandTotal, // 🌟 THIS IS WHAT PHONEPE READS (₹885)
-            paymentMethod,
-            shippingAddress,
-            status: orderStatus, 
-            paymentStatus: paymentStatus
-        });
-
-        await newOrder.save();
-        res.status(201).json({ success: true, order: newOrder });
-
-    } catch (err) { 
-        res.status(500).json({ success: false, error: err.message }); 
-    }
+    } catch (err) { 
+        res.status(500).json({ success: false, error: err.message }); 
+    }
 };
 /* =====================================================
     ❌ 3. CANCEL ORDER (Refund Logic)
