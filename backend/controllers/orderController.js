@@ -882,7 +882,9 @@ exports.getMyOrders = async (req, res) => {
     }
 };
 
-
+/* =====================================================
+    🔍 ADMIN GLOBAL ORDERS: Multi-Seller Split Logic
+===================================================== */
 exports.getOrders = async (req, res) => {
     try {
         const orders = await Order.find()
@@ -891,36 +893,89 @@ exports.getOrders = async (req, res) => {
             .populate({ path: 'items.sellerId', select: 'name shopName city phone' })
             .sort({ createdAt: -1 });
 
-        const sanitizedOrders = orders.map(order => ({
-            ...order._doc,
-            items: order.items.map(item => ({
-                ...item._doc,
-                sellerId: item.sellerId || { shopName: "Zhopingo Store", name: "Admin" }
-            }))
-        }));
-        res.json({ success: true, data: sanitizedOrders });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+        let splittedOrdersList = [];
+
+        orders.forEach(order => {
+            const orderObj = order.toObject();
+            
+            // 🌟 uniqueSellers list edukkuroam
+            const uniqueSellers = [...new Set(orderObj.items.map(item => 
+                item.sellerId?._id?.toString() || item.sellerId?.toString()
+            ))];
+
+            // 🌟 Oru oru seller-ukkum order-ah split panroam
+            uniqueSellers.forEach(sId => {
+                const sellerItems = orderObj.items.filter(item => 
+                    (item.sellerId?._id?.toString() || item.sellerId?.toString()) === sId
+                );
+
+                if (sellerItems.length > 0) {
+                    // Calculation: This seller's products total
+                    const sellerProductTotal = sellerItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+                    const deliveryCharge = 80; // Strictly ₹80 per seller splitting
+
+                    splittedOrdersList.push({
+                        ...orderObj,
+                        _id: orderObj._id, // Same Order ID strictly maintained
+                        items: sellerItems,
+                        seller: sellerItems[0].sellerId || { shopName: "Zhopingo Store" },
+                        // Override bill details for display
+                        billDetails: {
+                            itemTotal: sellerProductTotal,
+                            deliveryCharge: deliveryCharge,
+                            totalAmount: sellerProductTotal + deliveryCharge
+                        },
+                        totalAmount: sellerProductTotal + deliveryCharge // Split total strictly kaatum
+                    });
+                }
+            });
+        });
+
+        res.json({ success: true, data: splittedOrdersList });
+    } catch (err) { 
+        res.status(500).json({ success: false, error: err.message }); 
+    }
 };
 
+/* =====================================================
+    🔍 SELLER ORDERS: Strictly Only Their Split Part
+===================================================== */
 exports.getSellerOrders = async (req, res) => {
     try {
-        const orders = await Order.find({ "items.sellerId": req.params.sellerId })
+        const { sellerId } = req.params;
+        const orders = await Order.find({ "items.sellerId": sellerId })
             .populate('items.productId')
             .populate({ path: 'items.sellerId', select: 'shopName name address city' })
             .sort({ createdAt: -1 });
 
-        const sanitizedOrders = orders.map(order => {
+        const splittedOrders = orders.map(order => {
             const orderObj = order.toObject();
+            
+            // 🛡️ Filter only this seller's products
+            const myItems = orderObj.items.filter(item => 
+                (item.sellerId?._id?.toString() || item.sellerId?.toString()) === sellerId
+            );
+
+            const sellerProductTotal = myItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+            const deliveryCharge = 80;
+
             return {
                 ...orderObj,
-                items: orderObj.items.map(item => ({
-                    ...item,
-                    sellerId: item.sellerId || { shopName: "Zhopingo Seller", name: "Merchant" }
-                }))
+                items: myItems,
+                seller: myItems[0]?.sellerId || { shopName: "Merchant" },
+                billDetails: {
+                    itemTotal: sellerProductTotal,
+                    deliveryCharge: deliveryCharge,
+                    totalAmount: sellerProductTotal + deliveryCharge
+                },
+                totalAmount: sellerProductTotal + deliveryCharge
             };
         });
-        res.json({ success: true, data: sanitizedOrders });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+
+        res.json({ success: true, data: splittedOrders });
+    } catch (err) { 
+        res.status(500).json({ success: false, error: err.message }); 
+    }
 };
 
 /* =====================================================
