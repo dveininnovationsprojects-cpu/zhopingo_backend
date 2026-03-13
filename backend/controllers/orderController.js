@@ -882,7 +882,7 @@ exports.getMyOrders = async (req, res) => {
     }
 };
 
-// 2. Admin Global Orders List (All Orders Split by Seller)
+
 exports.getOrders = async (req, res) => {
     try {
         const orders = await Order.find()
@@ -891,62 +891,38 @@ exports.getOrders = async (req, res) => {
             .populate({ path: 'items.sellerId', select: 'name shopName city phone' })
             .sort({ createdAt: -1 });
 
-        let splittedOrders = [];
-
-        orders.forEach(order => {
-            const orderObj = order.toObject();
-            const uniqueSellers = [...new Set(orderObj.items.map(item => 
-                item.sellerId?._id?.toString() || item.sellerId?.toString()
-            ))];
-
-            uniqueSellers.forEach(sId => {
-                const sellerItems = orderObj.items.filter(item => 
-                    (item.sellerId?._id?.toString() || item.sellerId?.toString()) === sId
-                );
-
-                if (sellerItems.length > 0) {
-                    splittedOrders.push({
-                        ...orderObj,
-                        items: sellerItems,
-                        seller: sellerItems[0].sellerId || { shopName: "Zhopingo Store" }
-                    });
-                }
-            });
-        });
-
-        res.json({ success: true, data: splittedOrders });
-    } catch (err) { 
-        res.status(500).json({ success: false, error: err.message }); 
-    }
+        const sanitizedOrders = orders.map(order => ({
+            ...order._doc,
+            items: order.items.map(item => ({
+                ...item._doc,
+                sellerId: item.sellerId || { shopName: "Zhopingo Store", name: "Admin" }
+            }))
+        }));
+        res.json({ success: true, data: sanitizedOrders });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
-// 3. Seller Dashboard Orders (Strictly only THEIR items)
+
 exports.getSellerOrders = async (req, res) => {
     try {
-        const { sellerId } = req.params;
-        const orders = await Order.find({ "items.sellerId": sellerId })
+        const orders = await Order.find({ "items.sellerId": req.params.sellerId })
             .populate('items.productId')
             .populate({ path: 'items.sellerId', select: 'shopName name address city' })
             .sort({ createdAt: -1 });
 
-        const splittedOrders = orders.map(order => {
+        const sanitizedOrders = orders.map(order => {
             const orderObj = order.toObject();
-            // 🛡️ SECURITY FIX: Indha seller-oda items-ah mattum dhaan intha seller paakanum
-            const myItems = orderObj.items.filter(item => 
-                (item.sellerId?._id?.toString() || item.sellerId?.toString()) === sellerId
-            );
-
             return {
                 ...orderObj,
-                items: myItems,
-                seller: myItems[0]?.sellerId || { shopName: "My Store" }
+                items: orderObj.items.map(item => ({
+                    ...item,
+                    sellerId: item.sellerId || { shopName: "Zhopingo Seller", name: "Merchant" }
+                }))
             };
         });
-
-        res.json({ success: true, data: splittedOrders });
-    } catch (err) { 
-        res.status(500).json({ success: false, error: err.message }); 
-    }
+        res.json({ success: true, data: sanitizedOrders });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
+
 /* =====================================================
     📈 5. TRACKING & STATUS
 ===================================================== */
