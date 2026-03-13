@@ -588,10 +588,9 @@ const getLiveShippingRate = async (destPincode, weightValue, unit, sellerPincode
     }
 };
 
-
 /* =====================================================
-    🚚 MASTER CONTROLLER: calculateLiveDeliveryRate
-    (Strict Multi-Seller & Free Delivery Handshake)
+    🚚 MASTER CONTROLLER: calculateLiveDeliveryRate 
+    (Strict Multi-Seller & Item-Level Free Delivery Sync)
 ===================================================== */
 exports.calculateLiveDeliveryRate = async (req, res) => {
     try {
@@ -602,7 +601,7 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
             return res.status(400).json({ success: false, message: "Cart items are required" });
         }
 
-        // 1️⃣ uniqueSellers-ah filter panni edukkuroam
+        // 1️⃣ Unique Sellers-ah filter panni edukkuroam
         const uniqueSellers = [...new Set(items.map(item => item.sellerId?._id || item.sellerId))];
         
         let totalCustomerGrandTotal = 0;
@@ -613,38 +612,36 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
         for (const sId of uniqueSellers) {
             const sellerItems = items.filter(item => (item.sellerId?._id || item.sellerId) === sId);
             
-            // 🔥 CRITICAL CHECK: Intha seller package-la eadhachum FREE DELIVERY item irukka?
-            const isPackageFree = sellerItems.some(item => item.isFreeDelivery === true || item.productId?.isFreeDelivery === true);
+            // 🔥 CRITICAL CHECK: Intha seller products-la eadhachum "Paid Delivery" item irukka?
+            // Note: Oru seller package-la oru item paid-naalum, andha seller package-ku 80rs varum.
+            // Package full-ah free delivery products mattum irundha dhaan charge 0 aagum.
+            const hasAnyPaidItemInPackage = sellerItems.some(item => item.isFreeDelivery === false || item.productId?.isFreeDelivery === false);
 
-            if (isPackageFree) {
+            if (!hasAnyPaidItemInPackage) {
+                // Fully Free Seller Package
                 sellerWiseBreakdown.push({
                     sellerId: sId,
                     charge: 0,
-                    status: "FREE"
+                    status: "FREE PACKAGE"
                 });
-                // Free-na charge zero, so totals-la ethum add aagadhu
             } else {
-                // ⚖️ Intha specific seller-oda total package weight
+                // Paid Seller Package - Calculate Weight & API Rate
                 const sellerTotalWeight = sellerItems.reduce((sum, it) => {
                     const rawW = it.weightValue || it.weight || 500;
                     const numW = Number(String(rawW).replace(/[^0-9.]/g, '')) || 500;
                     return sum + (numW * it.quantity);
                 }, 0);
 
-                // 📍 Intha seller-oda pickup pincode (default to admin pincode if missing)
                 const origin = sellerItems[0]?.sellerId?.pincode || "600001";
 
-                // 📡 Step 1: Get Direct API Cost from Delhivery for THIS SELLER PACKAGE
+                // 📡 Get Rate for this specific seller package
                 let apiCost = await getLiveShippingRate(pincode, sellerTotalWeight, 'g', origin, paymentMode);
                 
-                // 📡 Step 2: Fallback logic (Manual checking if API gives 0)
                 if (apiCost === 0) {
                     const kg = universalWeightSync(sellerTotalWeight, 'g');
-                    // Manual Rule: 500g-ku 40rs base, extra every 500g-ku +15rs
                     apiCost = 40 + (Math.max(0, Math.ceil((kg - 0.5) / 0.5)) * 15);
                 }
 
-                // 📡 Step 3: Admin Margin & Minimum Charge Sync (Strictly ₹80 min)
                 const customerPayable = Math.max(80, apiCost);
                 
                 totalCustomerGrandTotal += customerPayable;
@@ -659,13 +656,13 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
             }
         }
 
-        // 🌟 FINAL RESPONSE SYNC
+        // 🌟 FINAL RESPONSE: Strictly returns the sum of paid packages only
         res.json({ 
             success: true, 
-            finalCharge: totalCustomerGrandTotal,        // 👈 Ippo Case-la 80+80=160 (or) 80+0=80 nu varum
-            actualLogisticsCost: totalActualLogisticsCost, // 👈 Partner-ku kudukka vendiyadhu
+            finalCharge: totalCustomerGrandTotal, 
+            actualLogisticsCost: totalActualLogisticsCost,
             adminLogisticsProfit: totalCustomerGrandTotal - totalActualLogisticsCost,
-            breakdown: sellerWiseBreakdown            // 👈 Neat split for transparency
+            breakdown: sellerWiseBreakdown
         });
 
     } catch (err) {
