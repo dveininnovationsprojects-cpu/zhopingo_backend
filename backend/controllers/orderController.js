@@ -898,34 +898,44 @@ exports.getOrders = async (req, res) => {
         orders.forEach(order => {
             const orderObj = order.toObject();
             
-            // 🌟 uniqueSellers list edukkuroam
+            // 🌟 Step 1: Intha order-la unique Sellers theduroam
             const uniqueSellers = [...new Set(orderObj.items.map(item => 
                 item.sellerId?._id?.toString() || item.sellerId?.toString()
             ))];
 
-            // 🌟 Oru oru seller-ukkum order-ah split panroam
+            // 🌟 Step 2: Oru oru seller-ukkum order-ah divide panroam
             uniqueSellers.forEach(sId => {
                 const sellerItems = orderObj.items.filter(item => 
                     (item.sellerId?._id?.toString() || item.sellerId?.toString()) === sId
                 );
 
                 if (sellerItems.length > 0) {
-                    // Calculation: This seller's products total
-                    const sellerProductTotal = sellerItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
-                    const deliveryCharge = 80; // Strictly ₹80 per seller splitting
+                    // 🔥 THE SYNC FIX: 
+                    // Manual-ah 80rs add pannama, database-la intha seller-ku enna split data irukko adhai edukkuroam
+                    const specificSellerSplit = orderObj.sellerSplitData?.find(split => 
+                        split.sellerId?.toString() === sId
+                    );
+
+                    // Calculation: This seller's subtotal from items
+                    const sellerSubtotal = sellerItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+                    
+                    // 🚚 Delivery charge strictly from DB split data (fallback to 0 instead of manual 80)
+                    // Note: CreateOrder-la namma ippo seller split-la deliveryCharge store panna aarambikkanum.
+                    // For now, namma existing order logic balance panna direct mapping use panroam.
+                    const actualDeliveryCharge = specificSellerSplit?.deliveryDeduction || orderObj.billDetails?.deliveryCharge || 0;
 
                     splittedOrdersList.push({
                         ...orderObj,
-                        _id: orderObj._id, // Same Order ID strictly maintained
+                        _id: orderObj._id, 
                         items: sellerItems,
                         seller: sellerItems[0].sellerId || { shopName: "Zhopingo Store" },
-                        // Override bill details for display
+                        // Override bill details strictly for this split view
                         billDetails: {
-                            itemTotal: sellerProductTotal,
-                            deliveryCharge: deliveryCharge,
-                            totalAmount: sellerProductTotal + deliveryCharge
+                            itemTotal: sellerSubtotal,
+                            deliveryCharge: actualDeliveryCharge,
+                            totalAmount: sellerSubtotal + actualDeliveryCharge
                         },
-                        totalAmount: sellerProductTotal + deliveryCharge // Split total strictly kaatum
+                        totalAmount: sellerSubtotal + actualDeliveryCharge
                     });
                 }
             });
@@ -956,19 +966,22 @@ exports.getSellerOrders = async (req, res) => {
                 (item.sellerId?._id?.toString() || item.sellerId?.toString()) === sellerId
             );
 
-            const sellerProductTotal = myItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
-            const deliveryCharge = 80;
+            // Fetch specific finance split for this seller from DB
+            const mySplit = orderObj.sellerSplitData?.find(s => s.sellerId?.toString() === sellerId);
+
+            const sellerSubtotal = myItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+            const actualDelivery = mySplit?.deliveryDeduction || orderObj.billDetails?.deliveryCharge || 0;
 
             return {
                 ...orderObj,
                 items: myItems,
                 seller: myItems[0]?.sellerId || { shopName: "Merchant" },
                 billDetails: {
-                    itemTotal: sellerProductTotal,
-                    deliveryCharge: deliveryCharge,
-                    totalAmount: sellerProductTotal + deliveryCharge
+                    itemTotal: sellerSubtotal,
+                    deliveryCharge: actualDelivery,
+                    totalAmount: sellerSubtotal + actualDelivery
                 },
-                totalAmount: sellerProductTotal + deliveryCharge
+                totalAmount: sellerSubtotal + actualDelivery
             };
         });
 
@@ -977,7 +990,6 @@ exports.getSellerOrders = async (req, res) => {
         res.status(500).json({ success: false, error: err.message }); 
     }
 };
-
 /* =====================================================
     📈 5. TRACKING & STATUS
 ===================================================== */
