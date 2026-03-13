@@ -265,7 +265,7 @@ exports.updateFinanceSettings = async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 };
 
-// 2. Weekly Settlement Generation Logic (Optimized for Multi-Seller)
+// adminController.js-la intha function-ah mattum replace pannu:
 exports.generateWeeklySettlement = async (req, res) => {
     try {
         const { sellerId, startDate, endDate } = req.body;
@@ -275,7 +275,6 @@ exports.generateWeeklySettlement = async (req, res) => {
             tdsPercent: 2 
         };
 
-        // Orders fetch strictly for this seller and delivered status
         const orders = await Order.find({
             "sellerSplitData.sellerId": sellerId,
             status: 'Delivered',
@@ -291,31 +290,26 @@ exports.generateWeeklySettlement = async (req, res) => {
         };
 
         orders.forEach(order => {
-            // Find this specific seller's split data in the multi-seller order
             const sellerData = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId);
-            
             if (sellerData) {
                 const subtotal = sellerData.sellerSubtotal || 0;
-                
-                // Logic sync with backend split logic
                 const commBase = (subtotal * (settings.commissionPercent)) / 100;
                 const gstOnComm = (commBase * (settings.gstOnCommissionPercent)) / 100;
                 const tdsAmount = (subtotal * (settings.tdsPercent)) / 100;
-                const delivery = sellerData.deliveryDeduction || 0; // Dynamic deduction
+                const delivery = sellerData.deliveryDeduction || 0;
 
                 stats.sales += subtotal;
                 stats.count++;
                 stats.commission += commBase;
-                stats.gst += gstOnComm;
                 stats.tds += tdsAmount;
+                stats.gst += gstOnComm;
                 stats.delivery += delivery;
-                
-                // Final calculation for this specific seller in that order
                 stats.payable += (subtotal - (commBase + gstOnComm + tdsAmount + delivery));
             }
         });
 
-        const newSettlement = await Settlement.create({
+        // 🌟 MASTER FIX: Manual construction for model safety
+        const settlementData = new Settlement({
             sellerId,
             weekRange: `${startDate} to ${endDate}`,
             totalSales: stats.sales,
@@ -328,8 +322,11 @@ exports.generateWeeklySettlement = async (req, res) => {
             status: 'Pending'
         });
 
-        res.json({ success: true, message: "Weekly Settlement Generated!", data: newSettlement });
+        const savedSettlement = await settlementData.save();
+
+        res.json({ success: true, message: "Weekly Settlement Generated!", data: savedSettlement });
     } catch (err) { 
+        console.error("Finance Error:", err.message);
         res.status(500).json({ success: false, error: err.message }); 
     }
 };
