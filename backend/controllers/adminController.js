@@ -445,3 +445,56 @@ exports.getAllSettlements = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
+
+
+const Ledger = require('../models/Ledger');
+
+// 🌟 logic A: Get All Ledger Entries for Admin View
+exports.getAllLedgerEntries = async (req, res) => {
+    try {
+        const entries = await Ledger.find()
+            .populate('sellerId', 'shopName')
+            .sort({ createdAt: -1 });
+        res.json({ success: true, data: entries });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+// 🚀 Logic B: Auto-Entry when Order is Delivered (Call this inside Order status update)
+exports.createLedgerEntryForOrder = async (sellerId, orderId, amount) => {
+    try {
+        // 1. Last balance-ai instantaneous-ah find panrom
+        const lastEntry = await Ledger.findOne({ sellerId }).sort({ createdAt: -1 });
+        const currentBalance = lastEntry ? lastEntry.balance : 0;
+
+        // 2. New balance calculation: Last Balance + Current Credit
+        const newEntry = new Ledger({
+            sellerId,
+            orderId,
+            type: 'Order_Sale',
+            credit: amount,
+            balance: currentBalance + amount,
+            description: `Credit for Order #${orderId.toString().slice(-6)}`
+        });
+        await newEntry.save();
+    } catch (err) { console.error("Ledger Credit Error:", err.message); }
+};
+
+// 🚀 Logic C: Auto-Entry when Payout is Paid (Call this inside markSettlementAsPaid)
+exports.createLedgerEntryForPayout = async (sellerId, amount) => {
+    try {
+        const lastEntry = await Ledger.findOne({ sellerId }).sort({ createdAt: -1 });
+        const currentBalance = lastEntry ? lastEntry.balance : 0;
+
+        // Formula: Last Balance - Current Debit
+        const newEntry = new Ledger({
+            sellerId,
+            type: 'Weekly_Payout',
+            debit: amount,
+            balance: currentBalance - amount,
+            description: `Weekly payout processed`
+        });
+        await newEntry.save();
+    } catch (err) { console.error("Ledger Debit Error:", err.message); }
+};

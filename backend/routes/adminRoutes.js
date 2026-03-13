@@ -60,7 +60,8 @@ const {
     upsertWeightSlab,
     getAllSettlements,
     generateGlobalLogisticsSettlement,
-    deleteWeightSlab
+    deleteWeightSlab,
+    getAllLedgerEntries
 } = require("../controllers/adminController"); 
 const { protect } = require('../middleware/authMiddleware');
 
@@ -99,5 +100,9 @@ router.put('/update-profile/:id', protect, updateAdminProfile);
 router.put('/change-password/:id', protect, changeAdminPassword);
 router.get('/settlements/all', protect, getAllSettlements);
 router.post('/logistics-settlement', protect, generateGlobalLogisticsSettlement);
+
+
+
+router.get('/ledger/all', protect, getAllLedgerEntries);
 
 module.exports = router;
