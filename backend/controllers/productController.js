@@ -41,6 +41,7 @@ exports.createProduct = async (req, res) => {
             ...req.body,
             masterProductId: masterProductId,
             name: req.body.name, 
+            isFreeDelivery: req.body.isFreeDelivery === 'true' || req.body.isFreeDelivery === true,
             category: masterData.category,
             subCategory: masterData.subCategory,
             hsnCode: masterData.hsnMasterId.hsnCode, // Copied from HSN Master

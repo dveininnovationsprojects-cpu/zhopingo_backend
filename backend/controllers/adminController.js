@@ -265,14 +265,12 @@ exports.updateFinanceSettings = async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 };
 
-// adminController.js-la intha function-ah mattum replace pannu:
+// 2. Weekly Settlement Generation (Seller + Logistics Split Logic)
 exports.generateWeeklySettlement = async (req, res) => {
     try {
         const { sellerId, startDate, endDate } = req.body;
         const settings = await FinanceSettings.findOne() || { 
-            commissionPercent: 10, 
-            gstOnCommissionPercent: 18, 
-            tdsPercent: 2 
+            commissionPercent: 10, gstOnCommissionPercent: 18, tdsPercent: 2 
         };
 
         const orders = await Order.find({
@@ -282,34 +280,46 @@ exports.generateWeeklySettlement = async (req, res) => {
         });
 
         if (orders.length === 0) {
-            return res.status(404).json({ success: false, message: "No delivered orders found for this period." });
+            return res.status(404).json({ success: false, message: "No delivered orders found." });
         }
 
         let stats = {
-            sales: 0, count: 0, commission: 0, gst: 0, tds: 0, delivery: 0, payable: 0
+            sales: 0, count: 0, commission: 0, gst: 0, tds: 0, 
+            deliveryDeductionFromSeller: 0, // Seller pay panna amount
+            adminLogisticsProfit: 0,        // Admin-ku delivery-la vara profit
+            totalLogisticsPayable: 0        // Delhivery team-ku pay panna vendiyadhu
         };
 
         orders.forEach(order => {
             const sellerData = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId);
             if (sellerData) {
                 const subtotal = sellerData.sellerSubtotal || 0;
-                const commBase = (subtotal * (settings.commissionPercent)) / 100;
-                const gstOnComm = (commBase * (settings.gstOnCommissionPercent)) / 100;
-                const tdsAmount = (subtotal * (settings.tdsPercent)) / 100;
-                const delivery = sellerData.deliveryDeduction || 0;
+                const commBase = (subtotal * settings.commissionPercent) / 100;
+                const tdsAmount = (subtotal * settings.tdsPercent) / 100;
+                const gstOnComm = (commBase * settings.gstOnCommissionPercent) / 100;
 
+                // 🚚 LOGISTICS PARTNER KANAKKU:
+                const customerPaidDelivery = order.billDetails?.deliveryCharge || 0; 
+                const actualCostToPartner = sellerData.actualLogisticsCost || 45; // Delhivery charges (Staging fallback)
+                
                 stats.sales += subtotal;
                 stats.count++;
                 stats.commission += commBase;
                 stats.tds += tdsAmount;
                 stats.gst += gstOnComm;
-                stats.delivery += delivery;
-                stats.payable += (subtotal - (commBase + gstOnComm + tdsAmount + delivery));
+
+                // Seller kitta irundhu delivery cost-ah Admin eduthukkura amount
+                stats.deliveryDeductionFromSeller += sellerData.deliveryDeduction || 0;
+
+                // 📈 Admin Profit logic: (Customer pay panna 80) - (Partner-ku thara 45)
+                stats.adminLogisticsProfit += (customerPaidDelivery - actualCostToPartner);
+                
+                // 🚛 Partner Share: Admin delivery partner-ku pay panna vendiya moththa amount
+                stats.totalLogisticsPayable += actualCostToPartner;
             }
         });
 
-        // 🌟 MASTER FIX: Manual construction for model safety
-        const settlementData = new Settlement({
+        const newSettlement = new Settlement({
             sellerId,
             weekRange: `${startDate} to ${endDate}`,
             totalSales: stats.sales,
@@ -317,18 +327,68 @@ exports.generateWeeklySettlement = async (req, res) => {
             commissionTotal: stats.commission,
             gstTotal: stats.gst,
             tdsTotal: stats.tds,
-            deliveryTotal: stats.delivery,
-            finalPayable: stats.payable,
+            deliveryTotal: stats.deliveryDeductionFromSeller, // Deduction from seller
+            logisticsShare: stats.totalLogisticsPayable,      // 👈 DELIVERY TEAM SHARE
+            adminProfit: stats.adminLogisticsProfit,         // 👈 ADMIN PROFIT IN DELIVERY
+            finalPayable: (stats.sales - (stats.commission + stats.gst + stats.tds + stats.deliveryDeductionFromSeller)),
             status: 'Pending'
         });
 
-        const savedSettlement = await settlementData.save();
-
-        res.json({ success: true, message: "Weekly Settlement Generated!", data: savedSettlement });
+        await newSettlement.save();
+        res.json({ success: true, message: "Weekly Settlement & Logistics Report Generated!", data: newSettlement });
     } catch (err) { 
-        console.error("Finance Error:", err.message);
         res.status(500).json({ success: false, error: err.message }); 
     }
+};
+
+// 🚚 Global Logistics Settlement (Bulk Pay for Delivery Team)
+exports.generateGlobalLogisticsSettlement = async (req, res) => {
+    try {
+        const { startDate, endDate } = req.body;
+
+        // 1. Intha range-la irukkura ELLA Delivered orders-aiyum fetch panroam
+        const orders = await Order.find({
+            status: 'Delivered',
+            createdAt: { $gte: new Date(startDate), $lte: new Date(endDate) }
+        });
+
+        if (orders.length === 0) return res.status(404).json({ success: false, message: "No delivered orders found." });
+
+        let stats = {
+            orderCount: 0,
+            customerPaidTotal: 0,
+            actualPartnerCost: 0
+        };
+
+        orders.forEach(order => {
+            stats.orderCount++;
+            // Customer pay panna delivery charge (Total bill-la irundhu)
+            stats.customerPaidTotal += order.billDetails?.deliveryCharge || 0;
+
+            // Intha order-la irukkura ella packages-oda actual shipping cost-ah kootuvom
+            order.sellerSplitData.forEach(split => {
+                stats.actualPartnerCost += split.actualLogisticsCost || 45; // Staging fallback
+            });
+        });
+
+        const newLogisticsBill = new LogisticsSettlement({
+            weekRange: `${startDate} to ${endDate}`,
+            totalOrders: stats.orderCount,
+            totalCustomerPaidDelivery: stats.customerPaidTotal,
+            totalPayableToLogistics: stats.actualPartnerCost,
+            netAdminLogisticsProfit: stats.customerPaidTotal - stats.actualPartnerCost,
+            status: 'Pending'
+        });
+
+        await newLogisticsBill.save();
+
+        res.json({ 
+            success: true, 
+            message: "Global Logistics Bill Generated!", 
+            data: newLogisticsBill 
+        });
+
+    } catch (err) { res.status(500).json({ error: err.message }); }
 };
 // 3. Mark as Paid (UTR Entry)
 exports.markSettlementAsPaid = async (req, res) => {
