@@ -594,38 +594,43 @@ const getLiveShippingRate = async (destPincode, weightValue, unit, sellerPincode
 ===================================================== */
 exports.calculateLiveDeliveryRate = async (req, res) => {
     try {
-        // 🌟 Body-la irundhu items array-ah strictly edukkuroam
+        // 🌟 Full Items array-ah edukkuroam
         const { pincode, paymentMode, items } = req.body; 
 
         if (!items || !Array.isArray(items) || items.length === 0) {
             return res.status(400).json({ success: false, message: "Cart items are required" });
         }
 
-        // 1️⃣ Unique Sellers-ah filter panni edukkuroam
+        // 1️⃣ uniqueSellers split logic
         const uniqueSellers = [...new Set(items.map(item => item.sellerId?._id || item.sellerId))];
         
         let totalCustomerGrandTotal = 0;
         let totalActualLogisticsCost = 0;
         let sellerWiseBreakdown = [];
 
-        // 2️⃣ Oru oru seller-kkum separate-ah delivery charge calculate panroam
+        // 2️⃣ Oru oru seller-kkum separate package-ah consider panroam
         for (const sId of uniqueSellers) {
             const sellerItems = items.filter(item => (item.sellerId?._id || item.sellerId) === sId);
             
-            // 🔥 CRITICAL CHECK: Intha seller products-la eadhachum "Paid Delivery" item irukka?
-            // Note: Oru seller package-la oru item paid-naalum, andha seller package-ku 80rs varum.
-            // Package full-ah free delivery products mattum irundha dhaan charge 0 aagum.
-            const hasAnyPaidItemInPackage = sellerItems.some(item => item.isFreeDelivery === false || item.productId?.isFreeDelivery === false);
+            // 🔥 MASTER FIX: Package-la oru item "Paid" delivery-ah irundhaalum, full package-ku charge apply aaganum.
+            // Strictly "All items in package must be free" to get ₹0 charge.
+            const hasAnyPaidItemInPackage = sellerItems.some(item => 
+                item.isFreeDelivery === false || 
+                item.productId?.isFreeDelivery === false ||
+                item.isFreeDelivery === "false"
+            );
 
             if (!hasAnyPaidItemInPackage) {
-                // Fully Free Seller Package
+                // Ellame Free Delivery products mattum dhaan intha package-la irukku
                 sellerWiseBreakdown.push({
                     sellerId: sId,
                     charge: 0,
-                    status: "FREE PACKAGE"
+                    status: "FREE PACKAGE",
+                    weight: "0g"
                 });
+                console.log(`✅ Seller ${sId} package is strictly FREE`);
             } else {
-                // Paid Seller Package - Calculate Weight & API Rate
+                // Package-la paid item irukku, so calculate weight & charge
                 const sellerTotalWeight = sellerItems.reduce((sum, it) => {
                     const rawW = it.weightValue || it.weight || 500;
                     const numW = Number(String(rawW).replace(/[^0-9.]/g, '')) || 500;
@@ -634,14 +639,16 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
 
                 const origin = sellerItems[0]?.sellerId?.pincode || "600001";
 
-                // 📡 Get Rate for this specific seller package
+                // 📡 Delhivery API call for this seller package
                 let apiCost = await getLiveShippingRate(pincode, sellerTotalWeight, 'g', origin, paymentMode);
                 
+                // Fallback manual calculation if API fails
                 if (apiCost === 0) {
                     const kg = universalWeightSync(sellerTotalWeight, 'g');
                     apiCost = 40 + (Math.max(0, Math.ceil((kg - 0.5) / 0.5)) * 15);
                 }
 
+                // Strictly ₹80 minimum margin sync
                 const customerPayable = Math.max(80, apiCost);
                 
                 totalCustomerGrandTotal += customerPayable;
@@ -651,15 +658,17 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
                     sellerId: sId,
                     charge: customerPayable,
                     actualCost: apiCost,
-                    weight: sellerTotalWeight + "g"
+                    weight: sellerTotalWeight + "g",
+                    status: "PAID PACKAGE"
                 });
+                console.log(`🚚 Seller ${sId} package charge: ₹${customerPayable}`);
             }
         }
 
-        // 🌟 FINAL RESPONSE: Strictly returns the sum of paid packages only
+        // 🌟 FINAL RESPONSE
         res.json({ 
             success: true, 
-            finalCharge: totalCustomerGrandTotal, 
+            finalCharge: totalCustomerGrandTotal,        // 👈 Paid package totals (Ex: 80+0=80 or 80+80=160)
             actualLogisticsCost: totalActualLogisticsCost,
             adminLogisticsProfit: totalCustomerGrandTotal - totalActualLogisticsCost,
             breakdown: sellerWiseBreakdown
