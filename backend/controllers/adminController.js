@@ -265,46 +265,56 @@ exports.updateFinanceSettings = async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 };
 
-// 2. Weekly Settlement Generation Logic (The Big One)
+// 2. Weekly Settlement Generation Logic (Optimized for Multi-Seller)
 exports.generateWeeklySettlement = async (req, res) => {
     try {
         const { sellerId, startDate, endDate } = req.body;
-        const settings = await FinanceSettings.findOne();
+        const settings = await FinanceSettings.findOne() || { 
+            commissionPercent: 10, 
+            gstOnCommissionPercent: 18, 
+            tdsPercent: 2 
+        };
 
-        // Orders fetch panni loop panna porom
+        // Orders fetch strictly for this seller and delivered status
         const orders = await Order.find({
             "sellerSplitData.sellerId": sellerId,
             status: 'Delivered',
             createdAt: { $gte: new Date(startDate), $lte: new Date(endDate) }
         });
 
+        if (orders.length === 0) {
+            return res.status(404).json({ success: false, message: "No delivered orders found for this period." });
+        }
+
         let stats = {
             sales: 0, count: 0, commission: 0, gst: 0, tds: 0, delivery: 0, payable: 0
         };
 
-      orders.forEach(order => {
+        orders.forEach(order => {
+            // Find this specific seller's split data in the multi-seller order
             const sellerData = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId);
+            
             if (sellerData) {
                 const subtotal = sellerData.sellerSubtotal || 0;
                 
-                // 🌟 Logic Fix: Using settings with fallbacks to avoid NaN errors
-                const commBase = (subtotal * (settings.commissionPercent || 10)) / 100;
-                const tdsAmount = (subtotal * (settings.tdsPercent || 2)) / 100;
-                const gstOnComm = (commBase * (settings.gstOnCommissionPercent || 18)) / 100;
-                
-                const delivery = sellerData.deliveryDeduction || 0;
+                // Logic sync with backend split logic
+                const commBase = (subtotal * (settings.commissionPercent)) / 100;
+                const gstOnComm = (commBase * (settings.gstOnCommissionPercent)) / 100;
+                const tdsAmount = (subtotal * (settings.tdsPercent)) / 100;
+                const delivery = sellerData.deliveryDeduction || 0; // Dynamic deduction
 
                 stats.sales += subtotal;
                 stats.count++;
                 stats.commission += commBase;
-                stats.tds += tdsAmount;
                 stats.gst += gstOnComm;
+                stats.tds += tdsAmount;
                 stats.delivery += delivery;
                 
-                // Final Payable strictly follows your logic
+                // Final calculation for this specific seller in that order
                 stats.payable += (subtotal - (commBase + gstOnComm + tdsAmount + delivery));
             }
         });
+
         const newSettlement = await Settlement.create({
             sellerId,
             weekRange: `${startDate} to ${endDate}`,
@@ -314,13 +324,15 @@ exports.generateWeeklySettlement = async (req, res) => {
             gstTotal: stats.gst,
             tdsTotal: stats.tds,
             deliveryTotal: stats.delivery,
-            finalPayable: stats.payable
+            finalPayable: stats.payable,
+            status: 'Pending'
         });
 
-        res.json({ success: true, message: "Settlement Generated!", data: newSettlement });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        res.json({ success: true, message: "Weekly Settlement Generated!", data: newSettlement });
+    } catch (err) { 
+        res.status(500).json({ success: false, error: err.message }); 
+    }
 };
-
 // 3. Mark as Paid (UTR Entry)
 exports.markSettlementAsPaid = async (req, res) => {
     try {
