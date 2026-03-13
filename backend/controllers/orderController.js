@@ -589,37 +589,85 @@ const getLiveShippingRate = async (destPincode, weightValue, unit, sellerPincode
 };
 
 
-
+/* =====================================================
+    🚚 MASTER CONTROLLER: calculateLiveDeliveryRate
+    (Strict Multi-Seller & Free Delivery Handshake)
+===================================================== */
 exports.calculateLiveDeliveryRate = async (req, res) => {
     try {
-        const { pincode, paymentMode, weightValue, unit, sellerPincode } = req.query;
-        const origin = sellerPincode || "600001"; 
+        // 🌟 Body-la irundhu items array-ah strictly edukkuroam
+        const { pincode, paymentMode, items } = req.body; 
 
-        // ⚖️ Frontend-la irundhu kooti anuppuna total weight (Ex: 1000)
-        const totalWeight = Number(weightValue) || 500;
-        const weightUnit = unit || 'g';
-
-        // 📡 Step 1: Get Direct API Cost from Delhivery
-        let actualApiCost = await getLiveShippingRate(pincode, totalWeight, weightUnit, origin, paymentMode);
-     
-        if (actualApiCost === 0) {
-            console.log("⚠️ Staging API returned 0. Calculating based on Manual Weight Slabs...");
-            const kg = universalWeightSync(totalWeight, weightUnit);
-            // Manual Rule: 500g-ku 40rs base, every extra 500g-ku +15rs (Ex: 1kg = 55rs)
-            actualApiCost = 40 + (Math.max(0, Math.ceil((kg - 0.5) / 0.5)) * 15);
+        if (!items || !Array.isArray(items) || items.length === 0) {
+            return res.status(400).json({ success: false, message: "Cart items are required" });
         }
-      
-      
-        const customerPayableCharge = Math.max(80, actualApiCost);
-        const adminProfitFromDelivery = customerPayableCharge - actualApiCost;
 
+        // 1️⃣ uniqueSellers-ah filter panni edukkuroam
+        const uniqueSellers = [...new Set(items.map(item => item.sellerId?._id || item.sellerId))];
+        
+        let totalCustomerGrandTotal = 0;
+        let totalActualLogisticsCost = 0;
+        let sellerWiseBreakdown = [];
+
+        // 2️⃣ Oru oru seller-kkum separate-ah delivery charge calculate panroam
+        for (const sId of uniqueSellers) {
+            const sellerItems = items.filter(item => (item.sellerId?._id || item.sellerId) === sId);
+            
+            // 🔥 CRITICAL CHECK: Intha seller package-la eadhachum FREE DELIVERY item irukka?
+            const isPackageFree = sellerItems.some(item => item.isFreeDelivery === true || item.productId?.isFreeDelivery === true);
+
+            if (isPackageFree) {
+                sellerWiseBreakdown.push({
+                    sellerId: sId,
+                    charge: 0,
+                    status: "FREE"
+                });
+                // Free-na charge zero, so totals-la ethum add aagadhu
+            } else {
+                // ⚖️ Intha specific seller-oda total package weight
+                const sellerTotalWeight = sellerItems.reduce((sum, it) => {
+                    const rawW = it.weightValue || it.weight || 500;
+                    const numW = Number(String(rawW).replace(/[^0-9.]/g, '')) || 500;
+                    return sum + (numW * it.quantity);
+                }, 0);
+
+                // 📍 Intha seller-oda pickup pincode (default to admin pincode if missing)
+                const origin = sellerItems[0]?.sellerId?.pincode || "600001";
+
+                // 📡 Step 1: Get Direct API Cost from Delhivery for THIS SELLER PACKAGE
+                let apiCost = await getLiveShippingRate(pincode, sellerTotalWeight, 'g', origin, paymentMode);
+                
+                // 📡 Step 2: Fallback logic (Manual checking if API gives 0)
+                if (apiCost === 0) {
+                    const kg = universalWeightSync(sellerTotalWeight, 'g');
+                    // Manual Rule: 500g-ku 40rs base, extra every 500g-ku +15rs
+                    apiCost = 40 + (Math.max(0, Math.ceil((kg - 0.5) / 0.5)) * 15);
+                }
+
+                // 📡 Step 3: Admin Margin & Minimum Charge Sync (Strictly ₹80 min)
+                const customerPayable = Math.max(80, apiCost);
+                
+                totalCustomerGrandTotal += customerPayable;
+                totalActualLogisticsCost += apiCost;
+
+                sellerWiseBreakdown.push({
+                    sellerId: sId,
+                    charge: customerPayable,
+                    actualCost: apiCost,
+                    weight: sellerTotalWeight + "g"
+                });
+            }
+        }
+
+        // 🌟 FINAL RESPONSE SYNC
         res.json({ 
             success: true, 
-            finalCharge: customerPayableCharge,      // 👈 Screen-la kaata vendiyadhu
-            actualLogisticsCost: actualApiCost,        // 👈 Delhivery partner-ku poguradhu
-            adminLogisticsProfit: adminProfitFromDelivery, // 👈 Admin-ku vara profit
-            appliedWeight: totalWeight + weightUnit
+            finalCharge: totalCustomerGrandTotal,        // 👈 Ippo Case-la 80+80=160 (or) 80+0=80 nu varum
+            actualLogisticsCost: totalActualLogisticsCost, // 👈 Partner-ku kudukka vendiyadhu
+            adminLogisticsProfit: totalCustomerGrandTotal - totalActualLogisticsCost,
+            breakdown: sellerWiseBreakdown            // 👈 Neat split for transparency
         });
+
     } catch (err) {
         console.error("Rate API Error:", err.message);
         res.status(500).json({ success: false, finalCharge: 80 });
@@ -881,9 +929,8 @@ exports.getMyOrders = async (req, res) => {
         res.status(500).json({ success: false, error: err.message }); 
     }
 };
-
 /* =====================================================
-    🔍 ADMIN GLOBAL ORDERS: Multi-Seller Split Logic
+    🔍 ADMIN GLOBAL ORDERS: Multi-Seller Split Logic (Free Delivery Sync)
 ===================================================== */
 exports.getOrders = async (req, res) => {
     try {
@@ -910,29 +957,24 @@ exports.getOrders = async (req, res) => {
                 );
 
                 if (sellerItems.length > 0) {
-                    // 🔥 THE SYNC FIX: 
-                    // Manual-ah 80rs add pannama, database-la intha seller-ku enna split data irukko adhai edukkuroam
-                    const specificSellerSplit = orderObj.sellerSplitData?.find(split => 
-                        split.sellerId?.toString() === sId
-                    );
+                    // 🔥 THE FREE DELIVERY SYNC FIX: 
+                    // Intha seller package-la eadhachum free delivery product irukka nu check panroam
+                    const isPackageFree = sellerItems.some(item => item.productId?.isFreeDelivery === true);
 
-                    // Calculation: This seller's subtotal from items
                     const sellerSubtotal = sellerItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
                     
-                    // 🚚 Delivery charge strictly from DB split data (fallback to 0 instead of manual 80)
-                    // Note: CreateOrder-la namma ippo seller split-la deliveryCharge store panna aarambikkanum.
-                    // For now, namma existing order logic balance panna direct mapping use panroam.
-                    const actualDeliveryCharge = specificSellerSplit?.deliveryDeduction || orderObj.billDetails?.deliveryCharge || 0;
+                    // 🚚 Delivery charge strictly from DB split data or fallback. 
+                    // Oru vaelai package free-na strictly 0.
+                    let actualDeliveryCharge = isPackageFree ? 0 : (orderObj.billDetails?.deliveryCharge || 80);
 
                     splittedOrdersList.push({
                         ...orderObj,
                         _id: orderObj._id, 
                         items: sellerItems,
                         seller: sellerItems[0].sellerId || { shopName: "Zhopingo Store" },
-                        // Override bill details strictly for this split view
                         billDetails: {
                             itemTotal: sellerSubtotal,
-                            deliveryCharge: actualDeliveryCharge,
+                            deliveryCharge: actualDeliveryCharge, // 👈 0 if isPackageFree is true
                             totalAmount: sellerSubtotal + actualDeliveryCharge
                         },
                         totalAmount: sellerSubtotal + actualDeliveryCharge
@@ -948,7 +990,7 @@ exports.getOrders = async (req, res) => {
 };
 
 /* =====================================================
-    🔍 SELLER ORDERS: Strictly Only Their Split Part
+    🔍 SELLER ORDERS: Strictly Only Their Split Part (Free Delivery Fix)
 ===================================================== */
 exports.getSellerOrders = async (req, res) => {
     try {
@@ -960,17 +1002,15 @@ exports.getSellerOrders = async (req, res) => {
 
         const splittedOrders = orders.map(order => {
             const orderObj = order.toObject();
-            
-            // 🛡️ Filter only this seller's products
             const myItems = orderObj.items.filter(item => 
                 (item.sellerId?._id?.toString() || item.sellerId?.toString()) === sellerId
             );
 
-            // Fetch specific finance split for this seller from DB
-            const mySplit = orderObj.sellerSplitData?.find(s => s.sellerId?.toString() === sellerId);
-
+            // 🛡️ Filter only this seller's products & check free status
+            const isPackageFree = myItems.some(item => item.productId?.isFreeDelivery === true);
             const sellerSubtotal = myItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
-            const actualDelivery = mySplit?.deliveryDeduction || orderObj.billDetails?.deliveryCharge || 0;
+            
+            const actualDelivery = isPackageFree ? 0 : (orderObj.billDetails?.deliveryCharge || 80);
 
             return {
                 ...orderObj,
