@@ -498,3 +498,18 @@ exports.createLedgerEntryForPayout = async (sellerId, amount) => {
         await newEntry.save();
     } catch (err) { console.error("Ledger Debit Error:", err.message); }
 };
+
+// 🌟 41. Fetch specific seller settlements for auto-sync logic
+exports.getSellerSettlements = async (req, res) => {
+    try {
+        const data = await Settlement.find({ sellerId: req.params.sellerId }).sort({ createdAt: -1 });
+        res.json({ success: true, data });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+};
+
+exports.getSellerLedger = async (req, res) => {
+    try {
+        const data = await Ledger.find({ sellerId: req.params.sellerId }).sort({ createdAt: -1 });
+        res.json({ success: true, data });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+};

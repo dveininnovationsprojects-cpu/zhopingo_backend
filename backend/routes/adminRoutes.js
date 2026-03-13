@@ -61,6 +61,8 @@ const {
     getAllSettlements,
     generateGlobalLogisticsSettlement,
     deleteWeightSlab,
+    getSellerSettlements,
+    getSellerLedger,
     getAllLedgerEntries
 } = require("../controllers/adminController"); 
 const { protect } = require('../middleware/authMiddleware');
@@ -100,6 +102,9 @@ router.put('/update-profile/:id', protect, updateAdminProfile);
 router.put('/change-password/:id', protect, changeAdminPassword);
 router.get('/settlements/all', protect, getAllSettlements);
 router.post('/logistics-settlement', protect, generateGlobalLogisticsSettlement);
+// 🚀 41. New GET Routes for Auto-Sync (Add these in adminRoutes.js)
+router.get('/finance/settlements/:sellerId', protect, getSellerSettlements); // Add this function in controller
+router.get('/ledger/:sellerId', protect, getSellerLedger); // Add this function in controller
 
 
 
