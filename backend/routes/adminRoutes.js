@@ -58,6 +58,7 @@ const {
     markSettlementAsPaid,
     manageWeightSlabs,
     upsertWeightSlab,
+    getAllSettlements,
     generateGlobalLogisticsSettlement,
     deleteWeightSlab
 } = require("../controllers/adminController"); 
@@ -96,6 +97,7 @@ router.post('/block-reel', protect, blockReelByAdmin);
 router.get('/profile/:id', protect, getAdminProfile);
 router.put('/update-profile/:id', protect, updateAdminProfile);
 router.put('/change-password/:id', protect, changeAdminPassword);
+router.get('/settlements/all', protect, getAllSettlements);
 router.post('/logistics-settlement', protect, generateGlobalLogisticsSettlement);
 
 module.exports = router;

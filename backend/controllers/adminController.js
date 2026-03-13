@@ -429,3 +429,19 @@ exports.deleteWeightSlab = async (req, res) => {
         res.json({ success: true, message: "Slab removed!" });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
+
+exports.getAllSettlements = async (req, res) => {
+    try {
+        const settlements = await Settlement.find()
+            .populate('sellerId', 'shopName email') // 🌟 Seller name theriya populate panrom
+            .sort({ createdAt: -1 }); // Latest settlement top-la vara
+
+        res.json({
+            success: true,
+            count: settlements.length,
+            data: settlements
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
