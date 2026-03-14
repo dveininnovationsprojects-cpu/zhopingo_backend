@@ -866,33 +866,6 @@ exports.createOrder = async (req, res) => {
         res.status(500).json({ success: false, error: err.message }); 
     }
 };
-/* =====================================================
-    ❌ 3. CANCEL ORDER (Refund Logic)
-===================================================== */
-exports.cancelOrder = async (req, res) => {
-    try {
-        const order = await Order.findById(req.params.orderId);
-        if (!order) return res.status(404).json({ success: false, message: "Order not found" });
-
-        if (order.status !== 'Placed' && order.status !== 'Pending') {
-            return res.status(400).json({ success: false, message: "Cancellation not possible." });
-        }
-
-        if (order.paymentStatus === 'Paid') {
-            const user = await User.findById(order.customerId);
-            if (user) {
-                user.walletBalance = (user.walletBalance || 0) + order.totalAmount;
-                user.walletTransactions.unshift({ amount: order.totalAmount, type: 'CREDIT', reason: `Refund: Order #${order._id.toString().slice(-6).toUpperCase()}`, date: new Date() });
-                await user.save();
-                order.paymentStatus = 'Refunded';
-            }
-        } else { order.paymentStatus = 'Cancelled'; }
-
-        order.status = 'Cancelled';
-        await order.save();
-        res.json({ success: true, message: "Order cancelled and refunded." });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
-};
 
 
 // 1. User Orders (OrderAgain matrum User Screen-ku)
@@ -1049,74 +1022,7 @@ exports.trackDelhivery = async (req, res) => {
     } catch (err) { res.status(500).json({ success: false, error: "Tracking failed" }); }
 };
 
-exports.updateOrderStatus = async (req, res) => {
-    try {
-        const { status, sellerId, awbNumber } = req.body; 
-        const order = await Order.findById(req.params.orderId);
 
-        if (!order) return res.status(404).json({ success: false, message: "Order not found" });
-
-        // 🌟 THE SPLIT ENGINE: Loop through items and update only this seller's products
-        let sellerFound = false;
-        order.items.forEach(item => {
-            // Check strictly for seller match
-            if (item.sellerId.toString() === sellerId) {
-                item.itemStatus = status; // 👈 Individual Item status
-                
-                if (awbNumber) item.itemAwbNumber = awbNumber; // 👈 Individual Tracking
-                if (status === 'Delivered') item.itemDeliveredDate = new Date();
-                if (status === 'Returned') item.itemReturnDate = new Date();
-                
-                sellerFound = true;
-            }
-        });
-
-        if (!sellerFound) return res.status(400).json({ success: false, message: "Seller products not found in this order" });
-
-        // 🛡️ Logic: Overall Order Status sync (If all items delivered, set main order to Delivered)
-        const allItemStatuses = order.items.map(i => i.itemStatus);
-        
-        if (allItemStatuses.every(s => s === 'Delivered')) {
-            order.status = 'Delivered';
-            order.deliveredDate = new Date();
-        } else if (allItemStatuses.some(s => s === 'Shipped' || s === 'Delivered')) {
-            order.status = 'Shipped';
-        }
-
-        await order.save();
-        res.json({ success: true, message: `Status updated strictly for Seller: ${sellerId}`, data: order });
-    } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
-    }
-};
-
-// orderController.js kulla handleDelhiveryWebhook logic update:
-exports.handleDelhiveryWebhook = async (req, res) => {
-    try {
-        const { waybill, status } = req.body;
-        // Search order where any item has this waybill
-        const order = await Order.findOne({ "items.itemAwbNumber": waybill });
-        
-        if (order) {
-            order.items.forEach(item => {
-                if (item.itemAwbNumber === waybill) {
-                    // Update individual item based on Delhivery status
-                    if (status === 'Delivered') {
-                        item.itemStatus = 'Delivered';
-                        item.itemDeliveredDate = new Date();
-                    } else if (status === 'Picked Up') {
-                        item.itemStatus = 'Return In-Progress';
-                    } else if (status === 'Delivered-to-Seller') {
-                        item.itemStatus = 'Returned';
-                        item.itemReturnDate = new Date();
-                    }
-                }
-            });
-            await order.save();
-        }
-        res.status(200).send("OK");
-    } catch (err) { res.status(500).send("Error"); }
-};
 exports.bypassPaymentAndShip = async (req, res) => {
     try {
         const order = await Order.findById(req.params.orderId);
@@ -1159,5 +1065,141 @@ exports.requestReturn = async (req, res) => {
         });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+
+/* =====================================================
+    ❌ 3. CANCEL ORDER (Seller-Wise Split Fix)
+===================================================== */
+exports.cancelOrder = async (req, res) => {
+    try {
+        const { sellerId } = req.body; // 👈 Frontend-la irundhu sellerId anuppanum
+        const order = await Order.findById(req.params.orderId);
+
+        if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+
+        // 🛡️ Logic: Placed status-la irukura intha seller items-ah mattum thedurom
+        let sellerItemsFound = false;
+        let refundAmount = 0;
+
+        order.items.forEach(item => {
+            if (item.sellerId.toString() === sellerId && (item.itemStatus === 'Placed' || item.itemStatus === 'Pending')) {
+                item.itemStatus = 'Cancelled'; // 🌟 Oru seller item mattum cancel
+                refundAmount += (item.price * item.quantity);
+                sellerItemsFound = true;
+            }
+        });
+
+        if (!sellerItemsFound) {
+            return res.status(400).json({ success: false, message: "Items cannot be cancelled or invalid seller." });
+        }
+
+        // 💰 WALLET REFUND: Strictly for the cancelled amount only
+        if (order.paymentStatus === 'Paid') {
+            const user = await User.findById(order.customerId);
+            if (user) {
+                user.walletBalance += refundAmount;
+                user.walletTransactions.unshift({
+                    amount: refundAmount,
+                    type: 'CREDIT',
+                    reason: `Refund: Order #${order._id.toString().slice(-6).toUpperCase()} (Split)`,
+                    date: new Date()
+                });
+                await user.save();
+            }
+        }
+
+        // 🛡️ MASTER STATUS SYNC: 
+        // Ella items-um cancel aayiducha nu check panni overall status-ah update panrom
+        const allStatuses = order.items.map(i => i.itemStatus);
+        if (allStatuses.every(s => s === 'Cancelled')) {
+            order.status = 'Cancelled';
+            order.paymentStatus = 'Refunded';
+        }
+
+        await order.save();
+        res.json({ success: true, message: "Seller products cancelled and refunded successfully." });
+
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+/* =====================================================
+    📈 5. TRACKING & WEBHOOK (Seller-Wise Handshake)
+===================================================== */
+exports.handleDelhiveryWebhook = async (req, res) => {
+    try {
+        const { waybill, status } = req.body;
+        // Search order where any individual item has this waybill
+        const order = await Order.findOne({ "items.itemAwbNumber": waybill });
+        
+        if (order) {
+            order.items.forEach(item => {
+                if (item.itemAwbNumber === waybill) {
+                    // Forward Logic
+                    if (status === 'Delivered') {
+                        item.itemStatus = 'Delivered';
+                        item.itemDeliveredDate = new Date();
+                    } 
+                    // Reverse Logic
+                    else if (status === 'Picked Up' || status === 'In-Transit-Reverse') {
+                        item.itemStatus = 'Return In-Progress';
+                    }
+                    else if (status === 'Delivered-to-Seller') {
+                        item.itemStatus = 'Returned';
+                        item.itemReturnDate = new Date();
+                    }
+                }
+            });
+
+            // Sync main order status if all are delivered
+            if (order.items.every(i => i.itemStatus === 'Delivered')) {
+                order.status = 'Delivered';
+                order.deliveredDate = new Date();
+            }
+
+            await order.save();
+        }
+        res.status(200).send("OK");
+    } catch (err) {
+        res.status(500).send("Error");
+    }
+};
+
+/* =====================================================
+    🌟 UPDATE ORDER STATUS (Admin/Seller Manual Update)
+===================================================== */
+exports.updateOrderStatus = async (req, res) => {
+    try {
+        const { status, sellerId, awbNumber } = req.body; 
+        const order = await Order.findById(req.params.orderId);
+
+        if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+
+        let sellerFound = false;
+        order.items.forEach(item => {
+            if (item.sellerId.toString() === sellerId) {
+                item.itemStatus = status; // 👈 Particular seller status update
+                if (awbNumber) item.itemAwbNumber = awbNumber; // 👈 Individual Tracking set
+                
+                if (status === 'Delivered') item.itemDeliveredDate = new Date();
+                if (status === 'Returned') item.itemReturnDate = new Date();
+                sellerFound = true;
+            }
+        });
+
+        if (!sellerFound) return res.status(400).json({ message: "Seller not part of this order" });
+
+        // Overall Sync
+        const statuses = order.items.map(i => i.itemStatus);
+        if (statuses.every(s => s === 'Delivered')) order.status = 'Delivered';
+        else if (statuses.some(s => s === 'Shipped')) order.status = 'Shipped';
+
+        await order.save();
+        res.json({ success: true, message: "Status updated for seller split", data: order });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
     }
 };
