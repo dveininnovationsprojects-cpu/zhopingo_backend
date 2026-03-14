@@ -2,6 +2,7 @@ const Reel = require('../models/Reel');
 const mongoose = require('mongoose');
 const { s3 } = require('../middleware/multerConfig');
 const { DeleteObjectCommand } = require("@aws-sdk/client-s3");
+const Report = require('../models/Report');
 
 // 🌟 Helper: CloudFront URL-ai attach panna (Exactly like Product Flow)
 const formatReelMedia = (reel) => {
@@ -164,6 +165,44 @@ exports.addReelView = async (req, res) => {
     }
 };
 
+
+
 exports.reportReel = async (req, res) => {
-    res.json({ success: true, message: "Report submitted successfully" });
+    try {
+        const { reelId, reason } = req.body;
+        const reporterId = req.user.id || req.user._id;
+
+        if (!reelId || !reason) {
+            return res.status(400).json({ success: false, message: "Reel ID and Reason are required" });
+        }
+
+        // Save report to DB
+        const report = await Report.create({ reelId, reporterId, reason });
+
+        res.json({ 
+            success: true, 
+            message: "Report submitted to Admin. We will review it shortly.",
+            reportId: report._id 
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
 };
+
+// 🌟 Admin side-la ellaa reports-aiyum paaka oru function
+exports.getReportedReels = async (req, res) => {
+    try {
+        const reports = await Report.find()
+            .populate({
+                path: 'reelId',
+                populate: { path: 'sellerId', select: 'shopName' }
+            })
+            .populate('reporterId', 'name phone')
+            .sort({ createdAt: -1 });
+
+        res.json({ success: true, data: reports });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
