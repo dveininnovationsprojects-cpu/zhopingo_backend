@@ -977,56 +977,89 @@ exports.requestReturn = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
-
-
 /* =====================================================
     🚚 UPDATE ORDER STATUS (Individual Seller Item Sync)
-    (Ore Order ID kulla irukura specific seller product mattum maarum)
+    Logic: Seller-ku endha product irukko adhuku mattum status update aagum.
 ===================================================== */
 exports.updateOrderStatus = async (req, res) => {
     try {
         const { status, sellerId, awbNumber } = req.body; 
-        const order = await Order.findById(req.params.orderId);
+        const orderId = req.params.orderId;
 
+        const order = await Order.findById(orderId);
         if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
         let sellerItemsUpdated = false;
 
-        // 🌟 THE ITEM-LEVEL LOGIC: Only loop and update this seller's products
+        // 1️⃣ Loop through items and update ONLY this seller's products
         order.items.forEach(item => {
-            // String comparison strictly added to avoid ObjectId mismatch
+            // String conversion to prevent ObjectId mismatch
             if (item.sellerId.toString() === sellerId?.toString()) {
-                item.itemStatus = status; // Flipkart maari individual item status change
-                if (awbNumber) item.itemAwbNumber = awbNumber;
                 
+                // Block updating if already Delivered/Cancelled (Security)
+                if (['Delivered', 'Cancelled', 'Returned'].includes(item.itemStatus)) {
+                    return; 
+                }
+
+                item.itemStatus = status;
+
+                // Sync Delhivery AWB if provided during 'Shipped' status
+                if (awbNumber) item.itemAwbNumber = awbNumber;
+
+                // Set Timestamps for Payout Logic
                 if (status === 'Delivered') item.itemDeliveredDate = new Date();
                 if (status === 'Returned') item.itemReturnDate = new Date();
+                if (status === 'Cancelled') item.itemCancelledDate = new Date();
+
                 sellerItemsUpdated = true;
             }
         });
 
         if (!sellerItemsUpdated) {
-            return res.status(400).json({ success: false, message: "No items found for this seller in this order" });
+            return res.status(400).json({ success: false, message: "No eligible items found for this seller." });
         }
 
-        // 🛡️ OVERALL STATUS SYNC: 
-        // Ella items-um delivered aana mattum dhaan Main Status "Delivered" aaganum.
+        // 2️⃣ Financial Status Sync (Payout Security)
+        // Seller split data-layum status update pannanum, apo dhaan payout logic-ku correct-ah irukum.
+        const sellerSplit = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId.toString());
+        if (sellerSplit) {
+            sellerSplit.status = (status === 'Delivered') ? 'Completed' : status;
+            
+            // If seller cancels/returns, payout becomes 0 for that seller (Industry Standard)
+            if (status === 'Cancelled' || status === 'Returned') {
+                sellerSplit.finalPayable = 0;
+            }
+        }
+
+        // 3️⃣ Overall Order Status Sync Logic
         const allStatuses = order.items.map(i => i.itemStatus);
-        
+
+        // CASE A: Everything is Delivered
         if (allStatuses.every(s => s === 'Delivered')) {
             order.status = 'Delivered';
             order.deliveredDate = new Date();
-        } else if (allStatuses.some(s => s === 'Shipped')) {
-            order.status = 'Shipped';
-        } else if (allStatuses.some(s => s === 'Delivered')) {
-            // Paadhi deliver aagi paadhi in transit-la irundha 'Shipped' status maintain aagum
-            order.status = 'Shipped'; 
+            order.paymentStatus = 'Paid'; // Manual security check
+        } 
+        // CASE B: Everything is Cancelled
+        else if (allStatuses.every(s => s === 'Cancelled')) {
+            order.status = 'Cancelled';
+            order.paymentStatus = 'Refunded';
+        }
+        // CASE C: Partial Delivery or Shipped
+        else if (allStatuses.some(s => s === 'Shipped') || allStatuses.some(s => s === 'Delivered')) {
+            order.status = 'Shipped'; // Partial shipping status
         }
 
         await order.save();
-        res.json({ success: true, message: "Item status updated katchithama!", data: order });
+
+        res.json({ 
+            success: true, 
+            message: `Items updated to ${status} for seller successfully!`, 
+            data: order 
+        });
 
     } catch (err) {
+        console.error("Update Status Error:", err);
         res.status(500).json({ success: false, error: err.message });
     }
 };
