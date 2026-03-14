@@ -109,7 +109,11 @@ const orderSchema = new mongoose.Schema({
         type: String, 
         default: 'Placed',
         // 🌟 Added 'Partially Cancelled' / 'Partially Shipped' for UI clarity
-        enum: ['Pending', 'Placed', 'Shipped', 'Delivered', 'Cancelled', 'Partially Cancelled', 'Return Requested', 'Return In-Progress', 'Returned'] 
+       enum: [
+        'Pending', 'Placed', 'Shipped', 'Delivered', 'Cancelled', 
+        'Partially Cancelled', 'Partially Shipped', 'Return Requested', 
+        'Return In-Progress', 'Returned'
+    ]
     },
     deliveredDate: { type: Date, default: null },
     returnDate: { type: Date, default: null },
