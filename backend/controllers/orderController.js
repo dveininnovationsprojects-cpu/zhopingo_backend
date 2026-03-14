@@ -1030,37 +1030,47 @@ exports.updateOrderStatus = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
-
 /* =====================================================
-    ❌ CANCEL ORDER (Seller-wise Partial Cancellation)
-    (Oru seller-ah cancel panna moththa order-um cancel aagaadhu)
+    ❌ CANCEL ORDER (Seller-wise Split Data Removal)
+    (Ore Order ID-la irundhu specific seller-ah remove panni refund panroam)
 ===================================================== */
 exports.cancelOrder = async (req, res) => {
     try {
-        const { sellerId } = req.body; // Postman/Frontend-la irundhu sellerId pass pannanum
+        const { sellerId } = req.body; 
         const order = await Order.findById(req.params.orderId);
 
         if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
-        let refundAmount = 0;
-        let sellerFound = false;
+        // 1️⃣ Find the Seller's Split Data
+        const sellerSplitIndex = order.sellerSplitData.findIndex(
+            split => split.sellerId.toString() === sellerId?.toString()
+        );
 
+        if (sellerSplitIndex === -1) {
+            return res.status(400).json({ success: false, message: "Seller data not found or already removed." });
+        }
+
+        const sellerData = order.sellerSplitData[sellerSplitIndex];
+        let refundAmount = 0;
+        let sellerItemsFound = false;
+
+        // 2️⃣ Update Item Status to 'Cancelled' strictly for this seller
         order.items.forEach(item => {
-            // Only cancel 'Placed' items for this specific seller
             if (item.sellerId.toString() === sellerId?.toString() && 
                (item.itemStatus === 'Placed' || item.itemStatus === 'Pending')) {
                 
                 item.itemStatus = 'Cancelled';
+                // Calculate item-wise total for refund (Price * Qty)
                 refundAmount += (item.price * item.quantity);
-                sellerFound = true;
+                sellerItemsFound = true;
             }
         });
 
-        if (!sellerFound) {
-            return res.status(400).json({ success: false, message: "Items already processed or invalid seller ID" });
+        if (!sellerItemsFound) {
+            return res.status(400).json({ success: false, message: "Seller products already processed." });
         }
 
-        // 💰 PARTIAL WALLET REFUND (Strictly for the cancelled seller's items only)
+        // 💰 3️⃣ WALLET REFUND: Strictly this seller's subtotal amount
         if (order.paymentStatus === 'Paid') {
             const user = await User.findById(order.customerId);
             if (user) {
@@ -1068,33 +1078,40 @@ exports.cancelOrder = async (req, res) => {
                 user.walletTransactions.unshift({
                     amount: refundAmount,
                     type: 'CREDIT',
-                    reason: `Partial Refund: Order #${order._id.toString().slice(-6).toUpperCase()}`,
+                    reason: `Refund (Split): Order #${order._id.toString().slice(-6).toUpperCase()}`,
                     date: new Date()
                 });
                 await user.save();
             }
         }
 
-        // 🛡️ MASTER STATUS SYNC:
+        // 🛡️ 4️⃣ REMOVE SELLER FROM SPLIT DATA: Financial cleanup
+        order.sellerSplitData.splice(sellerSplitIndex, 1);
+
+        // 🛡️ 5️⃣ MASTER STATUS SYNC:
         const allStatuses = order.items.map(i => i.itemStatus);
-        
-        if (allStatuses.every(s => s === 'Cancelled')) {
-            // Ella seller-um cancel pannuna mattum dhaan moththa order status "Cancelled"
+        const activeItems = allStatuses.filter(s => s !== 'Cancelled');
+
+        if (activeItems.length === 0) {
+            // All items cancelled
             order.status = 'Cancelled';
             order.paymentStatus = 'Refunded';
         } else {
-            // Oru seller active-ah irundha order status 'Placed'-laye irukkanum (or use 'Partially Cancelled')
-            order.status = 'Placed'; 
+            // Some items still active
+            order.status = 'Partially Cancelled';
         }
 
         await order.save();
-        res.json({ success: true, message: "Seller products cancelled. Main order stays active." });
+        res.json({ 
+            success: true, 
+            message: "Seller removed from order, items cancelled & refund processed.",
+            remainingSellers: order.sellerSplitData.length 
+        });
 
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
 };
-
 /* =====================================================
     📈 5. TRACKING & WEBHOOK (Seller-Wise Handshake)
 ===================================================== */
