@@ -1,3 +1,54 @@
+// const mongoose = require('mongoose');
+
+// const orderSchema = new mongoose.Schema({
+//     customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+//     items: [{
+//         productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
+//         name: { type: String, required: true },
+//         quantity: { type: Number, required: true },
+//         price: { type: Number, required: true }, 
+//         hsnCode: { type: String, default: "0000" },
+//         mrp: { type: Number },
+//         // 🔥 இங்கதான் மஜாவே இருக்கு: ref குடுத்தா தான் shopName வரும்
+//         sellerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Seller', required: true }, 
+//         image: { type: String }
+//     }],
+//     sellerSplitData: [{
+//         sellerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Seller' },
+//         sellerSubtotal: Number,
+//         actualShippingCost: Number,
+//         customerChargedShipping: Number
+//     }],
+//     billDetails: {
+//         mrpTotal: { type: Number, default: 0 },
+//         productDiscount: { type: Number, default: 0 },
+//         itemTotal: { type: Number, default: 0 }, 
+//         handlingCharge: { type: Number, default: 2 }, 
+//         deliveryCharge: { type: Number, default: 0 }
+//     },
+//     totalAmount: { type: Number, required: true },
+//     paymentMethod: { type: String, required: true }, 
+//     paymentStatus: { type: String, enum: ['Pending', 'Paid', 'Failed', 'Refunded'], default: 'Pending' },
+//     status: { 
+//         type: String, 
+//         default: 'Placed',
+//         enum: ['Pending', 'Placed', 'Shipped', 'Delivered', 'Cancelled'] 
+//     },
+//     shippingAddress: {
+//         receiverName: { type: String },
+//         flatNo: { type: String },
+//         addressLine: { type: String },
+//         pincode: { type: String },
+//         label: { type: String }
+//     },
+//     awbNumber: { type: String, default: null },
+//     arrivedIn: { type: String, default: "15 mins" } 
+// }, { timestamps: true });
+
+// module.exports = mongoose.model('Order', orderSchema);
+
+
+
 const mongoose = require('mongoose');
 
 const orderSchema = new mongoose.Schema({
@@ -11,13 +62,23 @@ const orderSchema = new mongoose.Schema({
         mrp: { type: Number },
         // 🔥 இங்கதான் மஜாவே இருக்கு: ref குடுத்தா தான் shopName வரும்
         sellerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Seller', required: true }, 
-        image: { type: String }
+        image: { type: String },
+        // 🌟 RETURN LOGIC: Product level tags strictly added
+        isReturnable: { type: Boolean, default: false },
+        returnWindowDays: { type: Number, default: 0 },
+        isReturned: { type: Boolean, default: false },
+        returnReason: { type: String, default: "" }
     }],
     sellerSplitData: [{
         sellerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Seller' },
         sellerSubtotal: Number,
-        actualShippingCost: Number,
-        customerChargedShipping: Number
+        // 🌟 PAYOUT SYNC: Maggie (Free) vs Rice (Paid) logic-ku deductions katchithama venum
+        commissionTotal: { type: Number, default: 0 },
+        gstTotal: { type: Number, default: 0 },
+        tdsTotal: { type: Number, default: 0 },
+        deliveryDeduction: { type: Number, default: 0 }, // Admin logic deduction from seller
+        actualShippingCost: { type: Number, default: 0 }, // Delhivery actual cost
+        customerChargedShipping: { type: Number, default: 0 }
     }],
     billDetails: {
         mrpTotal: { type: Number, default: 0 },
@@ -32,8 +93,13 @@ const orderSchema = new mongoose.Schema({
     status: { 
         type: String, 
         default: 'Placed',
-        enum: ['Pending', 'Placed', 'Shipped', 'Delivered', 'Cancelled'] 
+        enum: ['Pending', 'Placed', 'Shipped', 'Delivered', 'Cancelled', 'Returned'] // 🌟 'Returned' strictly added
     },
+    // 🌟 SETTLEMENT TRACKING: Weekly payout logic-ku intha dates strictly venum
+    deliveredDate: { type: Date, default: null },
+    returnDate: { type: Date, default: null },
+    isSettled: { type: Boolean, default: false }, // Weekly payout-la include aayiducha nu track panna
+    
     shippingAddress: {
         receiverName: { type: String },
         flatNo: { type: String },
@@ -42,7 +108,7 @@ const orderSchema = new mongoose.Schema({
         label: { type: String }
     },
     awbNumber: { type: String, default: null },
-    arrivedIn: { type: String, default: "15 mins" } 
+    // arrivedIn: { type: String, default: "15 mins" } 
 }, { timestamps: true });
 
 module.exports = mongoose.model('Order', orderSchema);

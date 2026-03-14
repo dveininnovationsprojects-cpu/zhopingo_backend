@@ -1052,11 +1052,35 @@ exports.trackDelhivery = async (req, res) => {
 exports.updateOrderStatus = async (req, res) => {
     try {
         const { status } = req.body;
-        const order = await Order.findByIdAndUpdate(req.params.orderId, { status }, { new: true }).populate({ path: 'items.sellerId', select: 'shopName name' });
-        if (status === 'Delivered') order.paymentStatus = 'Paid';
+        const orderId = req.params.orderId;
+
+        const order = await Order.findById(orderId).populate({
+            path: 'items.sellerId',
+            select: 'shopName name'
+        });
+
+        if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+
+        order.status = status;
+
+        // 🌟 1. LOGIC: Delivered aagum podhu strictly Date record pannanum
+        if (status === 'Delivered') {
+            order.paymentStatus = 'Paid';
+            order.deliveredDate = new Date();
+            order.isSettled = false; // Initial-ah settle aagi irukaadhu
+        }
+
+        // 🌟 2. LOGIC: Returned aagum podhu date matrum logic sync pannanum
+        if (status === 'Returned') {
+            order.returnDate = new Date();
+            // Note: Return logic-la refund process Admin panna maari namma settlement-la minus aagum
+        }
+
         await order.save();
         res.json({ success: true, data: order });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
 };
 
 exports.handleDelhiveryWebhook = async (req, res) => {
@@ -1078,4 +1102,55 @@ exports.bypassPaymentAndShip = async (req, res) => {
         await order.save();
         res.json({ success: true, data: order });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+};
+
+
+/* =====================================================
+    📦 RETURN LOGIC: Request Return for Product
+===================================================== */
+exports.requestReturn = async (req, res) => {
+    try {
+        const { orderId, reason } = req.body;
+        const order = await Order.findById(orderId);
+
+        if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+
+        // 🛡️ Safety Check: Delivered aagi irukanum strictly
+        if (order.status !== 'Delivered') {
+            return res.status(400).json({ success: false, message: "Only delivered orders can be returned." });
+        }
+
+        // 🛡️ Window Check: Seller sonna andha "Window Days" mudinjirucha?
+        // (Ex: Delivered on June 1 + 7 Days Window = June 8 varai dhaan allow pannanum)
+        const deliveryDate = new Date(order.deliveredDate);
+        const currentDate = new Date();
+        const diffInDays = Math.floor((currentDate - deliveryDate) / (1000 * 60 * 60 * 24));
+
+        // Note: Ippo namma items array-la irukkura product level settings pathu check panroam
+        // Multi-product order-la oru item return panna kooda namma ippo FULL ORDER status-ah 'Return Requested'-nu maathuroam.
+        const canReturn = order.items.some(item => item.isReturnable && diffInDays <= item.returnWindowDays);
+
+        if (!canReturn) {
+            return res.status(400).json({ success: false, message: "Return window has expired or product is non-returnable." });
+        }
+
+        order.status = 'Returned'; // Status strictly update aaganum
+        order.returnDate = new Date();
+        // Item level flags update
+        order.items.forEach(item => {
+            item.isReturned = true;
+            item.returnReason = reason || "Customer requested return";
+        });
+
+        await order.save();
+
+        res.json({ 
+            success: true, 
+            message: "Return processed successfully. Amount will be deducted in next payout.",
+            data: order 
+        });
+
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
 };

@@ -265,80 +265,125 @@ exports.updateFinanceSettings = async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 };
 
-// 2. Weekly Settlement Generation (Seller + Logistics Split Logic)
+/* =====================================================
+    💰 MASTER WEEKLY SETTLEMENT GENERATOR 
+    (Maggie-Rice Sync, Return Deductions & 7-Day Completion)
+===================================================== */
 exports.generateWeeklySettlement = async (req, res) => {
     try {
         const { sellerId, startDate, endDate } = req.body;
-        const settings = await FinanceSettings.findOne() || { 
-            commissionPercent: 10, gstOnCommissionPercent: 18, tdsPercent: 2 
-        };
+        
+        // 🛡️ Logic: Delivered aagi strictly 7 days mudinjirukanum (Return window safety)
+        const settlementCutoffDate = new Date();
+        settlementCutoffDate.setDate(settlementCutoffDate.getDate() - 7);
 
-        const orders = await Order.find({
+        // 1️⃣ Fetch DELIVERED orders for this seller (Strictly 7+ days old)
+        const deliveredOrders = await Order.find({
             "sellerSplitData.sellerId": sellerId,
             status: 'Delivered',
-            createdAt: { $gte: new Date(startDate), $lte: new Date(endDate) }
-        });
+            deliveredDate: { $lte: settlementCutoffDate }, 
+            isSettled: { $ne: true } 
+        }).populate('items.productId');
 
-        if (orders.length === 0) {
-            return res.status(404).json({ success: false, message: "No delivered orders found." });
+        // 2️⃣ Fetch RETURNED orders (Reflected in current week payout)
+        const returnedOrders = await Order.find({
+            "sellerSplitData.sellerId": sellerId,
+            status: 'Returned',
+            returnDate: { $gte: new Date(startDate), $lte: new Date(endDate) },
+            isSettled: { $ne: true }
+        }).populate('items.productId');
+
+        if (deliveredOrders.length === 0 && returnedOrders.length === 0) {
+            return res.status(404).json({ success: false, message: "No eligible orders for settlement in this range." });
         }
 
-        let stats = {
-            sales: 0, count: 0, commission: 0, gst: 0, tds: 0, 
-            deliveryDeductionFromSeller: 0, // Seller pay panna amount
-            adminLogisticsProfit: 0,        // Admin-ku delivery-la vara profit
-            totalLogisticsPayable: 0        // Delhivery team-ku pay panna vendiyadhu
+        let payoutRows = []; // Table columns-ku thevayana day-wise data
+        let summary = {
+            sales: 0,
+            deductions: 0,
+            logisticsActualTotal: 0,
+            finalPayable: 0
         };
 
-        orders.forEach(order => {
+        // ➕ Process Delivered Orders (Maggie vs Rice logic applied)
+        deliveredOrders.forEach(order => {
             const sellerData = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId);
             if (sellerData) {
                 const subtotal = sellerData.sellerSubtotal || 0;
-                const commBase = (subtotal * settings.commissionPercent) / 100;
-                const tdsAmount = (subtotal * settings.tdsPercent) / 100;
-                const gstOnComm = (commBase * settings.gstOnCommissionPercent) / 100;
-
-                // 🚚 LOGISTICS PARTNER KANAKKU:
-                const customerPaidDelivery = order.billDetails?.deliveryCharge || 0; 
-                const actualCostToPartner = sellerData.actualLogisticsCost || 45; // Delhivery charges (Staging fallback)
+                // Calculations
+                const comm = sellerData.commissionTotal || 0;
+                const gst = sellerData.gstTotal || 0;
+                const tds = sellerData.tdsTotal || 0;
+                const deliveryDed = sellerData.deliveryDeduction || 0;
                 
-                stats.sales += subtotal;
-                stats.count++;
-                stats.commission += commBase;
-                stats.tds += tdsAmount;
-                stats.gst += gstOnComm;
+                const totalDed = comm + gst + tds + deliveryDed;
+                const lineFinal = subtotal - totalDed;
 
-                // Seller kitta irundhu delivery cost-ah Admin eduthukkura amount
-                stats.deliveryDeductionFromSeller += sellerData.deliveryDeduction || 0;
+                summary.sales += subtotal;
+                summary.deductions += totalDed;
+                summary.logisticsActualTotal += (sellerData.actualShippingCost || 0);
 
-                // 📈 Admin Profit logic: (Customer pay panna 80) - (Partner-ku thara 45)
-                stats.adminLogisticsProfit += (customerPaidDelivery - actualCostToPartner);
-                
-                // 🚛 Partner Share: Admin delivery partner-ku pay panna vendiya moththa amount
-                stats.totalLogisticsPayable += actualCostToPartner;
+                payoutRows.push({
+                    date: order.deliveredDate,
+                    orderId: order._id,
+                    type: 'SALE',
+                    amount: subtotal,
+                    comm_gst_tds: comm + gst + tds,
+                    delivery_status: deliveryDed > 0 ? `Deducted (₹${deliveryDed})` : "Customer Paid (FREE FOR SELLER)",
+                    actual_logistics: sellerData.actualShippingCost, // Info only
+                    net_payable: lineFinal
+                });
             }
         });
 
+        // ➖ Process Returned Orders (Maggie + 80 Logic)
+        returnedOrders.forEach(order => {
+            const sellerData = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId);
+            if (sellerData) {
+                const productAmt = sellerData.sellerSubtotal || 0;
+                const logisticsLoss = (sellerData.actualShippingCost || 80); // Namma partner-ku kudutha loss
+                
+                // 🌟 Logic: Seller payout-la irundhu Product Kaasu + Namma Partner-ku kudutha kaasu rendaiyum koraikurom
+                const totalReturnDeduction = productAmt + logisticsLoss;
+
+                summary.sales -= productAmt;
+                summary.deductions += logisticsLoss;
+
+                payoutRows.push({
+                    date: order.returnDate,
+                    orderId: order._id,
+                    type: 'RETURN',
+                    amount: -productAmt,
+                    comm_gst_tds: 0,
+                    delivery_status: `Logistics Loss (₹${logisticsLoss})`,
+                    actual_logistics: logisticsLoss,
+                    net_payable: -totalReturnDeduction
+                });
+            }
+        });
+
+        summary.finalPayable = summary.sales - summary.deductions;
+
+        // 3️⃣ Save Settlement record
         const newSettlement = new Settlement({
             sellerId,
             weekRange: `${startDate} to ${endDate}`,
-            totalSales: stats.sales,
-            orderCount: stats.count,
-            commissionTotal: stats.commission,
-            gstTotal: stats.gst,
-            tdsTotal: stats.tds,
-            deliveryTotal: stats.deliveryDeductionFromSeller, // Deduction from seller
-            logisticsShare: stats.totalLogisticsPayable,      // 👈 DELIVERY TEAM SHARE
-            adminProfit: stats.adminLogisticsProfit,         // 👈 ADMIN PROFIT IN DELIVERY
-            finalPayable: (stats.sales - (stats.commission + stats.gst + stats.tds + stats.deliveryDeductionFromSeller)),
+            payoutBreakdown: payoutRows, // 🌟 Day-wise table data
+            totalSales: summary.sales,
+            totalDeductions: summary.deductions,
+            finalPayable: summary.finalPayable,
             status: 'Pending'
         });
 
         await newSettlement.save();
-        res.json({ success: true, message: "Weekly Settlement & Logistics Report Generated!", data: newSettlement });
-    } catch (err) { 
-        res.status(500).json({ success: false, error: err.message }); 
-    }
+
+        // 🛡️ Flag orders as settled
+        const orderIds = [...deliveredOrders, ...returnedOrders].map(o => o._id);
+        await Order.updateMany({ _id: { $in: orderIds } }, { $set: { isSettled: true } });
+
+        res.json({ success: true, message: "Weekly Settlement Generated!", data: newSettlement });
+
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
 // 🌟 1. API for Daily Orders View (Settlement aagaadha orders)
