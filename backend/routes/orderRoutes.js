@@ -45,7 +45,7 @@ const orderCtrl = require('../controllers/orderController');
 const { protect } = require('../middleware/authMiddleware');
 
 
-router.get('/calculate-shipping', protect, orderCtrl.calculateLiveDeliveryRate);
+router.post('/calculate-shipping', protect, orderCtrl.calculateLiveDeliveryRate);
 
 
 router.post('/create', protect, orderCtrl.createOrder);
