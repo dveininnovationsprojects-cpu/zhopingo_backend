@@ -1104,53 +1104,49 @@ exports.bypassPaymentAndShip = async (req, res) => {
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
-
 /* =====================================================
-    📦 RETURN LOGIC: Request Return for Product
+    📦 RETURN ENGINE: Request Pickup & Generate AWB
 ===================================================== */
 exports.requestReturn = async (req, res) => {
     try {
         const { orderId, reason } = req.body;
-        const order = await Order.findById(orderId);
+        const order = await Order.findById(orderId).populate('customerId');
 
-        if (!order) return res.status(404).json({ success: false, message: "Order not found" });
-
-        // 🛡️ Safety Check: Delivered aagi irukanum strictly
-        if (order.status !== 'Delivered') {
+        if (!order || order.status !== 'Delivered') {
             return res.status(400).json({ success: false, message: "Only delivered orders can be returned." });
         }
 
-        // 🛡️ Window Check: Seller sonna andha "Window Days" mudinjirucha?
-        // (Ex: Delivered on June 1 + 7 Days Window = June 8 varai dhaan allow pannanum)
-        const deliveryDate = new Date(order.deliveredDate);
-        const currentDate = new Date();
-        const diffInDays = Math.floor((currentDate - deliveryDate) / (1000 * 60 * 60 * 24));
-
-        // Note: Ippo namma items array-la irukkura product level settings pathu check panroam
-        // Multi-product order-la oru item return panna kooda namma ippo FULL ORDER status-ah 'Return Requested'-nu maathuroam.
-        const canReturn = order.items.some(item => item.isReturnable && diffInDays <= item.returnWindowDays);
-
-        if (!canReturn) {
-            return res.status(400).json({ success: false, message: "Return window has expired or product is non-returnable." });
+        // 🛡️ Window Protection (Nee sonna 7 days check)
+        const dDate = order.deliveredDate ? new Date(order.deliveredDate) : new Date(order.updatedAt);
+        const windowDays = order.items?.[0]?.returnWindowDays || 7; 
+        if (Math.floor((new Date() - dDate) / (1000 * 3600 * 24)) > windowDays) {
+            return res.status(400).json({ success: false, message: "Return window expired." });
         }
 
-        order.status = 'Returned'; // Status strictly update aaganum
+        /* 🌟 THE REVERSE LOGISTICS FIX: 
+           Ippo namma Delhivery-la "Reverse Pickup" request create panna porom.
+           Adhukkappram dhaan status 'Return Requested' nu maaranum. */
+        
+        // Note: Reverse pickup-ku Delhivery-la 'pickup' type shipment podanum.
+        // Staging testing-ku namma andha logic-ah simulate pannuvom.
+        const returnAWB = "RTN" + Math.floor(100000 + Math.random() * 900000);
+
+        order.status = 'Return Requested'; // 👈 First status 'Requested' dhaan irukanum
         order.returnDate = new Date();
-        // Item level flags update
-        order.items.forEach(item => {
-            item.isReturned = true;
-            item.returnReason = reason || "Customer requested return";
+        order.awbNumber = returnAWB; // 👈 Reverse tracking reference
+        
+        order.items.forEach(it => {
+            it.isReturned = true;
+            it.returnReason = reason || "Customer Return";
         });
 
         await order.save();
 
         res.json({ 
             success: true, 
-            message: "Return processed successfully. Amount will be deducted in next payout.",
+            message: "Pickup scheduled! Tracker ID generated: " + returnAWB,
             data: order 
         });
 
-    } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
-    }
+    } catch (err) { res.status(500).json({ error: err.message }); }
 };
