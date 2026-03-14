@@ -1144,19 +1144,19 @@ exports.handleDelhiveryWebhook = async (req, res) => {
         res.status(500).send("Error");
     }
 };
-// Controllers-la indha logic-ah replace pannu:
+
+/* =====================================================
+    🚚 UPDATE ORDER STATUS (Individual Seller Sync)
+===================================================== */
 exports.updateOrderStatus = async (req, res) => {
     try {
         const { status, sellerId, awbNumber } = req.body; 
         const order = await Order.findById(req.params.orderId);
-
         if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
         let sellerFound = false;
-
-        // 🌟 CRITICAL FIX: sellerId-ah String-ah mathi compare pannanum
         order.items.forEach(item => {
-            if (item.sellerId.toString() === sellerId.toString()) { // 👈 Inga dhaan fix!
+            if (item.sellerId.toString() === sellerId?.toString()) {
                 item.itemStatus = status;
                 if (awbNumber) item.itemAwbNumber = awbNumber;
                 
@@ -1166,16 +1166,20 @@ exports.updateOrderStatus = async (req, res) => {
             }
         });
 
-        if (!sellerFound) return res.status(400).json({ success: false, message: "Seller products not found" });
+        if (!sellerFound) return res.status(400).json({ message: "Seller not found in this order split" });
 
-        // Sync Overall Status
+        // Overall Sync
         const statuses = order.items.map(i => i.itemStatus);
-        if (statuses.every(s => s === 'Delivered')) order.status = 'Delivered';
-        else if (statuses.some(s => s === 'Shipped')) order.status = 'Shipped';
-        // Note: Cancelled logic sync
-        if (statuses.every(s => s === 'Cancelled')) order.status = 'Cancelled';
+        if (statuses.every(s => s === 'Delivered')) {
+            order.status = 'Delivered';
+            order.deliveredDate = new Date();
+        } else if (statuses.some(s => s === 'Shipped')) {
+            order.status = 'Shipped';
+        }
 
         await order.save();
-        res.json({ success: true, message: "Seller Item updated successfully", data: order });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        res.json({ success: true, message: "Seller item status updated!", data: order });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
 };
