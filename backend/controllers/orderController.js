@@ -1031,8 +1031,8 @@ exports.updateOrderStatus = async (req, res) => {
     }
 };
 /* =====================================================
-    ❌ CANCEL ORDER (Seller-wise Split Data Removal)
-    (Ore Order ID-la irundhu specific seller-ah remove panni refund panroam)
+    ❌ CANCEL ORDER (The Master Flipkart Logic)
+    (Seller removal from DB + Specific Item Cancel + Refund)
 ===================================================== */
 exports.cancelOrder = async (req, res) => {
     try {
@@ -1041,36 +1041,36 @@ exports.cancelOrder = async (req, res) => {
 
         if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
-        // 1️⃣ Find the Seller's Split Data
+        // 1️⃣ Find if this seller actually exists in the split data
         const sellerSplitIndex = order.sellerSplitData.findIndex(
             split => split.sellerId.toString() === sellerId?.toString()
         );
 
         if (sellerSplitIndex === -1) {
-            return res.status(400).json({ success: false, message: "Seller data not found or already removed." });
+            return res.status(400).json({ success: false, message: "Seller data already removed or invalid ID." });
         }
 
         const sellerData = order.sellerSplitData[sellerSplitIndex];
         let refundAmount = 0;
-        let sellerItemsFound = false;
+        let sellerItemsUpdated = false;
 
-        // 2️⃣ Update Item Status to 'Cancelled' strictly for this seller
+        // 2️⃣ Update ONLY this seller's items to 'Cancelled'
         order.items.forEach(item => {
             if (item.sellerId.toString() === sellerId?.toString() && 
                (item.itemStatus === 'Placed' || item.itemStatus === 'Pending')) {
                 
                 item.itemStatus = 'Cancelled';
-                // Calculate item-wise total for refund (Price * Qty)
+                // Refund amount strictly Price * Quantity
                 refundAmount += (item.price * item.quantity);
-                sellerItemsFound = true;
+                sellerItemsUpdated = true;
             }
         });
 
-        if (!sellerItemsFound) {
-            return res.status(400).json({ success: false, message: "Seller products already processed." });
+        if (!sellerItemsUpdated) {
+            return res.status(400).json({ success: false, message: "Items already processed or shipped." });
         }
 
-        // 💰 3️⃣ WALLET REFUND: Strictly this seller's subtotal amount
+        // 💰 3️⃣ WALLET REFUND: Strictly for the cancelled amount only
         if (order.paymentStatus === 'Paid') {
             const user = await User.findById(order.customerId);
             if (user) {
@@ -1078,38 +1078,41 @@ exports.cancelOrder = async (req, res) => {
                 user.walletTransactions.unshift({
                     amount: refundAmount,
                     type: 'CREDIT',
-                    reason: `Refund (Split): Order #${order._id.toString().slice(-6).toUpperCase()}`,
+                    reason: `Partial Refund (Order Split): #${order._id.toString().slice(-6).toUpperCase()}`,
                     date: new Date()
                 });
                 await user.save();
             }
         }
 
-        // 🛡️ 4️⃣ REMOVE SELLER FROM SPLIT DATA: Financial cleanup
-        order.sellerSplitData.splice(sellerSplitIndex, 1);
+        // 🛡️ 4️⃣ FINANCIAL DATA REMOVAL: 
+        // Intha line dhaan seller-oda record-ah database-la irundhu katchithama thookkum
+        order.sellerSplitData.pull({ _id: sellerData._id });
 
-        // 🛡️ 5️⃣ MASTER STATUS SYNC:
-        const allStatuses = order.items.map(i => i.itemStatus);
-        const activeItems = allStatuses.filter(s => s !== 'Cancelled');
+        // 🛡️ 5️⃣ OVERALL STATUS SYNC:
+        const allItemStatuses = order.items.map(i => i.itemStatus);
+        const activeItems = allItemStatuses.filter(s => s !== 'Cancelled');
 
         if (activeItems.length === 0) {
-            // All items cancelled
             order.status = 'Cancelled';
             order.paymentStatus = 'Refunded';
         } else {
-            // Some items still active
+            // Partially Cancelled badge for frontend
             order.status = 'Partially Cancelled';
         }
 
+        // 🌟 FINAL SAVE: Ensuring database sync
         await order.save();
+        
         res.json({ 
             success: true, 
-            message: "Seller removed from order, items cancelled & refund processed.",
-            remainingSellers: order.sellerSplitData.length 
+            message: "Seller removed and items cancelled successfully!",
+            refunded: refundAmount 
         });
 
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        console.error("Master Cancel Error:", err);
+        res.status(500).json({ success: false, error: "System failed to remove seller split data." });
     }
 };
 /* =====================================================
