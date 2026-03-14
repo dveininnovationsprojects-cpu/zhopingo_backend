@@ -1087,8 +1087,22 @@ exports.handleDelhiveryWebhook = async (req, res) => {
     try {
         const { waybill, status } = req.body;
         const order = await Order.findOne({ awbNumber: waybill });
+        
         if (order) {
-            order.status = (status === 'Delivered') ? 'Delivered' : 'Shipped';
+            // Forward flow logic
+            if (status === 'Delivered' && order.status !== 'Return Requested') {
+                order.status = 'Delivered';
+                order.deliveredDate = new Date();
+            } 
+            // 🌟 REVERSE FLOW LOGIC: 
+            // Pickup mudinjona status 'Returned' nu maaranum
+            else if (status === 'Picked Up' || status === 'In-Transit-Reverse') {
+                order.status = 'Return In-Progress';
+            }
+            else if (status === 'Delivered-to-Seller' || status === 'Returned-to-Origin') {
+                order.status = 'Returned';
+                order.returnDate = new Date();
+            }
             await order.save();
         }
         res.status(200).send("OK");
