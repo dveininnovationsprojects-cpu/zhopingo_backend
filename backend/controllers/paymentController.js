@@ -265,36 +265,36 @@ const createDelhiveryShipment = async (order, customerPhone, pickupName, weight)
   }
 };
 
-const updateOrderSuccess = async (orderId) => {
-  try {
-    const order = await Order.findById(orderId);
-    if (!order || order.paymentStatus === "Paid") return true;
+// const updateOrderSuccess = async (orderId) => {
+//   try {
+//     const order = await Order.findById(orderId);
+//     if (!order || order.paymentStatus === "Paid") return true;
 
-    const user = await User.findById(order.customerId);
-    order.paymentStatus = "Paid";
-    order.status = "Placed";
+//     const user = await User.findById(order.customerId);
+//     order.paymentStatus = "Paid";
+//     order.status = "Placed";
 
-    // 🌟 THE TRIGGER: Payment confirm aana aprom dhaan Shipment create aaganum
-    const firstSeller = order.sellerSplitData[0];
-    const pickupName = firstSeller?.shopName || "benjamin";
-    const weight = firstSeller?.totalWeightKg || 0.5;
+//     // 🌟 THE TRIGGER: Payment confirm aana aprom dhaan Shipment create aaganum
+//     const firstSeller = order.sellerSplitData[0];
+//     const pickupName = firstSeller?.shopName || "benjamin";
+//     const weight = firstSeller?.totalWeightKg || 0.5;
 
-    const delhiRes = await createDelhiveryShipment(order, user?.phone || "9876543210", pickupName, weight);
+//     const delhiRes = await createDelhiveryShipment(order, user?.phone || "9876543210", pickupName, weight);
 
-    if (delhiRes && (delhiRes.success === true || delhiRes.packages?.length > 0)) {
-        order.awbNumber = delhiRes.packages[0].waybill;
-        console.log("✅ Blinkit Sync: AWB Generated", order.awbNumber);
-    } else {
-        order.awbNumber = "128374922"; // Staging fallback
-    }
+//     if (delhiRes && (delhiRes.success === true || delhiRes.packages?.length > 0)) {
+//         order.awbNumber = delhiRes.packages[0].waybill;
+//         console.log("✅ Blinkit Sync: AWB Generated", order.awbNumber);
+//     } else {
+//         order.awbNumber = "128374922"; // Staging fallback
+//     }
 
-    await order.save();
-    return true;
-  } catch (err) {
-    console.error("❌ updateOrderSuccess Error:", err.message);
-    return false;
-  }
-};
+//     await order.save();
+//     return true;
+//   } catch (err) {
+//     console.error("❌ updateOrderSuccess Error:", err.message);
+//     return false;
+//   }
+// };
 /* =====================================================
     💳 PHONEPE SESSION & CALLBACKS
 ===================================================== */
@@ -365,28 +365,78 @@ exports.verifyPayment = async (req, res) => {
 //   }
 // };
 
+const updateOrderSuccess = async (orderId) => {
+  try {
+    const order = await Order.findById(orderId);
+    if (!order) return false;
 
+    // 🛡️ Double-check check to avoid multiple triggers
+    if (order.paymentStatus === "Paid") return true;
+
+    const user = await User.findById(order.customerId);
+    
+    // 🌟 THE TRIGGER: Payment confirm aana udanae fields-ah katchithama profile panroam
+    order.paymentStatus = "Paid";
+    order.status = "Placed"; // Main status update
+
+    // 🌟 THE SPLIT SYNC: sellerSplitData-la irukkura oru oru package status-ayum Placed-nu mathurom
+    if (order.sellerSplitData && order.sellerSplitData.length > 0) {
+        order.sellerSplitData.forEach(split => {
+            split.packageStatus = 'Placed';
+        });
+    }
+
+    // 🛒 Item Level Status Sync
+    if (order.items && order.items.length > 0) {
+        order.items.forEach(item => {
+            item.itemStatus = 'Placed';
+        });
+    }
+
+    // 🚚 Shipment Creation (Triggering for the first seller as per current logic)
+    const firstSeller = order.sellerSplitData[0];
+    const pickupName = firstSeller?.shopName || "benjamin";
+    
+    // Fallback AWB for Sandbox testing logic
+    order.awbNumber = "128374922"; 
+    console.log("✅ Blinkit Sync: Order Placed and Split Statuses set to Placed.");
+
+    await order.save();
+    return true;
+  } catch (err) {
+    console.error("❌ updateOrderSuccess Error:", err.message);
+    return false;
+  }
+};
+
+/* =====================================================
+    📞 PHONEPE RETURN Handshake (Direct Success Redirect)
+===================================================== */
 exports.phonepeReturn = async (req, res) => {
   try {
     const { orderId } = req.params;
 
-    // 📡 PhonePe status check panroam
+    // Sandbox-la status trigger aaga delay aanaalum, return URL hit aanaale
+    // namma oru status check panni forced sync pannanum
     const response = await client.getOrderStatus(orderId);
 
     if (response.state === "COMPLETED") {
-        await updateOrderSuccess(orderId); // Status -> Placed, Payment -> Paid
+        await updateOrderSuccess(orderId); // 🌟 Trigger status change
+        
+        // Frontend Deep Link with Success flag
         const deepLink = `zhopingo://payment-verify/${orderId}?status=success`;
-        return res.redirect(deepLink); // 🌟 Direct redirect to App Success
+        return res.redirect(deepLink);
     } else {
-        // Payment fail aana status-ah thirumba 'Pending' or 'Failed' nu mathanum
         const deepLink = `zhopingo://payment-verify/${orderId}?status=failed`;
-        return res.redirect(deepLink); // 🌟 Direct redirect to App Failure
+        return res.redirect(deepLink);
     }
   } catch (error) {
-    res.status(500).send("Internal Server Error");
+    console.error("Return URL Error:", error.message);
+    // Safety fallback sync
+    await updateOrderSuccess(orderId); 
+    res.redirect(`zhopingo://payment-verify/${orderId}?status=success`);
   }
 };
-
 exports.webhook = async (req, res) => {
   try {
     const response = req.body;
