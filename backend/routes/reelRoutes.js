@@ -16,8 +16,7 @@ router.delete('/:id', protect, reelCtrl.deleteReel);
 router.post('/like/:id', protect, reelCtrl.toggleLike); 
 router.post('/report', protect, reelCtrl.reportReel);
 router.post('/view/:id', protect, reelCtrl.addReelView);
-// Customer report panna
-router.post('/report', protect, reelCtrl.reportReel);
+
 
 // Admin reports-ai fetch panna (Admin dashboard-kaaga)
 router.get('/admin/reports', protect, reelCtrl.getReportedReels);
