@@ -587,9 +587,10 @@ const getLiveShippingRate = async (destPincode, weightValue, unit, sellerPincode
         return 0; // If API fails
     }
 };
+
 /* =====================================================
     🚚 MASTER CONTROLLER: calculateLiveDeliveryRate 
-    (Strict Multi-Seller & Item-Level Free Delivery Sync)
+    (Strict Product-Wise Free/Paid Split Logic)
 ===================================================== */
 exports.calculateLiveDeliveryRate = async (req, res) => {
     try {
@@ -599,36 +600,38 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
             return res.status(400).json({ success: false, message: "Cart items are required" });
         }
 
-        // 1️⃣ Unique Sellers split logic
+        // 1️⃣ Unique Sellers-ah split panroam
         const uniqueSellers = [...new Set(items.map(item => item.sellerId?._id || item.sellerId))];
         
         let totalCustomerGrandTotal = 0;
         let totalActualLogisticsCost = 0;
         let sellerWiseBreakdown = [];
 
-        // 2️⃣ Oru oru seller-kkum separate package calculation
+        // 2️⃣ Seller-wise loop starts
         for (const sId of uniqueSellers) {
             const sellerItems = items.filter(item => (item.sellerId?._id || item.sellerId) === sId);
             
-            // 🔥 CRITICAL FIX: Frontend-la irundhu vara payload-la 'isFreeDelivery' property-ah direct-ah paakurom
-            // Oru seller package-la ORE ORU item PAID-ah irundhaalum (isFreeDelivery: false), andha package-ku charge varum.
-            // Full package-um free-na mattum dhaan 0 aagum.
-            const hasAnyPaidItemInPackage = sellerItems.some(item => 
+            // 🌟 THE CORE LOGIC: Find ONLY the paid products in this seller's list
+            const paidProducts = sellerItems.filter(item => 
                 item.isFreeDelivery === false || 
-                item.isFreeDelivery === "false" ||
-                item.productId?.isFreeDelivery === false
+                item.productId?.isFreeDelivery === false ||
+                item.isFreeDelivery === "false"
             );
 
-            if (!hasAnyPaidItemInPackage) {
-                // Ellame Free Delivery products mattum dhaan intha seller package-la irukku
+            // Case A: Intha seller kitta ellame FREE products mattum dhaan irukku
+            if (paidProducts.length === 0) {
                 sellerWiseBreakdown.push({
                     sellerId: sId,
                     charge: 0,
-                    status: "FREE PACKAGE"
+                    status: "FREE PACKAGE (All items free)",
+                    paidWeight: "0g"
                 });
-            } else {
-                // Package-la paid item irukku, so calculate weight & charge
-                const sellerTotalWeight = sellerItems.reduce((sum, it) => {
+                console.log(`✅ Seller ${sId} is fully FREE`);
+            } 
+            // Case B: Intha seller kitta PAID products irukku
+            else {
+                // ⚖️ STRICT WEIGHT CALCULATION: Sum ONLY the weight of Paid Products
+                const totalPaidWeight = paidProducts.reduce((sum, it) => {
                     const rawW = it.weightValue || it.weight || 500;
                     const numW = Number(String(rawW).replace(/[^0-9.]/g, '')) || 500;
                     return sum + (numW * it.quantity);
@@ -636,15 +639,17 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
 
                 const origin = sellerItems[0]?.sellerId?.pincode || "600001";
 
-                // 📡 Delhivery API call for this seller package
-                let apiCost = await getLiveShippingRate(pincode, sellerTotalWeight, 'g', origin, paymentMode);
+                // 📡 Get Rate from Delhivery ONLY for the paid products' weight
+                let apiCost = await getLiveShippingRate(pincode, totalPaidWeight, 'g', origin, paymentMode);
                 
+                // Fallback Manual Calculation (If API returns 0)
                 if (apiCost === 0) {
-                    const kg = universalWeightSync(sellerTotalWeight, 'g');
+                    const kg = universalWeightSync(totalPaidWeight, 'g');
+                    // Manual slab logic: 500g -> 40rs base, extra 500g -> +15rs
                     apiCost = 40 + (Math.max(0, Math.ceil((kg - 0.5) / 0.5)) * 15);
                 }
 
-                // Strictly ₹80 minimum logic per paid seller
+                // Strictly ₹80 minimum for any paid seller package
                 const customerPayable = Math.max(80, apiCost);
                 
                 totalCustomerGrandTotal += customerPayable;
@@ -654,12 +659,14 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
                     sellerId: sId,
                     charge: customerPayable,
                     actualCost: apiCost,
-                    weight: sellerTotalWeight + "g",
+                    calculatedWeight: totalPaidWeight + "g",
                     status: "PAID PACKAGE"
                 });
+                console.log(`🚚 Seller ${sId} Paid Weight: ${totalPaidWeight}g | Charge: ₹${customerPayable}`);
             }
         }
 
+        // 🌟 FINAL RESPONSE: Total customer grand total sum
         res.json({ 
             success: true, 
             finalCharge: totalCustomerGrandTotal, 
