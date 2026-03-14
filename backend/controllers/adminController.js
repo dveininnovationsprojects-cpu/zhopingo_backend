@@ -341,6 +341,20 @@ exports.generateWeeklySettlement = async (req, res) => {
     }
 };
 
+// 🌟 1. API for Daily Orders View (Settlement aagaadha orders)
+exports.getPendingDailyOrders = async (req, res) => {
+    try {
+        const { sellerId } = req.params;
+        const orders = await Order.find({
+            "sellerSplitData.sellerId": sellerId,
+            status: 'Delivered',
+            isSettled: { $ne: true } // 👈 Settle aagaadha orders mattum
+        }).sort({ createdAt: 1 });
+
+        res.json({ success: true, data: orders });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+};
+
 // 🚚 Global Logistics Settlement (Bulk Pay for Delivery Team)
 exports.generateGlobalLogisticsSettlement = async (req, res) => {
     try {
