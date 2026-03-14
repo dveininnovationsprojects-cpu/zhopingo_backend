@@ -777,9 +777,13 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
 //     }
 // };
 
+/* =====================================================
+    📦 MASTER CREATE ORDER: SELLER-WISE DATABASE SPLIT
+    (One Order per Seller for unique Order IDs)
+===================================================== */
 exports.createOrder = async (req, res) => {
     try {
-        // 🌟 THE MASTER SYNC (Maintaining your working payload logic)
+        // 🌟 THE MASTER SYNC: Maintaining your payload logic
         const { items, customerId, shippingAddress, paymentMethod, deliveryCharge } = req.body;
         
         const user = await User.findById(customerId);
@@ -791,15 +795,15 @@ exports.createOrder = async (req, res) => {
             tdsPercent: 2 
         };
 
-        // 🌟 STEP 1: Identify unique sellers to create separate orders
+        // 🌟 STEP 1: Find Unique Sellers
         const uniqueSellers = [...new Set(items.map(item => item.sellerId?._id || item.sellerId))];
         const createdOrders = [];
         
-        // Frontend anuppuna deliveryCharge-ah sellers-ku divide panroam
+        // Delivery charge split equally for all sellers in the cart
         const frontendDeliveryAmount = Number(deliveryCharge) || 0;
         const splitDelivery = frontendDeliveryAmount / uniqueSellers.length;
 
-        // 🌟 STEP 2: Logic Split loop - strictly maintain your calculation precision
+        // 🌟 STEP 2: Logic Split loop - strictly creating separate documents
         for (const sId of uniqueSellers) {
             const sellerItems = items.filter(item => (item.sellerId?._id || item.sellerId) === sId);
             const sellerDoc = await Seller.findById(sId);
@@ -817,16 +821,23 @@ exports.createOrder = async (req, res) => {
                 sellerItemTotal += subtotal;
 
                 processedItems.push({
-                    productId: productDoc._id, name: item.name, quantity: qty,
-                    price: item.price, mrp: item.mrp || item.price, sellerId: sellerDoc._id,
-                    hsnCode: productDoc.hsnCode || "0000", image: item.image || "",
-                    itemStatus: 'Placed' // Initial status
+                    productId: productDoc._id,
+                    name: item.name,
+                    quantity: qty,
+                    price: item.price,
+                    mrp: item.mrp || item.price,
+                    sellerId: sellerDoc._id,
+                    hsnCode: productDoc.hsnCode || "0000",
+                    image: item.image || "",
+                    itemStatus: 'Placed', // Initial status strictly per document
+                    isReturnable: productDoc.isReturnable || false,
+                    returnWindowDays: productDoc.returnWindowDays || 7
                 });
             }
 
             // 🌟 STEP 3: Finance Logic (Exactly as your working version)
             const commission = (sellerItemTotal * settings.commissionPercent) / 100;
-            const gst = (commission * settings.gstOnCommissionPercent) / 100;
+            const gstOnComm = (commission * settings.gstOnCommissionPercent) / 100;
             const tds = (sellerItemTotal * settings.tdsPercent) / 100;
 
             const finalSellerSplitData = [{
@@ -834,15 +845,15 @@ exports.createOrder = async (req, res) => {
                 shopName: sellerDoc.shopName,
                 sellerSubtotal: sellerItemTotal,
                 commissionTotal: commission,
-                gstTotal: gst,
+                gstTotal: gstOnComm,
                 tdsTotal: tds,
-                finalPayable: sellerItemTotal - (commission + gst + tds),
-                status: 'Pending'
+                finalPayable: sellerItemTotal - (commission + gstOnComm + tds),
+                packageStatus: 'Placed' // Per seller package status
             }];
 
             const orderTotal = sellerItemTotal + splitDelivery;
 
-            // 🌟 STEP 4: Save Individual Document
+            // 🌟 STEP 4: SAVE NEW SEPARATE ORDER DOCUMENT
             const newOrder = new Order({
                 customerId: user._id,
                 items: processedItems,
@@ -863,12 +874,15 @@ exports.createOrder = async (req, res) => {
             createdOrders.push(newOrder);
         }
 
-        // 🌟 STEP 5: Final Response for PhonePe Handshake
-        // Total amount matches what frontend expects (Item total + Frontend Delivery)
+        // 🌟 STEP 5: Final Response
+        // Frontend total amount should match original cart expectations
+        const grandTotal = createdOrders.reduce((sum, ord) => sum + ord.totalAmount, 0);
+
         res.status(201).json({ 
             success: true, 
             orders: createdOrders,
-            totalAmount: frontendDeliveryAmount + (items.reduce((acc, i) => acc + (i.price * i.quantity), 0))
+            totalAmount: grandTotal,
+            message: `${createdOrders.length} separate orders created.`
         });
 
     } catch (err) { 
