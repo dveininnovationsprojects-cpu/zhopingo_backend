@@ -553,25 +553,30 @@ const DELHI_TOKEN = "9b44fee45422e3fe8073dee9cfe7d51f9fff7629";
 const ADMIN_MARGIN = 40;
 
 /* =====================================================
-    ⚖️ UNIVERSAL UNIT CONVERTER
+    ⚖️ UNIVERSAL UNIT CONVERTER (Strict Kg for Delhivery)
 ===================================================== */
 const universalWeightSync = (value, unit) => {
     const val = Number(value) || 0;
     const unitLower = unit?.toLowerCase() || 'g';
+    
+    // Delhivery expects weight in Kilograms (Kg)
     if (['kg', 'l', 'liter', 'kilogram'].includes(unitLower)) return val;
     if (['g', 'gram', 'ml', 'milliliter'].includes(unitLower)) return val / 1000;
+    
+    // Default fallback: 200g (0.2kg) if no weight is provided
     return val > 0 ? val / 1000 : 0.2; 
 };
 
 /* =====================================================
-    🚚 HELPER: DYNAMIC SHIPPING RATE (Pure API Cost Only)
+    🚚 HELPER: PURE DELHI API RATE (No Manual Slabs)
 ===================================================== */
 const getLiveShippingRate = async (destPincode, weightValue, unit, sellerPincode, paymentMode) => {
     try {
         const weightInKg = universalWeightSync(weightValue, unit).toFixed(2);
+        
         const response = await axios.get("https://staging-express.delhivery.com/api/kinko/v1/invoice/charges/.json", {
             params: { 
-                ss: "R", 
+                ss: "R", // R = Surface, S = Express
                 pt: paymentMode === "COD" ? "Cash" : "Pre-paid", 
                 o_pin: sellerPincode, 
                 d_pin: destPincode, 
@@ -580,104 +585,95 @@ const getLiveShippingRate = async (destPincode, weightValue, unit, sellerPincode
             headers: { 'Authorization': `Token ${DELHI_TOKEN}` }
         });
 
-        // 🌟 Pure API Cost Mattum Edukkuroam (No hidden margins here)
-        const apiRate = response.data?.[0]?.total_amount || response.data?.[0]?.gross_amount || 0;
-        return Math.ceil(apiRate);
+        // Delhivery API response structure check
+        const rateData = response.data?.[0];
+        if (!rateData) {
+            console.error("❌ Delhivery API returned empty data for:", { destPincode, weightInKg });
+            return null; 
+        }
+
+        // Strictly taking the API returned amount
+        const apiRate = rateData.total_amount || rateData.gross_amount;
+        return apiRate ? Math.ceil(Number(apiRate)) : null;
+
     } catch (error) {
-        return 0; // If API fails
+        console.error("❌ Delhivery API Connection Error:", error.response?.data || error.message);
+        return null; // Force null so controller can handle failure
     }
 };
 
 /* =====================================================
-    🚚 MASTER CONTROLLER: calculateLiveDeliveryRate 
-    (Strict Product-Wise Free/Paid Split Logic)
+    🚚 CONTROLLER: calculateLiveDeliveryRate
 ===================================================== */
 exports.calculateLiveDeliveryRate = async (req, res) => {
     try {
         const { pincode, paymentMode, items } = req.body; 
 
         if (!items || !Array.isArray(items) || items.length === 0) {
-            return res.status(400).json({ success: false, message: "Cart items are required" });
+            return res.status(400).json({ success: false, message: "Cart items missing" });
         }
 
-        // 1️⃣ Unique Sellers-ah split panroam
         const uniqueSellers = [...new Set(items.map(item => item.sellerId?._id || item.sellerId))];
         
         let totalCustomerGrandTotal = 0;
-        let totalActualLogisticsCost = 0;
         let sellerWiseBreakdown = [];
 
-        // 2️⃣ Seller-wise loop starts
         for (const sId of uniqueSellers) {
             const sellerItems = items.filter(item => (item.sellerId?._id || item.sellerId) === sId);
             
-            // 🌟 THE CORE LOGIC: Find ONLY the paid products in this seller's list
+            // Filter Paid Products
             const paidProducts = sellerItems.filter(item => 
                 item.isFreeDelivery === false || 
-                item.productId?.isFreeDelivery === false ||
-                item.isFreeDelivery === "false"
+                item.productId?.isFreeDelivery === false
             );
 
-            // Case A: Intha seller kitta ellame FREE products mattum dhaan irukku
             if (paidProducts.length === 0) {
-                sellerWiseBreakdown.push({
-                    sellerId: sId,
-                    charge: 0,
-                    status: "FREE PACKAGE (All items free)",
-                    paidWeight: "0g"
-                });
-                console.log(`✅ Seller ${sId} is fully FREE`);
-            } 
-            // Case B: Intha seller kitta PAID products irukku
-            else {
-                // ⚖️ STRICT WEIGHT CALCULATION: Sum ONLY the weight of Paid Products
-                const totalPaidWeight = paidProducts.reduce((sum, it) => {
-                    const rawW = it.weightValue || it.weight || 500;
-                    const numW = Number(String(rawW).replace(/[^0-9.]/g, '')) || 500;
-                    return sum + (numW * it.quantity);
-                }, 0);
-
-                const origin = sellerItems[0]?.sellerId?.pincode || "600001";
-
-                // 📡 Get Rate from Delhivery ONLY for the paid products' weight
-                let apiCost = await getLiveShippingRate(pincode, totalPaidWeight, 'g', origin, paymentMode);
-                
-                // Fallback Manual Calculation (If API returns 0)
-                if (apiCost === 0) {
-                    const kg = universalWeightSync(totalPaidWeight, 'g');
-                    // Manual slab logic: 500g -> 40rs base, extra 500g -> +15rs
-                    apiCost = 40 + (Math.max(0, Math.ceil((kg - 0.5) / 0.5)) * 15);
-                }
-
-                // Strictly ₹80 minimum for any paid seller package
-                const customerPayable = Math.max(80, apiCost);
-                
-                totalCustomerGrandTotal += customerPayable;
-                totalActualLogisticsCost += apiCost;
-
-                sellerWiseBreakdown.push({
-                    sellerId: sId,
-                    charge: customerPayable,
-                    actualCost: apiCost,
-                    calculatedWeight: totalPaidWeight + "g",
-                    status: "PAID PACKAGE"
-                });
-                console.log(`🚚 Seller ${sId} Paid Weight: ${totalPaidWeight}g | Charge: ₹${customerPayable}`);
+                sellerWiseBreakdown.push({ sellerId: sId, charge: 0, status: "FREE_DELIVERY" });
+                continue;
             }
+
+            // Total weight calculation for the package
+            const totalPaidWeight = paidProducts.reduce((sum, it) => {
+                const rawW = it.weightValue || it.weight || 500;
+                const numW = Number(String(rawW).replace(/[^0-9.]/g, '')) || 500;
+                return sum + (numW * it.quantity);
+            }, 0);
+
+            const origin = sellerItems[0]?.sellerId?.pincode || "600001";
+
+            // CALLING PURE API - NO MANUAL FALLBACK
+            const apiCost = await getLiveShippingRate(pincode, totalPaidWeight, 'g', origin, paymentMode);
+            
+            if (apiCost === null) {
+                // If API fails, we don't guess. We throw an error to prevent wrong billing.
+                return res.status(502).json({ 
+                    success: false, 
+                    message: "Logistics service is temporarily unavailable. Please try again." 
+                });
+            }
+
+            // Adding Admin Margin on top of pure API cost
+            const finalChargePerSeller = Math.max(80, apiCost + ADMIN_MARGIN);
+            
+            totalCustomerGrandTotal += finalChargePerSeller;
+
+            sellerWiseBreakdown.push({
+                sellerId: sId,
+                baseApiCost: apiCost,
+                customerCharge: finalChargePerSeller,
+                weightApplied: totalPaidWeight + "g"
+            });
         }
 
-        // 🌟 FINAL RESPONSE: Total customer grand total sum
         res.json({ 
             success: true, 
             finalCharge: totalCustomerGrandTotal, 
-            actualLogisticsCost: totalActualLogisticsCost,
-            adminLogisticsProfit: totalCustomerGrandTotal - totalActualLogisticsCost,
             breakdown: sellerWiseBreakdown
         });
 
     } catch (err) {
-        console.error("Rate API Error:", err.message);
-        res.status(500).json({ success: false, finalCharge: 80 });
+        console.error("Master Rate API Error:", err.message);
+        res.status(500).json({ success: false, message: "Internal Server Error" });
     }
 };
 
