@@ -977,40 +977,122 @@ exports.requestReturn = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
-exports.cancelOrder = async (req, res) => {
+
+
+/* =====================================================
+    🚚 UPDATE ORDER STATUS (Individual Seller Item Sync)
+    (Ore Order ID kulla irukura specific seller product mattum maarum)
+===================================================== */
+exports.updateOrderStatus = async (req, res) => {
     try {
-        const { sellerId } = req.body; // Postman-la indha field strictly venum
+        const { status, sellerId, awbNumber } = req.body; 
         const order = await Order.findById(req.params.orderId);
 
         if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
-        let sellerFound = false;
+        let sellerItemsUpdated = false;
+
+        // 🌟 THE ITEM-LEVEL LOGIC: Only loop and update this seller's products
+        order.items.forEach(item => {
+            // String comparison strictly added to avoid ObjectId mismatch
+            if (item.sellerId.toString() === sellerId?.toString()) {
+                item.itemStatus = status; // Flipkart maari individual item status change
+                if (awbNumber) item.itemAwbNumber = awbNumber;
+                
+                if (status === 'Delivered') item.itemDeliveredDate = new Date();
+                if (status === 'Returned') item.itemReturnDate = new Date();
+                sellerItemsUpdated = true;
+            }
+        });
+
+        if (!sellerItemsUpdated) {
+            return res.status(400).json({ success: false, message: "No items found for this seller in this order" });
+        }
+
+        // 🛡️ OVERALL STATUS SYNC: 
+        // Ella items-um delivered aana mattum dhaan Main Status "Delivered" aaganum.
+        const allStatuses = order.items.map(i => i.itemStatus);
+        
+        if (allStatuses.every(s => s === 'Delivered')) {
+            order.status = 'Delivered';
+            order.deliveredDate = new Date();
+        } else if (allStatuses.some(s => s === 'Shipped')) {
+            order.status = 'Shipped';
+        } else if (allStatuses.some(s => s === 'Delivered')) {
+            // Paadhi deliver aagi paadhi in transit-la irundha 'Shipped' status maintain aagum
+            order.status = 'Shipped'; 
+        }
+
+        await order.save();
+        res.json({ success: true, message: "Item status updated katchithama!", data: order });
+
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+/* =====================================================
+    ❌ CANCEL ORDER (Seller-wise Partial Cancellation)
+    (Oru seller-ah cancel panna moththa order-um cancel aagaadhu)
+===================================================== */
+exports.cancelOrder = async (req, res) => {
+    try {
+        const { sellerId } = req.body; // Postman/Frontend-la irundhu sellerId pass pannanum
+        const order = await Order.findById(req.params.orderId);
+
+        if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+
         let refundAmount = 0;
+        let sellerFound = false;
 
         order.items.forEach(item => {
-            // 🌟 CRITICAL FIX: Comparison check pannanum
-            if (item.sellerId.toString() === sellerId.toString() && (item.itemStatus === 'Placed' || item.itemStatus === 'Pending')) {
-                item.itemStatus = 'Cancelled'; 
+            // Only cancel 'Placed' items for this specific seller
+            if (item.sellerId.toString() === sellerId?.toString() && 
+               (item.itemStatus === 'Placed' || item.itemStatus === 'Pending')) {
+                
+                item.itemStatus = 'Cancelled';
                 refundAmount += (item.price * item.quantity);
                 sellerFound = true;
             }
         });
 
-        if (!sellerFound) return res.status(400).json({ success: false, message: "Cannot cancel. Item already processed or invalid seller." });
+        if (!sellerFound) {
+            return res.status(400).json({ success: false, message: "Items already processed or invalid seller ID" });
+        }
 
-        // Refund Logic... (Wallet transactions code stays the same)
+        // 💰 PARTIAL WALLET REFUND (Strictly for the cancelled seller's items only)
         if (order.paymentStatus === 'Paid') {
             const user = await User.findById(order.customerId);
             if (user) {
                 user.walletBalance += refundAmount;
-                user.walletTransactions.unshift({ amount: refundAmount, type: 'CREDIT', reason: 'Order Split Refund', date: new Date() });
+                user.walletTransactions.unshift({
+                    amount: refundAmount,
+                    type: 'CREDIT',
+                    reason: `Partial Refund: Order #${order._id.toString().slice(-6).toUpperCase()}`,
+                    date: new Date()
+                });
                 await user.save();
             }
         }
 
+        // 🛡️ MASTER STATUS SYNC:
+        const allStatuses = order.items.map(i => i.itemStatus);
+        
+        if (allStatuses.every(s => s === 'Cancelled')) {
+            // Ella seller-um cancel pannuna mattum dhaan moththa order status "Cancelled"
+            order.status = 'Cancelled';
+            order.paymentStatus = 'Refunded';
+        } else {
+            // Oru seller active-ah irundha order status 'Placed'-laye irukkanum (or use 'Partially Cancelled')
+            order.status = 'Placed'; 
+        }
+
         await order.save();
-        res.json({ success: true, message: "Seller items cancelled correctly." });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        res.json({ success: true, message: "Seller products cancelled. Main order stays active." });
+
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
 };
 
 /* =====================================================
@@ -1055,41 +1137,3 @@ exports.handleDelhiveryWebhook = async (req, res) => {
     }
 };
 
-/* =====================================================
-    🚚 UPDATE ORDER STATUS (Individual Seller Sync)
-===================================================== */
-exports.updateOrderStatus = async (req, res) => {
-    try {
-        const { status, sellerId, awbNumber } = req.body; 
-        const order = await Order.findById(req.params.orderId);
-        if (!order) return res.status(404).json({ success: false, message: "Order not found" });
-
-        let sellerFound = false;
-        order.items.forEach(item => {
-            if (item.sellerId.toString() === sellerId?.toString()) {
-                item.itemStatus = status;
-                if (awbNumber) item.itemAwbNumber = awbNumber;
-                
-                if (status === 'Delivered') item.itemDeliveredDate = new Date();
-                if (status === 'Returned') item.itemReturnDate = new Date();
-                sellerFound = true;
-            }
-        });
-
-        if (!sellerFound) return res.status(400).json({ message: "Seller not found in this order split" });
-
-        // Overall Sync
-        const statuses = order.items.map(i => i.itemStatus);
-        if (statuses.every(s => s === 'Delivered')) {
-            order.status = 'Delivered';
-            order.deliveredDate = new Date();
-        } else if (statuses.some(s => s === 'Shipped')) {
-            order.status = 'Shipped';
-        }
-
-        await order.save();
-        res.json({ success: true, message: "Seller item status updated!", data: order });
-    } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
-    }
-};
