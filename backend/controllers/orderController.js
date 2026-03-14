@@ -682,108 +682,12 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
 };
 
 
-// /* =====================================================
-//     🌟 MASTER CREATE ORDER (Direct Payload Sync Fix)
-// ===================================================== */
-// exports.createOrder = async (req, res) => {
-//     try {
-//         // 🌟 THE MASTER SYNC: Frontend payload-la irundhu values-ah direct-ah edukkuroam
-//         const { items, customerId, shippingAddress, paymentMethod, deliveryCharge } = req.body;
-        
-//         const user = await User.findById(customerId);
-//         if (!user) return res.status(404).json({ success: false, message: "User not found" });
-
-//         const settings = await FinanceSettings.findOne() || { 
-//             commissionPercent: 10, 
-//             gstOnCommissionPercent: 18, 
-//             tdsPercent: 2 
-//         };
-
-//         let totalItemTotal = 0;
-//         let sellerWiseSplit = {};
-//         const processedItems = [];
-
-//         // Step 1: Process Items & Calculate Item Subtotal
-//         for (const item of items) {
-//             const productDoc = await Product.findById(item.productId || item._id);
-//             const sellerDoc = await Seller.findById(productDoc?.seller || item.sellerId);
-//             if (!productDoc || !sellerDoc) continue;
-
-//             const qty = Number(item.quantity);
-//             const subtotal = Number(item.price) * qty;
-//             totalItemTotal += subtotal;
-
-//             const sIdStr = sellerDoc._id.toString();
-//             if (!sellerWiseSplit[sIdStr]) {
-//                 sellerWiseSplit[sIdStr] = {
-//                     sellerId: sellerDoc._id,
-//                     shopName: sellerDoc.shopName,
-//                     sellerSubtotal: 0,
-//                 };
-//             }
-//             sellerWiseSplit[sIdStr].sellerSubtotal += subtotal;
-
-//             processedItems.push({
-//                 productId: productDoc._id, name: item.name, quantity: qty,
-//                 price: item.price, mrp: item.mrp || item.price, sellerId: sellerDoc._id,
-//                 hsnCode: productDoc.hsnCode || "0000", image: item.image || ""
-//             });
-//         }
-
-//         // 🌟 THE CRITICAL SYNC: 
-//         // Frontend anuppuna deliveryCharge-ah Number-ah maathi use panrom. 
-//         // Backend ippo thirumba API call pannaathu, margin logic check pannaathu.
-//         const frontendDeliveryAmount = Number(deliveryCharge) || 0;
-//         const finalGrandTotal = totalItemTotal + frontendDeliveryAmount;
-
-//         const finalSellerSplitData = Object.values(sellerWiseSplit).map((split) => {
-//             const comm = (split.sellerSubtotal * settings.commissionPercent) / 100;
-//             const gst = (comm * settings.gstOnCommissionPercent) / 100;
-//             const tds = (split.sellerSubtotal * settings.tdsPercent) / 100;
-
-//             return {
-//                 sellerId: split.sellerId,
-//                 shopName: split.shopName,
-//                 sellerSubtotal: split.sellerSubtotal,
-//                 commissionTotal: comm,
-//                 gstTotal: gst,
-//                 tdsTotal: tds,
-//                 finalPayable: split.sellerSubtotal - (comm + gst + tds),
-//                 status: 'Pending'
-//             };
-//         });
-
-//         const newOrder = new Order({
-//             customerId: user._id,
-//             items: processedItems,
-//             sellerSplitData: finalSellerSplitData,
-//             billDetails: { 
-//                 itemTotal: totalItemTotal, 
-//                 deliveryCharge: frontendDeliveryAmount, // 👈 Ippo katchithama ₹160 vizhum
-//                 totalAmount: finalGrandTotal 
-//             },
-//             totalAmount: finalGrandTotal, // 🌟 PhonePe will now read correctly (₹1380)
-//             paymentMethod,
-//             shippingAddress,
-//             status: "Pending", 
-//             paymentStatus: "Pending"
-//         });
-
-//         await newOrder.save();
-//         res.status(201).json({ success: true, order: newOrder });
-
-//     } catch (err) { 
-//         res.status(500).json({ success: false, error: err.message }); 
-//     }
-// };
-
 /* =====================================================
-    📦 MASTER CREATE ORDER: SELLER-WISE DATABASE SPLIT
-    (One Order per Seller for unique Order IDs)
+    🌟 MASTER CREATE ORDER (Direct Payload Sync Fix)
 ===================================================== */
 exports.createOrder = async (req, res) => {
     try {
-        // 🌟 THE MASTER SYNC: Maintaining your payload logic
+        // 🌟 THE MASTER SYNC: Frontend payload-la irundhu values-ah direct-ah edukkuroam
         const { items, customerId, shippingAddress, paymentMethod, deliveryCharge } = req.body;
         
         const user = await User.findById(customerId);
@@ -795,95 +699,78 @@ exports.createOrder = async (req, res) => {
             tdsPercent: 2 
         };
 
-        // 🌟 STEP 1: Find Unique Sellers
-        const uniqueSellers = [...new Set(items.map(item => item.sellerId?._id || item.sellerId))];
-        const createdOrders = [];
-        
-        // Delivery charge split equally for all sellers in the cart
-        const frontendDeliveryAmount = Number(deliveryCharge) || 0;
-        const splitDelivery = frontendDeliveryAmount / uniqueSellers.length;
+        let totalItemTotal = 0;
+        let sellerWiseSplit = {};
+        const processedItems = [];
 
-        // 🌟 STEP 2: Logic Split loop - strictly creating separate documents
-        for (const sId of uniqueSellers) {
-            const sellerItems = items.filter(item => (item.sellerId?._id || item.sellerId) === sId);
-            const sellerDoc = await Seller.findById(sId);
-            if (!sellerDoc) continue;
+        // Step 1: Process Items & Calculate Item Subtotal
+        for (const item of items) {
+            const productDoc = await Product.findById(item.productId || item._id);
+            const sellerDoc = await Seller.findById(productDoc?.seller || item.sellerId);
+            if (!productDoc || !sellerDoc) continue;
 
-            let sellerItemTotal = 0;
-            const processedItems = [];
+            const qty = Number(item.quantity);
+            const subtotal = Number(item.price) * qty;
+            totalItemTotal += subtotal;
 
-            for (const item of sellerItems) {
-                const productDoc = await Product.findById(item.productId || item._id);
-                if (!productDoc) continue;
-
-                const qty = Number(item.quantity);
-                const subtotal = Number(item.price) * qty;
-                sellerItemTotal += subtotal;
-
-                processedItems.push({
-                    productId: productDoc._id,
-                    name: item.name,
-                    quantity: qty,
-                    price: item.price,
-                    mrp: item.mrp || item.price,
+            const sIdStr = sellerDoc._id.toString();
+            if (!sellerWiseSplit[sIdStr]) {
+                sellerWiseSplit[sIdStr] = {
                     sellerId: sellerDoc._id,
-                    hsnCode: productDoc.hsnCode || "0000",
-                    image: item.image || "",
-                    itemStatus: 'Placed', // Initial status strictly per document
-                    isReturnable: productDoc.isReturnable || false,
-                    returnWindowDays: productDoc.returnWindowDays || 7
-                });
+                    shopName: sellerDoc.shopName,
+                    sellerSubtotal: 0,
+                };
             }
+            sellerWiseSplit[sIdStr].sellerSubtotal += subtotal;
 
-            // 🌟 STEP 3: Finance Logic (Exactly as your working version)
-            const commission = (sellerItemTotal * settings.commissionPercent) / 100;
-            const gstOnComm = (commission * settings.gstOnCommissionPercent) / 100;
-            const tds = (sellerItemTotal * settings.tdsPercent) / 100;
-
-            const finalSellerSplitData = [{
-                sellerId: sellerDoc._id,
-                shopName: sellerDoc.shopName,
-                sellerSubtotal: sellerItemTotal,
-                commissionTotal: commission,
-                gstTotal: gstOnComm,
-                tdsTotal: tds,
-                finalPayable: sellerItemTotal - (commission + gstOnComm + tds),
-                packageStatus: 'Placed' // Per seller package status
-            }];
-
-            const orderTotal = sellerItemTotal + splitDelivery;
-
-            // 🌟 STEP 4: SAVE NEW SEPARATE ORDER DOCUMENT
-            const newOrder = new Order({
-                customerId: user._id,
-                items: processedItems,
-                sellerSplitData: finalSellerSplitData,
-                billDetails: { 
-                    itemTotal: sellerItemTotal, 
-                    deliveryCharge: splitDelivery, 
-                    totalAmount: orderTotal 
-                },
-                totalAmount: orderTotal,
-                paymentMethod,
-                shippingAddress,
-                status: "Pending", // For payment handshake
-                paymentStatus: "Pending"
+            processedItems.push({
+                productId: productDoc._id, name: item.name, quantity: qty,
+                price: item.price, mrp: item.mrp || item.price, sellerId: sellerDoc._id,
+                hsnCode: productDoc.hsnCode || "0000", image: item.image || ""
             });
-
-            await newOrder.save();
-            createdOrders.push(newOrder);
         }
 
-        // 🌟 STEP 5: Final Response
-        // Frontend total amount should match original cart expectations
-        const grandTotal = createdOrders.reduce((sum, ord) => sum + ord.totalAmount, 0);
+        // 🌟 THE CRITICAL SYNC: 
+        // Frontend anuppuna deliveryCharge-ah Number-ah maathi use panrom. 
+        // Backend ippo thirumba API call pannaathu, margin logic check pannaathu.
+        const frontendDeliveryAmount = Number(deliveryCharge) || 0;
+        const finalGrandTotal = totalItemTotal + frontendDeliveryAmount;
 
-        res.status(201).json({ 
-            success: true, 
-            orders: createdOrders,
-            totalAmount: grandTotal,
-            message: `${createdOrders.length} separate orders created.`
+        const finalSellerSplitData = Object.values(sellerWiseSplit).map((split) => {
+            const comm = (split.sellerSubtotal * settings.commissionPercent) / 100;
+            const gst = (comm * settings.gstOnCommissionPercent) / 100;
+            const tds = (split.sellerSubtotal * settings.tdsPercent) / 100;
+
+            return {
+                sellerId: split.sellerId,
+                shopName: split.shopName,
+                sellerSubtotal: split.sellerSubtotal,
+                commissionTotal: comm,
+                gstTotal: gst,
+                tdsTotal: tds,
+                finalPayable: split.sellerSubtotal - (comm + gst + tds),
+                status: 'Pending'
+            };
         });
+
+        const newOrder = new Order({
+            customerId: user._id,
+            items: processedItems,
+            sellerSplitData: finalSellerSplitData,
+            billDetails: { 
+                itemTotal: totalItemTotal, 
+                deliveryCharge: frontendDeliveryAmount, // 👈 Ippo katchithama ₹160 vizhum
+                totalAmount: finalGrandTotal 
+            },
+            totalAmount: finalGrandTotal, // 🌟 PhonePe will now read correctly (₹1380)
+            paymentMethod,
+            shippingAddress,
+            status: "Pending", 
+            paymentStatus: "Pending"
+        });
+
+        await newOrder.save();
+        res.status(201).json({ success: true, order: newOrder });
 
     } catch (err) { 
         res.status(500).json({ success: false, error: err.message }); 
