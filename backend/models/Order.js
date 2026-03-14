@@ -93,7 +93,7 @@ const orderSchema = new mongoose.Schema({
     status: { 
         type: String, 
         default: 'Placed',
-        enum: ['Pending', 'Placed', 'Shipped', 'Delivered', 'Cancelled', 'Returned'] // 🌟 'Returned' strictly added
+        enum: ['Pending', 'Placed', 'Shipped', 'Delivered', 'Cancelled', 'Return Requested', 'Return In-Progress', 'Returned']// 🌟 'Returned' strictly added
     },
     // 🌟 SETTLEMENT TRACKING: Weekly payout logic-ku intha dates strictly venum
     deliveredDate: { type: Date, default: null },
