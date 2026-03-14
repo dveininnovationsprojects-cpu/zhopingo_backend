@@ -1051,36 +1051,32 @@ exports.trackDelhivery = async (req, res) => {
 
 exports.updateOrderStatus = async (req, res) => {
     try {
-        const { status } = req.body;
-        const orderId = req.params.orderId;
-
-        const order = await Order.findById(orderId).populate({
-            path: 'items.sellerId',
-            select: 'shopName name'
-        });
+        const { status, sellerId } = req.body; // 👈 sellerId strictly venum
+        const order = await Order.findById(req.params.orderId);
 
         if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
-        order.status = status;
+        // 🌟 Filter strictly this seller's items in the order
+        let sellerFound = false;
+        order.items.forEach(item => {
+            if (item.sellerId.toString() === sellerId) {
+                item.itemStatus = status;
+                if (status === 'Delivered') item.deliveredDate = new Date();
+                if (status === 'Returned') item.returnDate = new Date();
+                sellerFound = true;
+            }
+        });
 
-        // 🌟 1. LOGIC: Delivered aagum podhu strictly Date record pannanum
-        if (status === 'Delivered') {
-            order.paymentStatus = 'Paid';
-            order.deliveredDate = new Date();
-            order.isSettled = false; // Initial-ah settle aagi irukaadhu
-        }
+        if (!sellerFound) return res.status(400).json({ message: "Seller not part of this order" });
 
-        // 🌟 2. LOGIC: Returned aagum podhu date matrum logic sync pannanum
-        if (status === 'Returned') {
-            order.returnDate = new Date();
-            // Note: Return logic-la refund process Admin panna maari namma settlement-la minus aagum
-        }
+        // Overall order status calculation (If all items delivered, order is delivered)
+        const allStatuses = order.items.map(i => i.itemStatus);
+        if (allStatuses.every(s => s === 'Delivered')) order.status = 'Delivered';
+        else if (allStatuses.some(s => s === 'Shipped')) order.status = 'Shipped';
 
         await order.save();
-        res.json({ success: true, data: order });
-    } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
-    }
+        res.json({ success: true, message: `Status updated for seller products`, data: order });
+    } catch (err) { res.status(500).json({ error: err.message }); }
 };
 
 // orderController.js kulla handleDelhiveryWebhook logic update:
@@ -1117,50 +1113,27 @@ exports.bypassPaymentAndShip = async (req, res) => {
         res.json({ success: true, data: order });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
-
-/* =====================================================
-    📦 RETURN ENGINE: Request Pickup & Generate AWB
-===================================================== */
 exports.requestReturn = async (req, res) => {
     try {
-        const { orderId, reason } = req.body;
-        const order = await Order.findById(orderId).populate('customerId');
+        const { orderId, sellerId, reason } = req.body; // 👈 Indha seller product mattum return
+        const order = await Order.findById(orderId);
 
-        if (!order || order.status !== 'Delivered') {
-            return res.status(400).json({ success: false, message: "Only delivered orders can be returned." });
-        }
-
-        // 🛡️ Window Protection (Nee sonna 7 days check)
-        const dDate = order.deliveredDate ? new Date(order.deliveredDate) : new Date(order.updatedAt);
-        const windowDays = order.items?.[0]?.returnWindowDays || 7; 
-        if (Math.floor((new Date() - dDate) / (1000 * 3600 * 24)) > windowDays) {
-            return res.status(400).json({ success: false, message: "Return window expired." });
-        }
-
-        /* 🌟 THE REVERSE LOGISTICS FIX: 
-           Ippo namma Delhivery-la "Reverse Pickup" request create panna porom.
-           Adhukkappram dhaan status 'Return Requested' nu maaranum. */
-        
-        // Note: Reverse pickup-ku Delhivery-la 'pickup' type shipment podanum.
-        // Staging testing-ku namma andha logic-ah simulate pannuvom.
         const returnAWB = "RTN" + Math.floor(100000 + Math.random() * 900000);
 
-        order.status = 'Return Requested'; // 👈 First status 'Requested' dhaan irukanum
-        order.returnDate = new Date();
-        order.awbNumber = returnAWB; // 👈 Reverse tracking reference
-        
-        order.items.forEach(it => {
-            it.isReturned = true;
-            it.returnReason = reason || "Customer Return";
+        let sellerItemsFound = false;
+        order.items.forEach(item => {
+            if (item.sellerId.toString() === sellerId) {
+                item.itemStatus = 'Return Requested';
+                item.awbNumber = returnAWB; // Individual Return Tracking
+                item.isReturned = true;
+                item.returnReason = reason;
+                sellerItemsFound = true;
+            }
         });
+
+        if (!sellerItemsFound) return res.status(400).json({ message: "Invalid seller for this return" });
 
         await order.save();
-
-        res.json({ 
-            success: true, 
-            message: "Pickup scheduled! Tracker ID generated: " + returnAWB,
-            data: order 
-        });
-
+        res.json({ success: true, message: "Return requested for specific seller items", awb: returnAWB });
     } catch (err) { res.status(500).json({ error: err.message }); }
 };

@@ -48,7 +48,6 @@
 // module.exports = mongoose.model('Order', orderSchema);
 
 
-
 const mongoose = require('mongoose');
 
 const orderSchema = new mongoose.Schema({
@@ -63,6 +62,18 @@ const orderSchema = new mongoose.Schema({
         // 🔥 இங்கதான் மஜாவே இருக்கு: ref குடுத்தா தான் shopName வரும்
         sellerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Seller', required: true }, 
         image: { type: String },
+        
+        // 🌟 THE MASTER SPLIT FIX: Oru oru seller item-kum thani status venum
+        itemStatus: { 
+            type: String, 
+            default: 'Placed',
+            enum: ['Placed', 'Shipped', 'Delivered', 'Cancelled', 'Return Requested', 'Return In-Progress', 'Returned']
+        },
+        // 🌟 Tracking strictly per seller/package
+        itemAwbNumber: { type: String, default: null },
+        itemDeliveredDate: { type: Date, default: null },
+        itemReturnDate: { type: Date, default: null },
+
         // 🌟 RETURN LOGIC: Product level tags strictly added
         isReturnable: { type: Boolean, default: false },
         returnWindowDays: { type: Number, default: 0 },
@@ -93,7 +104,7 @@ const orderSchema = new mongoose.Schema({
     status: { 
         type: String, 
         default: 'Placed',
-        enum: ['Pending', 'Placed', 'Shipped', 'Delivered', 'Cancelled', 'Return Requested', 'Return In-Progress', 'Returned']// 🌟 'Returned' strictly added
+        enum: ['Pending', 'Placed', 'Shipped', 'Delivered', 'Cancelled', 'Return Requested', 'Return In-Progress', 'Returned'] 
     },
     // 🌟 SETTLEMENT TRACKING: Weekly payout logic-ku intha dates strictly venum
     deliveredDate: { type: Date, default: null },
