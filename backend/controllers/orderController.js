@@ -1051,55 +1051,67 @@ exports.trackDelhivery = async (req, res) => {
 
 exports.updateOrderStatus = async (req, res) => {
     try {
-        const { status, sellerId } = req.body; // 👈 sellerId strictly venum
+        const { status, sellerId, awbNumber } = req.body; 
         const order = await Order.findById(req.params.orderId);
 
         if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
-        // 🌟 Filter strictly this seller's items in the order
+        // 🌟 THE SPLIT ENGINE: Loop through items and update only this seller's products
         let sellerFound = false;
         order.items.forEach(item => {
+            // Check strictly for seller match
             if (item.sellerId.toString() === sellerId) {
-                item.itemStatus = status;
-                if (status === 'Delivered') item.deliveredDate = new Date();
-                if (status === 'Returned') item.returnDate = new Date();
+                item.itemStatus = status; // 👈 Individual Item status
+                
+                if (awbNumber) item.itemAwbNumber = awbNumber; // 👈 Individual Tracking
+                if (status === 'Delivered') item.itemDeliveredDate = new Date();
+                if (status === 'Returned') item.itemReturnDate = new Date();
+                
                 sellerFound = true;
             }
         });
 
-        if (!sellerFound) return res.status(400).json({ message: "Seller not part of this order" });
+        if (!sellerFound) return res.status(400).json({ success: false, message: "Seller products not found in this order" });
 
-        // Overall order status calculation (If all items delivered, order is delivered)
-        const allStatuses = order.items.map(i => i.itemStatus);
-        if (allStatuses.every(s => s === 'Delivered')) order.status = 'Delivered';
-        else if (allStatuses.some(s => s === 'Shipped')) order.status = 'Shipped';
+        // 🛡️ Logic: Overall Order Status sync (If all items delivered, set main order to Delivered)
+        const allItemStatuses = order.items.map(i => i.itemStatus);
+        
+        if (allItemStatuses.every(s => s === 'Delivered')) {
+            order.status = 'Delivered';
+            order.deliveredDate = new Date();
+        } else if (allItemStatuses.some(s => s === 'Shipped' || s === 'Delivered')) {
+            order.status = 'Shipped';
+        }
 
         await order.save();
-        res.json({ success: true, message: `Status updated for seller products`, data: order });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        res.json({ success: true, message: `Status updated strictly for Seller: ${sellerId}`, data: order });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
 };
 
 // orderController.js kulla handleDelhiveryWebhook logic update:
 exports.handleDelhiveryWebhook = async (req, res) => {
     try {
         const { waybill, status } = req.body;
-        const order = await Order.findOne({ awbNumber: waybill });
+        // Search order where any item has this waybill
+        const order = await Order.findOne({ "items.itemAwbNumber": waybill });
         
         if (order) {
-            // Forward Logic
-            if (status === 'Delivered' && order.status !== 'Return Requested') {
-                order.status = 'Delivered';
-                order.deliveredDate = new Date();
-            } 
-            // 🌟 REVERSE TRACKING LOGIC: Pickup completed but not yet with Seller
-            else if (status === 'Picked Up' || status === 'In-Transit-Reverse') {
-                order.status = 'Return In-Progress';
-            }
-            // 🌟 FINAL RETURN: Seller receives item
-            else if (status === 'Delivered-to-Seller' || status === 'Returned-to-Origin') {
-                order.status = 'Returned';
-                order.returnDate = new Date();
-            }
+            order.items.forEach(item => {
+                if (item.itemAwbNumber === waybill) {
+                    // Update individual item based on Delhivery status
+                    if (status === 'Delivered') {
+                        item.itemStatus = 'Delivered';
+                        item.itemDeliveredDate = new Date();
+                    } else if (status === 'Picked Up') {
+                        item.itemStatus = 'Return In-Progress';
+                    } else if (status === 'Delivered-to-Seller') {
+                        item.itemStatus = 'Returned';
+                        item.itemReturnDate = new Date();
+                    }
+                }
+            });
             await order.save();
         }
         res.status(200).send("OK");
@@ -1113,27 +1125,39 @@ exports.bypassPaymentAndShip = async (req, res) => {
         res.json({ success: true, data: order });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
+
 exports.requestReturn = async (req, res) => {
     try {
-        const { orderId, sellerId, reason } = req.body; // 👈 Indha seller product mattum return
+        const { orderId, sellerId, reason } = req.body;
         const order = await Order.findById(orderId);
 
+        if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+
+        // Generate individual Return Tracking ID
         const returnAWB = "RTN" + Math.floor(100000 + Math.random() * 900000);
 
         let sellerItemsFound = false;
         order.items.forEach(item => {
             if (item.sellerId.toString() === sellerId) {
+                // 🌟 Update status ONLY for this seller's item
                 item.itemStatus = 'Return Requested';
-                item.awbNumber = returnAWB; // Individual Return Tracking
+                item.itemAwbNumber = returnAWB; 
                 item.isReturned = true;
                 item.returnReason = reason;
                 sellerItemsFound = true;
             }
         });
 
-        if (!sellerItemsFound) return res.status(400).json({ message: "Invalid seller for this return" });
+        if (!sellerItemsFound) return res.status(400).json({ success: false, message: "Invalid seller for this order split" });
 
         await order.save();
-        res.json({ success: true, message: "Return requested for specific seller items", awb: returnAWB });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        res.json({ 
+            success: true, 
+            message: "Return request processed for specific seller package", 
+            returnAWB,
+            data: order 
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
 };
