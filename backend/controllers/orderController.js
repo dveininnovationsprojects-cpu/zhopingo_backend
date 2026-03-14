@@ -1156,22 +1156,22 @@ exports.handleDelhiveryWebhook = async (req, res) => {
         res.status(500).send("Error");
     }
 };
-
-/* =====================================================
-    🌟 UPDATE ORDER STATUS (Admin/Seller Manual Update)
-===================================================== */
+// Controllers-la indha logic-ah replace pannu:
 exports.updateOrderStatus = async (req, res) => {
     try {
-        const { status, sellerId, awbNumber } = req.body; 
+        const { status, sellerId, awbNumber } = req.body; // 👈 sellerId strictly venum
         const order = await Order.findById(req.params.orderId);
 
         if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
         let sellerFound = false;
+
+        // 🌟 THE MASTER SPLIT FIX:
+        // Order-ah moththama update pannama, items array-la indha seller items-ah mattum loop panni mathurom
         order.items.forEach(item => {
             if (item.sellerId.toString() === sellerId) {
-                item.itemStatus = status; // 👈 Particular seller status update
-                if (awbNumber) item.itemAwbNumber = awbNumber; // 👈 Individual Tracking set
+                item.itemStatus = status; // 👈 Particular seller product status updated
+                if (awbNumber) item.itemAwbNumber = awbNumber; // 👈 Individual tracking linked
                 
                 if (status === 'Delivered') item.itemDeliveredDate = new Date();
                 if (status === 'Returned') item.itemReturnDate = new Date();
@@ -1179,16 +1179,20 @@ exports.updateOrderStatus = async (req, res) => {
             }
         });
 
-        if (!sellerFound) return res.status(400).json({ message: "Seller not part of this order" });
+        if (!sellerFound) return res.status(400).json({ message: "Seller products not found in this order" });
 
-        // Overall Sync
-        const statuses = order.items.map(i => i.itemStatus);
-        if (statuses.every(s => s === 'Delivered')) order.status = 'Delivered';
-        else if (statuses.some(s => s === 'Shipped')) order.status = 'Shipped';
+        // 🛡️ SYNC MAIN STATUS: 
+        // Ella items-um delivered aana mattum dhaan overall order 'Delivered' aaganum
+        const allItemStatuses = order.items.map(i => i.itemStatus);
+        if (allItemStatuses.every(s => s === 'Delivered')) {
+            order.status = 'Delivered';
+            order.deliveredDate = new Date();
+        } else if (allItemStatuses.some(s => s === 'Shipped' || s === 'Delivered')) {
+            order.status = 'Shipped';
+        }
 
         await order.save();
-        res.json({ success: true, message: "Status updated for seller split", data: order });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
+        res.json({ success: true, message: "Seller package status updated successfully", data: order });
+
+    } catch (err) { res.status(500).json({ error: err.message }); }
 };
