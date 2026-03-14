@@ -977,85 +977,41 @@ exports.requestReturn = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
-/* =====================================================
-    🚚 SELLER-SPECIFIC ITEM STATUS UPDATE
-    Logic: Seller A ship panna, Seller A products mattum 'Shipped' aagum.
-    Seller B products 'Placed' status-laye irukum.
-===================================================== */
 exports.updateOrderStatus = async (req, res) => {
     try {
         const { status, sellerId, awbNumber } = req.body; 
-        const orderId = req.params.orderId;
-
-        // 1️⃣ Find Order and strictly populate necessary fields
-        const order = await Order.findById(orderId);
+        const order = await Order.findById(req.params.orderId);
         if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
-        let itemFoundAndUpdated = false;
+        let sellerItemsUpdated = false;
 
-        // 2️⃣ Filter by Seller ID and Update status only for those items
+        // 🌟 STEP 1: Update only THIS seller's items
         order.items.forEach(item => {
-            // Check matching seller
             if (item.sellerId.toString() === sellerId?.toString()) {
-                
-                // Safety: If already Delivered/Cancelled, don't allow status change
-                if (['Delivered', 'Cancelled'].includes(item.itemStatus)) return;
-
-                item.itemStatus = status; // Ex: 'Shipped' or 'Delivered'
-                
+                item.itemStatus = status; // Flipkart logic: Item level status
                 if (awbNumber) item.itemAwbNumber = awbNumber;
-
-                // Set Timestamps for Payout Verification
                 if (status === 'Delivered') item.itemDeliveredDate = new Date();
-                if (status === 'Shipped') item.itemShippedDate = new Date();
-                
-                itemFoundAndUpdated = true;
+                sellerItemsUpdated = true;
             }
         });
 
-        if (!itemFoundAndUpdated) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Intha order-la intha seller-oda products ethuvum illa!" 
-            });
-        }
+        if (!sellerItemsUpdated) return res.status(400).json({ message: "Seller not found" });
 
-        // 3️⃣ Sync Seller Split Data for Payouts
-        const sellerSplit = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId.toString());
-        if (sellerSplit) {
-            // Update split status so Admin knows this seller finished their part
-            sellerSplit.status = (status === 'Delivered') ? 'Completed' : status;
-        }
-
-        // 4️⃣ Overall Order Status Management (The "Anti-Conflict" Logic)
-        const allItemStatuses = order.items.map(i => i.itemStatus);
-
-        // All items delivered? Then Total Order is Delivered.
-        if (allItemStatuses.every(s => s === 'Delivered')) {
+        // 🛡️ STEP 2: Main Order Status Logic (The Fix)
+        const allStatuses = order.items.map(i => i.itemStatus);
+        
+        if (allStatuses.every(s => s === 'Delivered')) {
             order.status = 'Delivered';
-            order.deliveredDate = new Date();
-        } 
-        // Any item shipped? Then Main Order is 'Shipped' (Partially or Fully)
-        else if (allItemStatuses.some(s => s === 'Shipped')) {
-            order.status = 'Shipped';
-        }
-        // If some items are Cancelled but others are Placed
-        else if (allItemStatuses.some(s => s === 'Placed')) {
+        } else if (allStatuses.every(s => s === 'Placed')) {
             order.status = 'Placed';
+        } else {
+            // 🌟 Ippo main status "Partially Shipped" nu maarum, "Shipped" nu maarathu
+            order.status = 'Partially Shipped'; 
         }
 
         await order.save();
-
-        res.json({ 
-            success: true, 
-            message: "Seller-oda product status katchithama update aayiduchi!", 
-            currentOrderStatus: order.status 
-        });
-
-    } catch (err) {
-        console.error("Order Update Error:", err);
-        res.status(500).json({ success: false, error: err.message });
-    }
+        res.json({ success: true, message: "Seller-oda product status katchithama update aayiduchi!", currentOrderStatus: order.status });
+    } catch (err) { res.status(500).json({ error: err.message }); }
 };
 exports.cancelOrder = async (req, res) => {
     try {
