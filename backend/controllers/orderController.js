@@ -776,10 +776,8 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
 //         res.status(500).json({ success: false, error: err.message }); 
 //     }
 // };
-
 /* =====================================================
-    📦 MASTER CREATE ORDER: SELLER-WISE DATABASE SPLIT
-    (One Order per Seller for unique Order IDs)
+    📦 MASTER CREATE ORDER: Bulletproof Split Engine
 ===================================================== */
 exports.createOrder = async (req, res) => {
     try {
@@ -787,102 +785,71 @@ exports.createOrder = async (req, res) => {
         const user = await User.findById(customerId);
         if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-        const settings = await FinanceSettings.findOne() || { 
-            commissionPercent: 10, 
-            gstOnCommissionPercent: 18, 
-            tdsPercent: 2 
-        };
+        const settings = await FinanceSettings.findOne() || { commissionPercent: 10, gstOnCommissionPercent: 18, tdsPercent: 2 };
 
-        // 🌟 STEP 1: Unique Sellers-ah find panroam
+        // 🌟 Transaction reference-ku ore oru Parent ID generate panrom
+        const masterTransactionId = "MTX" + Date.now();
         const uniqueSellers = [...new Set(items.map(item => item.sellerId?._id || item.sellerId))];
         const createdOrders = [];
-        const totalSplitDelivery = Number(deliveryCharge || 0) / uniqueSellers.length;
+        const splitDelivery = Number(deliveryCharge || 0) / uniqueSellers.length;
 
-        // 🌟 STEP 2: Iterate and Create SEPARATE Database Documents
         for (const sId of uniqueSellers) {
             const sellerItems = items.filter(item => (item.sellerId?._id || item.sellerId) === sId);
             const sellerDoc = await Seller.findById(sId);
             if (!sellerDoc) continue;
 
-            let sellerItemTotal = 0;
-            const processedItems = [];
-
-            // Core Item Processing
-            for (const item of sellerItems) {
-                const productDoc = await Product.findById(item.productId || item._id);
-                if (!productDoc) continue;
-
-                const qty = Number(item.quantity);
-                const subtotal = Number(item.price) * qty;
-                sellerItemTotal += subtotal;
-
-                processedItems.push({
-                    productId: productDoc._id,
-                    name: item.name,
-                    quantity: qty,
-                    price: item.price,
-                    mrp: item.mrp || item.price,
-                    sellerId: sellerDoc._id,
-                    hsnCode: productDoc.hsnCode || "0000",
-                    image: item.image || "",
+            let sItemTotal = 0;
+            const processedItems = sellerItems.map(item => {
+                sItemTotal += (Number(item.price) * Number(item.quantity));
+                return {
+                    ...item,
                     itemStatus: 'Placed',
-                    isReturnable: productDoc.isReturnable || false,
-                    returnWindowDays: productDoc.returnWindowDays || 7
-                });
-            }
+                    sellerId: sellerDoc._id
+                };
+            });
 
-            // 🌟 STEP 3: FINANCE & COMMISSION CALCULATION (Exact logic preserved)
-            const commission = (sellerItemTotal * settings.commissionPercent) / 100;
-            const gstOnComm = (commission * settings.gstOnCommissionPercent) / 100;
-            const tds = (sellerItemTotal * settings.tdsPercent) / 100;
+            const comm = (sItemTotal * settings.commissionPercent) / 100;
+            const totalForThisOrder = sItemTotal + splitDelivery;
 
-            const finalSellerSplitData = [{
-                sellerId: sellerDoc._id,
-                shopName: sellerDoc.shopName,
-                sellerSubtotal: sellerItemTotal,
-                commissionTotal: commission,
-                gstTotal: gstOnComm,
-                tdsTotal: tds,
-                finalPayable: sellerItemTotal - (commission + gstOnComm + tds),
-                packageStatus: 'Placed'
-            }];
-
-            const totalForThisOrder = sellerItemTotal + totalSplitDelivery;
-
-            // 🌟 STEP 4: SAVE NEW SEPARATE ORDER
             const newOrder = new Order({
                 customerId: user._id,
                 items: processedItems,
-                sellerSplitData: finalSellerSplitData,
-                billDetails: { 
-                    itemTotal: sellerItemTotal, 
-                    deliveryCharge: totalSplitDelivery, 
-                    totalAmount: totalForThisOrder 
-                },
+                // 🌟 MASTER SYNC: Oru oru order-kullaum intha Parent ID-ah record panrom
+                awbNumber: masterTransactionId, 
+                sellerSplitData: [{
+                    sellerId: sellerDoc._id,
+                    shopName: sellerDoc.shopName,
+                    sellerSubtotal: sItemTotal,
+                    commissionTotal: comm,
+                    gstTotal: (comm * 0.18),
+                    tdsTotal: (sItemTotal * 0.02),
+                    finalPayable: sItemTotal - (comm + (comm * 0.18) + (sItemTotal * 0.02))
+                }],
+                billDetails: { itemTotal: sItemTotal, deliveryCharge: splitDelivery, totalAmount: totalForThisOrder },
                 totalAmount: totalForThisOrder,
                 paymentMethod,
                 shippingAddress,
-                status: "Placed",
-                paymentStatus: (paymentMethod === "WALLET" || paymentMethod === "ONLINE") ? "Paid" : "Pending"
+                status: "Placed"
             });
 
             await newOrder.save();
             createdOrders.push(newOrder);
         }
 
-        // 🌟 STEP 5: FINAL RESPONSE
+        // 🌟 THE SESSION FIX: 
+        // Frontend-ku total cart value matrum andha common Transaction ID-ah anupuroam
+        const cartTotal = createdOrders.reduce((sum, ord) => sum + ord.totalAmount, 0);
+
         res.status(201).json({ 
             success: true, 
-            message: `${createdOrders.length} separate orders created.`,
-            orders: createdOrders 
+            masterTransactionId, // 👈 PhonePe create-session-ku idhai anuppu
+            totalPayable: cartTotal, 
+            orderIds: createdOrders.map(o => o._id),
+            message: "Split orders prepared for payment session"
         });
 
-    } catch (err) { 
-        console.error("Split Order Error:", err);
-        res.status(500).json({ success: false, error: err.message }); 
-    }
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
-
 
 // 1. User Orders (OrderAgain matrum User Screen-ku)
 exports.getMyOrders = async (req, res) => {
