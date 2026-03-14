@@ -62,6 +62,7 @@ const {
     generateGlobalLogisticsSettlement,
     deleteWeightSlab,
     getSellerSettlements,
+    getPendingDailyOrders,
     getSellerLedger,
     getAllLedgerEntries
 } = require("../controllers/adminController"); 
@@ -83,7 +84,7 @@ router.put('/sellers/:id', protect, updateSellerStatus);
 
 router.get('/finance-settings', protect, getFinanceSettings);
 router.put('/finance-settings', protect, updateFinanceSettings);
-
+router.get('/finance/pending-orders/:sellerId', protect, getPendingDailyOrders);
 
 router.post('/generate-settlement', protect, generateWeeklySettlement);
 router.put('/mark-settlement-paid/:id', protect, markSettlementAsPaid);
