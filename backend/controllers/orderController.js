@@ -977,43 +977,72 @@ exports.requestReturn = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
+
+
+/* =====================================================
+    🚚 UPDATE ORDER STATUS (Specific Seller Object Sync)
+    (Ore ID kulla sellerSplitData array-la tracking maintain panroam)
+===================================================== */
 exports.updateOrderStatus = async (req, res) => {
     try {
         const { status, sellerId, awbNumber } = req.body; 
         const order = await Order.findById(req.params.orderId);
+
         if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
-        let sellerItemsUpdated = false;
+        let sellerPackageFound = false;
 
-        // 🌟 STEP 1: Update Item Level status
-        order.items.forEach(item => {
-            if (item.sellerId.toString() === sellerId?.toString()) {
-                item.itemStatus = status; 
-                if (awbNumber) item.itemAwbNumber = awbNumber;
-                if (status === 'Delivered') item.itemDeliveredDate = new Date();
-                sellerItemsUpdated = true;
+        // 🌟 STEP 1: Update strictly inside sellerSplitData array object
+        order.sellerSplitData.forEach(split => {
+            if (split.sellerId.toString() === sellerId?.toString()) {
+                // Individual Status inside seller object
+                split.packageStatus = status; 
+                
+                // Individual Tracking inside seller object
+                if (awbNumber) {
+                    split.awbNumber = awbNumber; 
+                }
+
+                if (status === 'Delivered') split.deliveredDate = new Date();
+                if (status === 'Returned') split.returnDate = new Date();
+                
+                sellerPackageFound = true;
             }
         });
 
-        if (!sellerItemsUpdated) return res.status(400).json({ message: "Seller products not found" });
+        // 🌟 STEP 2: Item Status Sync (Handshake for UI)
+        order.items.forEach(item => {
+            if (item.sellerId.toString() === sellerId?.toString()) {
+                item.itemStatus = status;
+                if (awbNumber) item.itemAwbNumber = awbNumber;
+            }
+        });
 
-        // 🛡️ STEP 2: MASTER STATUS LOGIC (Avoiding Validation Error)
-        const allStatuses = order.items.map(i => i.itemStatus);
+        if (!sellerPackageFound) {
+            return res.status(400).json({ success: false, message: "Seller split data not found in this order." });
+        }
+
+        // 🛡️ STEP 3: OVERALL ORDER BADGE SYNC
+        const allPackageStatuses = order.sellerSplitData.map(s => s.packageStatus);
         
-        if (allStatuses.every(s => s === 'Delivered')) {
+        if (allPackageStatuses.every(s => s === 'Delivered')) {
             order.status = 'Delivered';
-        } else if (allStatuses.every(s => s === 'Placed')) {
-            order.status = 'Placed';
-        } else if (allStatuses.some(s => s === 'Shipped' || s === 'Delivered')) {
-            // 🌟 Inga dhaan 'Partially Shipped' vizhum
+            order.deliveredDate = new Date();
+        } else if (allPackageStatuses.every(s => s === 'Cancelled')) {
+            order.status = 'Cancelled';
+        } else if (allPackageStatuses.some(s => s === 'Shipped' || s === 'Delivered')) {
             order.status = 'Partially Shipped'; 
         }
 
         await order.save();
-        res.json({ success: true, message: "Seller package updated!", orderStatus: order.status });
+        res.json({ 
+            success: true, 
+            message: "Seller-wise object tracking updated katchithama!", 
+            data: order 
+        });
+
     } catch (err) {
-        console.error("Update Error:", err);
-        // Error message-la enum values mismatch aana theriyaum
+        console.error("Split Sync Error:", err);
         res.status(500).json({ success: false, error: err.message });
     }
 };
@@ -1081,45 +1110,38 @@ exports.cancelOrder = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
+
 /* =====================================================
-    📈 5. TRACKING & WEBHOOK (Seller-Wise Handshake)
+    📈 WEBHOOK SYNC (Search by split array's awbNumber)
 ===================================================== */
 exports.handleDelhiveryWebhook = async (req, res) => {
     try {
         const { waybill, status } = req.body;
-        // Search order where any individual item has this waybill
-        const order = await Order.findOne({ "items.itemAwbNumber": waybill });
+        
+        // 🌟 Searching order based on individual AWB inside split array
+        const order = await Order.findOne({ "sellerSplitData.awbNumber": waybill });
         
         if (order) {
-            order.items.forEach(item => {
-                if (item.itemAwbNumber === waybill) {
-                    // Forward Logic
+            order.sellerSplitData.forEach(split => {
+                if (split.awbNumber === waybill) {
                     if (status === 'Delivered') {
-                        item.itemStatus = 'Delivered';
-                        item.itemDeliveredDate = new Date();
-                    } 
-                    // Reverse Logic
-                    else if (status === 'Picked Up' || status === 'In-Transit-Reverse') {
-                        item.itemStatus = 'Return In-Progress';
-                    }
-                    else if (status === 'Delivered-to-Seller') {
-                        item.itemStatus = 'Returned';
-                        item.itemReturnDate = new Date();
+                        split.packageStatus = 'Delivered';
+                        split.deliveredDate = new Date();
+                    } else if (status === 'In-Transit') {
+                        split.packageStatus = 'Shipped';
                     }
                 }
             });
 
-            // Sync main order status if all are delivered
-            if (order.items.every(i => i.itemStatus === 'Delivered')) {
-                order.status = 'Delivered';
-                order.deliveredDate = new Date();
-            }
+            // Re-sync item status for frontend clarity
+            order.items.forEach(item => {
+                if (item.itemAwbNumber === waybill) {
+                    if (status === 'Delivered') item.itemStatus = 'Delivered';
+                }
+            });
 
             await order.save();
         }
         res.status(200).send("OK");
-    } catch (err) {
-        res.status(500).send("Error");
-    }
+    } catch (err) { res.status(500).send("Error"); }
 };
-
