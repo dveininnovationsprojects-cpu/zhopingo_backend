@@ -1083,22 +1083,23 @@ exports.updateOrderStatus = async (req, res) => {
     }
 };
 
+// orderController.js kulla handleDelhiveryWebhook logic update:
 exports.handleDelhiveryWebhook = async (req, res) => {
     try {
         const { waybill, status } = req.body;
         const order = await Order.findOne({ awbNumber: waybill });
         
         if (order) {
-            // Forward flow logic
+            // Forward Logic
             if (status === 'Delivered' && order.status !== 'Return Requested') {
                 order.status = 'Delivered';
                 order.deliveredDate = new Date();
             } 
-            // 🌟 REVERSE FLOW LOGIC: 
-            // Pickup mudinjona status 'Returned' nu maaranum
+            // 🌟 REVERSE TRACKING LOGIC: Pickup completed but not yet with Seller
             else if (status === 'Picked Up' || status === 'In-Transit-Reverse') {
                 order.status = 'Return In-Progress';
             }
+            // 🌟 FINAL RETURN: Seller receives item
             else if (status === 'Delivered-to-Seller' || status === 'Returned-to-Origin') {
                 order.status = 'Returned';
                 order.returnDate = new Date();
@@ -1108,7 +1109,6 @@ exports.handleDelhiveryWebhook = async (req, res) => {
         res.status(200).send("OK");
     } catch (err) { res.status(500).send("Error"); }
 };
-
 exports.bypassPaymentAndShip = async (req, res) => {
     try {
         const order = await Order.findById(req.params.orderId);
