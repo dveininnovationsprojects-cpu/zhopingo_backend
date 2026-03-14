@@ -978,88 +978,82 @@ exports.requestReturn = async (req, res) => {
     }
 };
 /* =====================================================
-    🚚 UPDATE ORDER STATUS (Individual Seller Item Sync)
-    Logic: Seller-ku endha product irukko adhuku mattum status update aagum.
+    🚚 SELLER-SPECIFIC ITEM STATUS UPDATE
+    Logic: Seller A ship panna, Seller A products mattum 'Shipped' aagum.
+    Seller B products 'Placed' status-laye irukum.
 ===================================================== */
 exports.updateOrderStatus = async (req, res) => {
     try {
         const { status, sellerId, awbNumber } = req.body; 
         const orderId = req.params.orderId;
 
+        // 1️⃣ Find Order and strictly populate necessary fields
         const order = await Order.findById(orderId);
         if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
-        let sellerItemsUpdated = false;
+        let itemFoundAndUpdated = false;
 
-        // 1️⃣ Loop through items and update ONLY this seller's products
+        // 2️⃣ Filter by Seller ID and Update status only for those items
         order.items.forEach(item => {
-            // String conversion to prevent ObjectId mismatch
+            // Check matching seller
             if (item.sellerId.toString() === sellerId?.toString()) {
                 
-                // Block updating if already Delivered/Cancelled (Security)
-                if (['Delivered', 'Cancelled', 'Returned'].includes(item.itemStatus)) {
-                    return; 
-                }
+                // Safety: If already Delivered/Cancelled, don't allow status change
+                if (['Delivered', 'Cancelled'].includes(item.itemStatus)) return;
 
-                item.itemStatus = status;
-
-                // Sync Delhivery AWB if provided during 'Shipped' status
+                item.itemStatus = status; // Ex: 'Shipped' or 'Delivered'
+                
                 if (awbNumber) item.itemAwbNumber = awbNumber;
 
-                // Set Timestamps for Payout Logic
+                // Set Timestamps for Payout Verification
                 if (status === 'Delivered') item.itemDeliveredDate = new Date();
-                if (status === 'Returned') item.itemReturnDate = new Date();
-                if (status === 'Cancelled') item.itemCancelledDate = new Date();
-
-                sellerItemsUpdated = true;
+                if (status === 'Shipped') item.itemShippedDate = new Date();
+                
+                itemFoundAndUpdated = true;
             }
         });
 
-        if (!sellerItemsUpdated) {
-            return res.status(400).json({ success: false, message: "No eligible items found for this seller." });
+        if (!itemFoundAndUpdated) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Intha order-la intha seller-oda products ethuvum illa!" 
+            });
         }
 
-        // 2️⃣ Financial Status Sync (Payout Security)
-        // Seller split data-layum status update pannanum, apo dhaan payout logic-ku correct-ah irukum.
+        // 3️⃣ Sync Seller Split Data for Payouts
         const sellerSplit = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId.toString());
         if (sellerSplit) {
+            // Update split status so Admin knows this seller finished their part
             sellerSplit.status = (status === 'Delivered') ? 'Completed' : status;
-            
-            // If seller cancels/returns, payout becomes 0 for that seller (Industry Standard)
-            if (status === 'Cancelled' || status === 'Returned') {
-                sellerSplit.finalPayable = 0;
-            }
         }
 
-        // 3️⃣ Overall Order Status Sync Logic
-        const allStatuses = order.items.map(i => i.itemStatus);
+        // 4️⃣ Overall Order Status Management (The "Anti-Conflict" Logic)
+        const allItemStatuses = order.items.map(i => i.itemStatus);
 
-        // CASE A: Everything is Delivered
-        if (allStatuses.every(s => s === 'Delivered')) {
+        // All items delivered? Then Total Order is Delivered.
+        if (allItemStatuses.every(s => s === 'Delivered')) {
             order.status = 'Delivered';
             order.deliveredDate = new Date();
-            order.paymentStatus = 'Paid'; // Manual security check
         } 
-        // CASE B: Everything is Cancelled
-        else if (allStatuses.every(s => s === 'Cancelled')) {
-            order.status = 'Cancelled';
-            order.paymentStatus = 'Refunded';
+        // Any item shipped? Then Main Order is 'Shipped' (Partially or Fully)
+        else if (allItemStatuses.some(s => s === 'Shipped')) {
+            order.status = 'Shipped';
         }
-        // CASE C: Partial Delivery or Shipped
-        else if (allStatuses.some(s => s === 'Shipped') || allStatuses.some(s => s === 'Delivered')) {
-            order.status = 'Shipped'; // Partial shipping status
+        // If some items are Cancelled but others are Placed
+        else if (allItemStatuses.some(s => s === 'Placed')) {
+            order.status = 'Placed';
         }
 
         await order.save();
 
         res.json({ 
             success: true, 
-            message: `Items updated to ${status} for seller successfully!`, 
-            data: order 
+            message: "Seller-oda product status katchithama update aayiduchi!", 
+            currentOrderStatus: order.status 
         });
 
     } catch (err) {
-        console.error("Update Status Error:", err);
+        console.error("Order Update Error:", err);
         res.status(500).json({ success: false, error: err.message });
     }
 };
