@@ -47,7 +47,6 @@
 
 // module.exports = mongoose.model('Order', orderSchema);
 
-
 const mongoose = require('mongoose');
 
 const orderSchema = new mongoose.Schema({
@@ -59,22 +58,21 @@ const orderSchema = new mongoose.Schema({
         price: { type: Number, required: true }, 
         hsnCode: { type: String, default: "0000" },
         mrp: { type: Number },
-        // 🔥 இங்கதான் மஜாவே இருக்கு: ref குடுத்தா தான் shopName வரும்
         sellerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Seller', required: true }, 
         image: { type: String },
         
-        // 🌟 THE MASTER SPLIT FIX: Oru oru seller item-kum thani status venum
+        // 🌟 INDIVIDUAL ITEM STATUS: Maggie-ku thani status, Rice-ku thani status.
         itemStatus: { 
             type: String, 
             default: 'Placed',
             enum: ['Placed', 'Shipped', 'Delivered', 'Cancelled', 'Return Requested', 'Return In-Progress', 'Returned']
         },
-        // 🌟 Tracking strictly per seller/package
+        // 🌟 Individual Tracking per Seller/Package
         itemAwbNumber: { type: String, default: null },
         itemDeliveredDate: { type: Date, default: null },
         itemReturnDate: { type: Date, default: null },
 
-        // 🌟 RETURN LOGIC: Product level tags strictly added
+        // 🌟 RETURN LOGIC
         isReturnable: { type: Boolean, default: false },
         returnWindowDays: { type: Number, default: 0 },
         isReturned: { type: Boolean, default: false },
@@ -83,12 +81,18 @@ const orderSchema = new mongoose.Schema({
     sellerSplitData: [{
         sellerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Seller' },
         sellerSubtotal: Number,
-        // 🌟 PAYOUT SYNC: Maggie (Free) vs Rice (Paid) logic-ku deductions katchithama venum
+        // 🌟 SELLER PACKAGE STATUS: Payout generate panna indha status strictly venum
+        // Oru seller cancel aanaalum maththavanga status 'Placed'-la irukkanum
+        packageStatus: { 
+            type: String, 
+            default: 'Placed',
+            enum: ['Placed', 'Shipped', 'Delivered', 'Cancelled', 'Returned']
+        },
         commissionTotal: { type: Number, default: 0 },
         gstTotal: { type: Number, default: 0 },
         tdsTotal: { type: Number, default: 0 },
-        deliveryDeduction: { type: Number, default: 0 }, // Admin logic deduction from seller
-        actualShippingCost: { type: Number, default: 0 }, // Delhivery actual cost
+        deliveryDeduction: { type: Number, default: 0 }, 
+        actualShippingCost: { type: Number, default: 0 }, 
         customerChargedShipping: { type: Number, default: 0 }
     }],
     billDetails: {
@@ -100,16 +104,16 @@ const orderSchema = new mongoose.Schema({
     },
     totalAmount: { type: Number, required: true },
     paymentMethod: { type: String, required: true }, 
-    paymentStatus: { type: String, enum: ['Pending', 'Paid', 'Failed', 'Refunded'], default: 'Pending' },
+    paymentStatus: { type: String, enum: ['Pending', 'Paid', 'Failed', 'Refunded', 'Partially Refunded'], default: 'Pending' },
     status: { 
         type: String, 
         default: 'Placed',
-        enum: ['Pending', 'Placed', 'Shipped', 'Delivered', 'Cancelled', 'Return Requested', 'Return In-Progress', 'Returned'] 
+        // 🌟 Added 'Partially Cancelled' / 'Partially Shipped' for UI clarity
+        enum: ['Pending', 'Placed', 'Shipped', 'Delivered', 'Cancelled', 'Partially Cancelled', 'Return Requested', 'Return In-Progress', 'Returned'] 
     },
-    // 🌟 SETTLEMENT TRACKING: Weekly payout logic-ku intha dates strictly venum
     deliveredDate: { type: Date, default: null },
     returnDate: { type: Date, default: null },
-    isSettled: { type: Boolean, default: false }, // Weekly payout-la include aayiducha nu track panna
+    isSettled: { type: Boolean, default: false }, 
     
     shippingAddress: {
         receiverName: { type: String },
@@ -118,8 +122,7 @@ const orderSchema = new mongoose.Schema({
         pincode: { type: String },
         label: { type: String }
     },
-    awbNumber: { type: String, default: null },
-    // arrivedIn: { type: String, default: "15 mins" } 
+    awbNumber: { type: String, default: null }
 }, { timestamps: true });
 
 module.exports = mongoose.model('Order', orderSchema);

@@ -1069,33 +1069,28 @@ exports.requestReturn = async (req, res) => {
 };
 
 
-/* =====================================================
-    ❌ 3. CANCEL ORDER (Seller-Wise Split Fix)
-===================================================== */
 exports.cancelOrder = async (req, res) => {
     try {
-        const { sellerId } = req.body; // 👈 Frontend-la irundhu sellerId anuppanum
+        const { sellerId } = req.body; // 👈 Body-la sellerId anuppanum
         const order = await Order.findById(req.params.orderId);
 
         if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
-        // 🛡️ Logic: Placed status-la irukura intha seller items-ah mattum thedurom
-        let sellerItemsFound = false;
+        let sellerFound = false;
         let refundAmount = 0;
 
+        // 🌟 THE SPLIT FIX: Update only the items of THIS specific seller
         order.items.forEach(item => {
             if (item.sellerId.toString() === sellerId && (item.itemStatus === 'Placed' || item.itemStatus === 'Pending')) {
-                item.itemStatus = 'Cancelled'; // 🌟 Oru seller item mattum cancel
+                item.itemStatus = 'Cancelled'; // 👈 Seller A cancel aanaalum Seller B safe-ah irupparu
                 refundAmount += (item.price * item.quantity);
-                sellerItemsFound = true;
+                sellerFound = true;
             }
         });
 
-        if (!sellerItemsFound) {
-            return res.status(400).json({ success: false, message: "Items cannot be cancelled or invalid seller." });
-        }
+        if (!sellerFound) return res.status(400).json({ success: false, message: "Invalid seller or item already processed." });
 
-        // 💰 WALLET REFUND: Strictly for the cancelled amount only
+        // Partial Refund logic for Wallet
         if (order.paymentStatus === 'Paid') {
             const user = await User.findById(order.customerId);
             if (user) {
@@ -1103,27 +1098,21 @@ exports.cancelOrder = async (req, res) => {
                 user.walletTransactions.unshift({
                     amount: refundAmount,
                     type: 'CREDIT',
-                    reason: `Refund: Order #${order._id.toString().slice(-6).toUpperCase()} (Split)`,
+                    reason: `Partial Refund: Order Split Cancel`,
                     date: new Date()
                 });
                 await user.save();
             }
         }
 
-        // 🛡️ MASTER STATUS SYNC: 
-        // Ella items-um cancel aayiducha nu check panni overall status-ah update panrom
-        const allStatuses = order.items.map(i => i.itemStatus);
-        if (allStatuses.every(s => s === 'Cancelled')) {
-            order.status = 'Cancelled';
-            order.paymentStatus = 'Refunded';
-        }
+        // Master Order Status Sync
+        const statuses = order.items.map(i => i.itemStatus);
+        if (statuses.every(s => s === 'Cancelled')) order.status = 'Cancelled';
+        else order.status = 'Partially Cancelled'; // 👈 Pudhu status clarity-kku
 
         await order.save();
-        res.json({ success: true, message: "Seller products cancelled and refunded successfully." });
-
-    } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
-    }
+        res.json({ success: true, message: "Seller products cancelled successfully." });
+    } catch (err) { res.status(500).json({ error: err.message }); }
 };
 
 /* =====================================================
