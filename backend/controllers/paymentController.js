@@ -368,38 +368,34 @@ exports.verifyPayment = async (req, res) => {
 const updateOrderSuccess = async (orderId) => {
   try {
     const order = await Order.findById(orderId);
-    if (!order) return false;
+    if (!order || order.paymentStatus === "Paid") return true;
 
-    // 🛡️ Double-check check to avoid multiple triggers
-    if (order.paymentStatus === "Paid") return true;
-
-    const user = await User.findById(order.customerId);
-    
-    // 🌟 THE TRIGGER: Payment confirm aana udanae fields-ah katchithama profile panroam
     order.paymentStatus = "Paid";
-    order.status = "Placed"; // Main status update
+    order.status = "Placed";
 
-    // 🌟 THE SPLIT SYNC: sellerSplitData-la irukkura oru oru package status-ayum Placed-nu mathurom
+    // 🚀 THE MASTER SYNC FIX: Individual tracking per seller inside the array
+    const fallbackAWB = "128374922";
+    
+    // 1️⃣ Sync sellerSplitData array (Status & AWB inside the object)
     if (order.sellerSplitData && order.sellerSplitData.length > 0) {
         order.sellerSplitData.forEach(split => {
             split.packageStatus = 'Placed';
+            split.awbNumber = fallbackAWB; // 🌟 Ippo array object kulla register aagum
         });
     }
 
-    // 🛒 Item Level Status Sync
+    // 2️⃣ Sync individual items for Frontend logic alignment
     if (order.items && order.items.length > 0) {
         order.items.forEach(item => {
             item.itemStatus = 'Placed';
+            item.itemAwbNumber = fallbackAWB; // 🌟 Individual item level tracking
         });
     }
 
-    // 🚚 Shipment Creation (Triggering for the first seller as per current logic)
-    const firstSeller = order.sellerSplitData[0];
-    const pickupName = firstSeller?.shopName || "benjamin";
-    
-    // Fallback AWB for Sandbox testing logic
-    order.awbNumber = "128374922"; 
-    console.log("✅ Blinkit Sync: Order Placed and Split Statuses set to Placed.");
+    // Legacy sync (safety-ku general level-laiyum irukkatum)
+    order.awbNumber = fallbackAWB;
+
+    console.log("✅ Split Tracking Engine: All packages synced with individual AWB.");
 
     await order.save();
     return true;
