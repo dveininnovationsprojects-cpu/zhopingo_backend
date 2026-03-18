@@ -1009,7 +1009,7 @@ exports.getSellerReturnRequests = async (req, res) => {
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
-// };
+};
 
 // /* =====================================================
 //     🚚 UPDATE ORDER STATUS (Specific Seller Object Sync)
@@ -1152,7 +1152,7 @@ exports.updateOrderStatus = async (req, res) => {
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
-}}
+};
 
 exports.cancelOrder = async (req, res) => {
     try {

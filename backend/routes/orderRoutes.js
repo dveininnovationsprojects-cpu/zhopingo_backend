@@ -70,6 +70,7 @@ router.post('/webhook/delhivery', orderCtrl.handleDelhiveryWebhook);
 
 
 router.get('/all', protect, orderCtrl.getOrders);
+router.get('/seller/returns/:sellerId', protect, orderCtrl.getSellerReturnRequests);
 
 router.put('/update-status/:orderId', protect, orderCtrl.updateOrderStatus);
 
@@ -77,6 +78,6 @@ router.put('/update-status/:orderId', protect, orderCtrl.updateOrderStatus);
 router.put('/bypass-pay/:orderId', protect, orderCtrl.bypassPaymentAndShip);
 
 
-router.get('/seller/returns/:sellerId', protect, orderCtrl.getSellerReturnRequests);
+
 
 module.exports = router;
