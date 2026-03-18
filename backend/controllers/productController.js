@@ -109,7 +109,7 @@ exports.getAllProducts = async (req, res) => {
         // media formatting and fallback values for UI
         const data = products.map(p => ({
             ...formatProductMedia(p),
-            stock: p.stock !== undefined ? p.stock : 100, 
+            stock: p.stock !== undefined ? p.stock : 0, 
             price: p.price || 99, 
             mrp: p.mrp || 150,
             availability: "Available",

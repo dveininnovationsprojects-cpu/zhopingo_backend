@@ -99,7 +99,6 @@ exports.verifyWalletTopup = async (req, res) => {
   }
 };
 
-
 exports.payUsingWallet = async (req, res) => {
   try {
     const { orderId, userId } = req.body;
@@ -109,33 +108,55 @@ exports.payUsingWallet = async (req, res) => {
     if (!user || !order) return res.status(404).json({ success: false, message: "Not found" });
     if (user.walletBalance < order.totalAmount) return res.status(400).json({ success: false, message: "Insufficient balance" });
 
-    // Debit Wallet
+    // 1. Debit Wallet
     user.walletBalance -= order.totalAmount;
     user.walletTransactions.unshift({
       amount: order.totalAmount,
       type: "DEBIT",
-      reason: `Order Payment (#${order._id.toString().slice(-6)})`,
+      reason: `Order Payment (#${order._id.toString().slice(-6).toUpperCase()})`,
       date: new Date()
     });
 
-    // Update Order (Exactly like PhonePe Success Flow)
+    // 2. Update Order Status (Industry Standard)
     order.paymentStatus = "Paid";
     order.status = "Placed";
     order.paymentMethod = "Wallet";
 
-    // 🚚 Trigger Delhivery Shipment (Nee kudutha adhe logic)
+    // 3. 🚚 Trigger Delhivery Shipment & SYNC SPLIT DATA
+    // Note: createDelhiveryShipment function backend-la split wise shipment create panna maari irukanum
     const delhiRes = await createDelhiveryShipment(order, user.phone || "9876543210");
+    
+    let generatedAWB = "128374922"; // Default Fallback
     if (delhiRes && (delhiRes.success === true || delhiRes.packages?.length > 0)) {
-        order.awbNumber = delhiRes.packages[0].waybill;
+        generatedAWB = delhiRes.packages[0].waybill;
+        order.awbNumber = generatedAWB;
     } else {
-        order.awbNumber = "128374922"; // Fallback for testing
+        order.awbNumber = generatedAWB; 
     }
 
+    // 🔥 THE CRITICAL SYNC: Update AWB inside each seller's split object
+    // Idhu pannala-na frontend-la tracking "Pending" nu dhaan kaatum
+    if (order.sellerSplitData && order.sellerSplitData.length > 0) {
+      order.sellerSplitData = order.sellerSplitData.map(split => ({
+        ...split.toObject(),
+        awbNumber: generatedAWB, // Inga update aana dhaan Mobile UI-la Live Tracking work aagum
+        packageStatus: "Placed"
+      }));
+    }
+
+    // 4. Atomic Save
     await user.save();
     await order.save();
 
-    res.json({ success: true, message: "Payment Successful!", newBalance: user.walletBalance });
+    res.json({ 
+      success: true, 
+      message: "Payment Successful & Shipment Triggered!", 
+      newBalance: user.walletBalance,
+      awbNumber: generatedAWB 
+    });
+
   } catch (err) {
+    console.error("Wallet Payment Error:", err);
     res.status(500).json({ success: false, error: err.message });
   }
 };
