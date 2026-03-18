@@ -977,75 +977,183 @@ exports.requestReturn = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
+/* =====================================================
+    🔍 GET SELLER RETURN REQUESTS (Only Return Requested)
+===================================================== */
+exports.getSellerReturnRequests = async (req, res) => {
+    try {
+        const { sellerId } = req.params;
+        // Logic: Find orders where items contain this sellerId AND status is 'Return Requested'
+        const orders = await Order.find({ 
+            "items": { 
+                $elemMatch: { 
+                    "sellerId": sellerId, 
+                    "itemStatus": "Return Requested" 
+                } 
+            } 
+        })
+        .populate('items.productId')
+        .populate('customerId', 'name phone')
+        .sort({ updatedAt: -1 });
 
+        // Filter panni anupuroam so seller confusion aaga maataanga
+        const results = orders.map(order => {
+            const orderObj = order.toObject();
+            orderObj.items = orderObj.items.filter(item => 
+                item.sellerId.toString() === sellerId && item.itemStatus === "Return Requested"
+            );
+            return orderObj;
+        });
+
+        res.json({ success: true, data: results });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+// };
+
+// /* =====================================================
+//     🚚 UPDATE ORDER STATUS (Specific Seller Object Sync)
+//     (Ore ID kulla sellerSplitData array-la tracking maintain panroam)
+// ===================================================== */
+// exports.updateOrderStatus = async (req, res) => {
+//     try {
+//         const { status, sellerId, awbNumber } = req.body; 
+//         const order = await Order.findById(req.params.orderId);
+
+//         if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+
+//         let sellerPackageFound = false;
+
+//         // 🌟 STEP 1: Update strictly inside sellerSplitData array object
+//         order.sellerSplitData.forEach(split => {
+//             if (split.sellerId.toString() === sellerId?.toString()) {
+//                 // Individual Status inside seller object
+//                 split.packageStatus = status; 
+                
+//                 // Individual Tracking inside seller object
+//                 if (awbNumber) {
+//                     split.awbNumber = awbNumber; 
+//                 }
+
+//                 if (status === 'Delivered') split.deliveredDate = new Date();
+//                 if (status === 'Returned') split.returnDate = new Date();
+                
+//                 sellerPackageFound = true;
+//             }
+//         });
+
+//         // 🌟 STEP 2: Item Status Sync (Handshake for UI)
+//         order.items.forEach(item => {
+//             if (item.sellerId.toString() === sellerId?.toString()) {
+//                 item.itemStatus = status;
+//                 if (awbNumber) item.itemAwbNumber = awbNumber;
+//             }
+//         });
+
+//         if (!sellerPackageFound) {
+//             return res.status(400).json({ success: false, message: "Seller split data not found in this order." });
+//         }
+
+//         // 🛡️ STEP 3: OVERALL ORDER BADGE SYNC
+//         const allPackageStatuses = order.sellerSplitData.map(s => s.packageStatus);
+        
+//         if (allPackageStatuses.every(s => s === 'Delivered')) {
+//             order.status = 'Delivered';
+//             order.deliveredDate = new Date();
+//         } else if (allPackageStatuses.every(s => s === 'Cancelled')) {
+//             order.status = 'Cancelled';
+//         } else if (allPackageStatuses.some(s => s === 'Shipped' || s === 'Delivered')) {
+//             order.status = 'Partially Shipped'; 
+//         }
+
+//         await order.save();
+//         res.json({ 
+//             success: true, 
+//             message: "Seller-wise object tracking updated katchithama!", 
+//             data: order 
+//         });
+
+//     } catch (err) {
+//         console.error("Split Sync Error:", err);
+//         res.status(500).json({ success: false, error: err.message });
+//     }
+// };
 
 /* =====================================================
-    🚚 UPDATE ORDER STATUS (Specific Seller Object Sync)
-    (Ore ID kulla sellerSplitData array-la tracking maintain panroam)
+    🚚 UPDATE ORDER STATUS (Handover to Admin/Seller)
 ===================================================== */
 exports.updateOrderStatus = async (req, res) => {
     try {
-        const { status, sellerId, awbNumber } = req.body; 
+        const { status, sellerId, adminNote } = req.body; 
         const order = await Order.findById(req.params.orderId);
 
         if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
         let sellerPackageFound = false;
+        let totalRefundAmount = 0;
 
-        // 🌟 STEP 1: Update strictly inside sellerSplitData array object
+        // 🌟 STEP 1: Sync Seller Split Data
         order.sellerSplitData.forEach(split => {
             if (split.sellerId.toString() === sellerId?.toString()) {
-                // Individual Status inside seller object
                 split.packageStatus = status; 
-                
-                // Individual Tracking inside seller object
-                if (awbNumber) {
-                    split.awbNumber = awbNumber; 
+                if (status === 'Returned') {
+                    split.returnDate = new Date();
                 }
-
-                if (status === 'Delivered') split.deliveredDate = new Date();
-                if (status === 'Returned') split.returnDate = new Date();
-                
                 sellerPackageFound = true;
             }
         });
 
-        // 🌟 STEP 2: Item Status Sync (Handshake for UI)
+        // 🌟 STEP 2: Sync Individual Items & Prep Refund
         order.items.forEach(item => {
             if (item.sellerId.toString() === sellerId?.toString()) {
                 item.itemStatus = status;
-                if (awbNumber) item.itemAwbNumber = awbNumber;
+                
+                // 🔥 IMMEDIATE REFUND CALCULATION: If status is 'Returned'
+                if (status === 'Returned') {
+                    totalRefundAmount += (item.price * item.quantity);
+                    item.isReturned = true;
+                    item.returnProcessedDate = new Date();
+                }
             }
         });
 
-        if (!sellerPackageFound) {
-            return res.status(400).json({ success: false, message: "Seller split data not found in this order." });
+        if (!sellerPackageFound) return res.status(400).json({ success: false, message: "Seller data sync failed." });
+
+        // 💰 STEP 3: WALLET REFUND TRIGGER (Atomic Action)
+        if (status === 'Returned' && totalRefundAmount > 0) {
+            const user = await User.findById(order.customerId);
+            if (user) {
+                user.walletBalance += totalRefundAmount;
+                user.walletTransactions.unshift({
+                    amount: totalRefundAmount,
+                    type: 'CREDIT',
+                    reason: `Refund: Order #${order._id.toString().slice(-6).toUpperCase()} Return Approved`,
+                    date: new Date()
+                });
+                await user.save();
+                
+                // Overall order check: If every seller is returned, order is fully 'Refunded'
+                const allDone = order.items.every(i => i.itemStatus === 'Returned' || i.itemStatus === 'Cancelled');
+                if (allDone) order.paymentStatus = 'Refunded';
+            }
         }
 
-        // 🛡️ STEP 3: OVERALL ORDER BADGE SYNC
-        const allPackageStatuses = order.sellerSplitData.map(s => s.packageStatus);
-        
-        if (allPackageStatuses.every(s => s === 'Delivered')) {
-            order.status = 'Delivered';
-            order.deliveredDate = new Date();
-        } else if (allPackageStatuses.every(s => s === 'Cancelled')) {
-            order.status = 'Cancelled';
-        } else if (allPackageStatuses.some(s => s === 'Shipped' || s === 'Delivered')) {
-            order.status = 'Partially Shipped'; 
+        // 🛡️ STEP 4: MASTER BADGE SYNC
+        const allStatuses = order.sellerSplitData.map(s => s.packageStatus);
+        if (allStatuses.every(s => s === 'Returned')) {
+            order.status = 'Returned';
+        } else if (allStatuses.some(s => s === 'Returned')) {
+            order.status = 'Partially Returned';
         }
 
         await order.save();
-        res.json({ 
-            success: true, 
-            message: "Seller-wise object tracking updated katchithama!", 
-            data: order 
-        });
+        res.json({ success: true, message: "Status sync and Refund success!", data: order });
 
     } catch (err) {
-        console.error("Split Sync Error:", err);
         res.status(500).json({ success: false, error: err.message });
     }
-};
+}}
+
 exports.cancelOrder = async (req, res) => {
     try {
         const { sellerId } = req.body; 
