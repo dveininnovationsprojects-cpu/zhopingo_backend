@@ -126,7 +126,7 @@ const sellerSchema = new mongoose.Schema(
       receiverName: { type: String }, // Contact Person Name
       flatNo: { type: String },
       area: { type: String },
-      pincode: { type: String, required: true, index: true }, // 🌟 Mandatory for Delhivery
+      pincode: { type: String, required: false, index: true }, // 🌟 Mandatory for Delhivery
       phone: { type: String },
       addressType: { type: String, default: "Shop" }
     },
