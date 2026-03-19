@@ -131,50 +131,50 @@ exports.getAllProducts = async (req, res) => {
         const { category, subCategory, search, page = 1, limit = 50 } = req.query;
 
         let query = {}; 
-
         if (category) query.category = category;
         if (subCategory) query.subCategory = subCategory;
         if (search) query.name = { $regex: search, $options: "i" };
 
-        const skip = (parseInt(page) - 1) * parseInt(limit);
-
-        // 🌟 STEP 1: Main logic loop parameters isolated
+        // 🌟 STEP 1: Database-la irundhu query match aagura ellathaiyum fetch panroam
+        // Inga manual-ah limit panna koodathu, ஏன்னா active sellers filter panna elements kammi aagum
         const products = await Product.find(query)
             .populate("category subCategory", "name image")
             .populate({
                 path: "seller",
-                select: "shopName name address status isActive", // 👈 Status match strictly venum
+                select: "shopName isActive", 
             })
             .sort({ createdAt: -1 })
             .lean();
 
-        // 🌟 STEP 2: Main filter condition isolated
-        const filteredProducts = products.filter(p => p.seller && p.seller.isActive === true);
+        // 🌟 STEP 2: Logic - Active-ah irukkura sellers products mattum dhaan loop-kulla varanum
+        const activeProducts = products.filter(p => p.seller && p.seller.isActive === true);
 
-        // 🛡️ STEP 3: Bulletproof fallback query trigger
-        // Category/SubCategory logic query element mismatch or empty results handling
-        if (category && filteredProducts.length === 0) {
-            console.log("Empty results for this category. Bulletproof logic check...");
-        }
+        // 🌟 STEP 3: Client-side Pagination (The Real 50-50 Split)
+        const itemsPerPage = parseInt(limit);
+        const currentPage = parseInt(page);
+        const skip = (currentPage - 1) * itemsPerPage;
 
-        const paginatedProducts = filteredProducts.slice(skip, skip + parseInt(limit));
+        // Ippo dhaan filter panna data-la irundhu current page-kkana 50 items-ah edukkurom
+        const paginatedData = activeProducts.slice(skip, skip + itemsPerPage);
 
-        // Media formatting logic isolated
-        const data = paginatedProducts.map(p => ({
+        // Media formatting loop
+        const data = paginatedData.map(p => ({
             ...formatProductMedia(p),
             stock: p.stock !== undefined ? p.stock : 0, 
-            price: p.price || 99, 
-            mrp: p.mrp || 150,
-            availability: "Available",
-            ratingCount: Math.floor(Math.random() * 100) + 10
+            price: p.price || 0, 
+            mrp: p.mrp || 0,
+            availability: "Available"
         }));
 
         res.status(200).json({ 
             success: true, 
             count: data.length, 
-            total_active_in_db: filteredProducts.length, // Category fallback isolated
+            total_active_count: activeProducts.length, // Total active results in DB
+            current_page: currentPage,
+            total_pages: Math.ceil(activeProducts.length / itemsPerPage),
             data 
         });
+
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
