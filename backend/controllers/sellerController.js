@@ -271,6 +271,34 @@ exports.getAllBrands = async (req, res) => {
     }
 };
 
+/* ================= ADMIN ONLY: PROMOTE SELLER TO BRAND ================= */
+exports.toggleSellerBrandStatus = async (req, res) => {
+    try {
+        const { sellerId } = req.params;
+        const { isBrand } = req.body; // true or false
+
+        const seller = await Seller.findByIdAndUpdate(
+            sellerId,
+            { isBrand: isBrand },
+            { new: true }
+        ).select("shopName isBrand");
+
+        if (!seller) {
+            return res.status(404).json({ success: false, message: "Seller not found" });
+        }
+
+        res.json({ 
+            success: true, 
+            message: seller.isBrand ? "Seller promoted to Top Brand ✅" : "Seller removed from Brands ❌",
+            data: seller 
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+
+
 // controllers/sellerController.js
 exports.addSellerAddress = async (req, res) => {
   try {
