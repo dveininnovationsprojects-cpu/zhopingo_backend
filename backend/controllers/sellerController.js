@@ -271,11 +271,11 @@ exports.getAllBrands = async (req, res) => {
     }
 };
 
-/* ================= ADMIN ONLY: PROMOTE SELLER TO BRAND ================= */
+
 exports.toggleSellerBrandStatus = async (req, res) => {
     try {
         const { sellerId } = req.params;
-        const { isBrand } = req.body; // true or false
+        const { isBrand } = req.body; 
 
         const seller = await Seller.findByIdAndUpdate(
             sellerId,
@@ -290,6 +290,35 @@ exports.toggleSellerBrandStatus = async (req, res) => {
         res.json({ 
             success: true, 
             message: seller.isBrand ? "Seller promoted to Top Brand ✅" : "Seller removed from Brands ❌",
+            data: seller 
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+
+/* ================= ADMIN ONLY: TOGGLE SELLER STATUS (Active & Brand) ================= */
+exports.updateSellerAdminStatus = async (req, res) => {
+    try {
+        const { sellerId } = req.params;
+        const { isBrand, isActive } = req.body; 
+
+        const updateData = {};
+        if (isBrand !== undefined) updateData.isBrand = isBrand;
+        if (isActive !== undefined) updateData.isActive = isActive;
+
+        const seller = await Seller.findByIdAndUpdate(
+            sellerId,
+            { $set: updateData },
+            { new: true }
+        ).select("shopName isBrand isActive");
+
+        if (!seller) return res.status(404).json({ success: false, message: "Seller not found" });
+
+        res.json({ 
+            success: true, 
+            message: "Seller status updated successfully ✅",
             data: seller 
         });
     } catch (err) {

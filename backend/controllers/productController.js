@@ -85,10 +85,51 @@ exports.requestNewProduct = async (req, res) => {
     }
 };
 
+// exports.getAllProducts = async (req, res) => {
+//     try {
+//         const { category, subCategory, search, page = 1, limit = 50 } = req.query;
+
+
+//         let query = {}; 
+
+//         if (category) query.category = category;
+//         if (subCategory) query.subCategory = subCategory;
+//         if (search) query.name = { $regex: search, $options: "i" };
+
+//         const skip = (parseInt(page) - 1) * parseInt(limit);
+
+//         const products = await Product.find(query)
+//             .populate("category subCategory", "name image")
+//             .populate("seller", "shopName name address status")
+//             .sort({ createdAt: -1 })
+//             .skip(skip)
+//             .limit(parseInt(limit))
+//             .lean();
+
+//         // media formatting and fallback values for UI
+//         const data = products.map(p => ({
+//             ...formatProductMedia(p),
+//             stock: p.stock !== undefined ? p.stock : 0, 
+//             price: p.price || 99, 
+//             mrp: p.mrp || 150,
+//             availability: "Available",
+//             ratingCount: Math.floor(Math.random() * 100) + 10
+//         }));
+
+//         res.status(200).json({ 
+//             success: true, 
+//             count: data.length, 
+//             total_found_in_db: products.length,
+//             data 
+//         });
+//     } catch (err) {
+//         res.status(500).json({ success: false, error: err.message });
+//     }
+// };
+
 exports.getAllProducts = async (req, res) => {
     try {
         const { category, subCategory, search, page = 1, limit = 50 } = req.query;
-
 
         let query = {}; 
 
@@ -98,16 +139,26 @@ exports.getAllProducts = async (req, res) => {
 
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
+        // 🌟 STEP 1: Fetch products with Seller info
         const products = await Product.find(query)
             .populate("category subCategory", "name image")
-            .populate("seller", "shopName name address status")
+            .populate({
+                path: "seller",
+                select: "shopName name address status isActive", // 👈 isActive field strictly needed
+            })
             .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(parseInt(limit))
             .lean();
 
-        // media formatting and fallback values for UI
-        const data = products.map(p => ({
+        // 🌟 STEP 2: THE CRITICAL FILTER (isActive Logic)
+        // Seller null-ah irundhaalo (deleted) illaati isActive: false-nu irundhaalo 
+        // andha products customer-ku theriyaadhu.
+        const filteredProducts = products.filter(p => p.seller && p.seller.isActive === true);
+
+        // 🌟 STEP 3: Apply Pagination on filtered data
+        const paginatedProducts = filteredProducts.slice(skip, skip + parseInt(limit));
+
+        // Media formatting and fallback values for UI
+        const data = paginatedProducts.map(p => ({
             ...formatProductMedia(p),
             stock: p.stock !== undefined ? p.stock : 0, 
             price: p.price || 99, 
@@ -119,7 +170,7 @@ exports.getAllProducts = async (req, res) => {
         res.status(200).json({ 
             success: true, 
             count: data.length, 
-            total_found_in_db: products.length,
+            total_active_in_db: filteredProducts.length, // Active count mattum kootitu varoam
             data 
         });
     } catch (err) {
