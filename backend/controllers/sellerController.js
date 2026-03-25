@@ -141,49 +141,59 @@ exports.loginSeller = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
-
 exports.getSellerDashboard = async (req, res) => {
   try {
     const { id } = req.params;
-    const sellerId = new mongoose.Types.ObjectId(id);
+    const sellerObjectId = new mongoose.Types.ObjectId(id);
     
-    // 1. Seller Details
+    // 1. Seller Basic Details Fetch
     const seller = await Seller.findById(id).select("-password");
     if (!seller) return res.status(404).json({ success: false, message: "Seller not found" });
 
-    // 2. Orders Stats
+    // 2. Orders Statistics (Delivered, Placed, etc.)
     const orderStats = await Order.aggregate([
-      { $match: { "sellerSplitData.sellerId": sellerId } },
+      { $match: { "sellerSplitData.sellerId": sellerObjectId } },
       { $group: { _id: "$status", count: { $sum: 1 } } }
     ]);
 
     const stats = { Placed: 0, Shipped: 0, Delivered: 0, Cancelled: 0 };
     orderStats.forEach(s => { stats[s._id] = s.count; });
 
-    // 🌟 3. REAL REVENUE LOGIC: Delivered (Net) + Paid Payouts
-    // Aggregating net amount from Delivered orders that are not yet settled
+    // 🌟 3. REAL SELLER REVENUE LOGIC (Excluding Admin Commission)
+    // Part A: Aggregate Net Amount from Delivered orders (Not yet settled)
     const pendingRevenue = await Order.aggregate([
       { 
         $match: { 
-          "sellerSplitData.sellerId": sellerId,
+          "sellerSplitData.sellerId": sellerObjectId,
           status: "Delivered",
-          isSettled: { $ne: true } // Settle aagaadha live orders mattum
+          isSettled: { $ne: true } 
         } 
       },
       {
         $group: {
           _id: null,
-          total: { $sum: "$sellerSplitData.amount" } // Net amount after commission
+          total: { $sum: "$sellerSplitData.amount" } // Strictly seller's net share
         }
       }
     ]);
 
-    // Already Paid amounts from Settlement/Payout collection
-    const paidRevenue = await mongoose.model("Payout").aggregate([
-      { $match: { sellerId: sellerId, status: "Paid" } },
-      { $group: { _id: null, total: { $sum: "$amount" } } }
+    // Part B: Already Processed/Paid Revenue from Settlements
+    const paidRevenue = await Settlement.aggregate([
+      { 
+        $match: { 
+          sellerId: sellerObjectId, 
+          status: "Paid" 
+        } 
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: "$finalPayable" } // Sum of weekly finalized payouts
+        }
+      }
     ]);
 
+    // Live Balance = Current Week Delivered Items + Past Paid Settlements
     const liveNetRevenue = (pendingRevenue[0]?.total || 0) + (paidRevenue[0]?.total || 0);
 
     res.json({
@@ -191,13 +201,13 @@ exports.getSellerDashboard = async (req, res) => {
       data: {
         seller,
         stats,
-        revenue: liveNetRevenue, // 💰 Ippo correct seller share mattum vizhum
+        revenue: liveNetRevenue, // 💰 This will now show only Seller's Share, NOT 4,600
         newOrdersCount: stats.Placed || 0
       }
     });
 
   } catch (err) {
-    console.error("Dashboard Sync Error:", err.message);
+    console.error("Dashboard Final Sync Error:", err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 };
