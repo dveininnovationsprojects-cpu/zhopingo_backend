@@ -37,7 +37,6 @@ router.get("/new-orders/:sellerId", sellerCtrl.getSellerNewOrders);
 
 router.put("/update-order-status", sellerCtrl.updateSellerOrderStatus);
 
-// 🌟 Update/Toggle logic for Admin (Brand & Active Status)
 router.put('/update-admin-status/:sellerId', sellerCtrl.updateSellerAdminStatus);
 router.put("/update-profile/:id", upload.single("profileImage"), sellerCtrl.updateSellerProfile);
 // URL: /api/v1/sellers/toggle-brand/:sellerId

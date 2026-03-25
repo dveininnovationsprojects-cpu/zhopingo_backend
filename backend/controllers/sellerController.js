@@ -297,35 +297,22 @@ exports.toggleSellerBrandStatus = async (req, res) => {
     }
 };
 
-
-/* ================= ADMIN ONLY: TOGGLE SELLER STATUS (Active & Brand) ================= */
 exports.updateSellerAdminStatus = async (req, res) => {
     try {
         const { sellerId } = req.params;
-        const { isBrand, isActive } = req.body; 
-
-        const updateData = {};
-        if (isBrand !== undefined) updateData.isBrand = isBrand;
-        if (isActive !== undefined) updateData.isActive = isActive;
+        const { status } = req.body; // active / inactive
 
         const seller = await Seller.findByIdAndUpdate(
             sellerId,
-            { $set: updateData },
+            { status },
             { new: true }
-        ).select("shopName isBrand isActive");
+        );
 
-        if (!seller) return res.status(404).json({ success: false, message: "Seller not found" });
-
-        res.json({ 
-            success: true, 
-            message: "Seller status updated successfully ✅",
-            data: seller 
-        });
+        res.json({ success: true, data: seller });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
 };
-
 
 
 // controllers/sellerController.js
