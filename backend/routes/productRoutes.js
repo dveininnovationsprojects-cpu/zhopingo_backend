@@ -107,7 +107,15 @@ router.get('/master-list/:subCatId', productCtrl.getMasterListBySubCategory);
 // 2. Seller token (Missing product request) rise panna logic
 router.post('/request-token', protect, productCtrl.requestNewProduct);
 
-router.put('/update/:id', protect, productCtrl.updateProduct);
+router.put('/update/:id', 
+    protect,
+    upload.fields([
+        { name: 'images', maxCount: 5 },
+        { name: 'video', maxCount: 1 }
+    ]),
+    processImages,
+    productCtrl.updateProduct
+);
 router.delete('/delete/:id', protect, productCtrl.deleteProduct);
 
 module.exports = router;

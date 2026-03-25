@@ -131,39 +131,45 @@ exports.updateProduct = async (req, res) => {
         const productId = req.params.id;
         const sellerId = req.user?.id;
 
-        // 1️⃣ Security Check: Verify owner like create flow
+        // 1️⃣ Fetch product first
         let product = await Product.findOne({ _id: productId, seller: sellerId });
         if (!product) {
-            return res.status(404).json({ success: false, message: "Unauthorized or Product not found" });
+            return res.status(404).json({ success: false, message: "Product not found" });
         }
 
-        // 🌟 2️⃣ Master Data Population (Strictly mirroring Create Product)
-        // Body-la masterProductId irundha, adha vachu fresh metadata fetch pannanum
-        const masterIdToUse = req.body.masterProductId || product.masterProductId;
+        // 🌟 SAFETY FIX: Check both casing and fallback to existing product data
+        // Image 51 crash-ah prevent panna indha optional chaining mukkiyam
+        const incomingMasterId = req.body.masterProductId || req.body.masterProductid;
+        const masterIdToUse = incomingMasterId || product?.masterProductId;
+
+        if (!masterIdToUse) {
+            return res.status(400).json({ success: false, message: "Master Product mapping missing for this item" });
+        }
+
+        // 🌟 2️⃣ Master Data Fetch (Create Product logic mirror)
         const masterData = await MasterProduct.findById(masterIdToUse).populate('hsnMasterId');
-        
         if (!masterData) {
-            return res.status(400).json({ success: false, message: "Invalid Master Product reference" });
+            return res.status(400).json({ success: false, message: "Invalid Master Product selection" });
         }
 
-        // 3️⃣ Media Handling (Mirroring Create Product)
+        // 3️⃣ Media Handling
         const images = req.files && req.files['images'] ? req.files['images'].map(f => f.key) : product.images;
         const video = req.files && req.files['video'] ? req.files['video'][0].key : product.video;
 
-        // 🌟 4️⃣ Construction Logic (Mirroring Create Product structure)
+        // 🌟 4️⃣ Construction (Mirroring Create Product logic 100%)
         const updateData = {
             ...req.body,
             masterProductId: masterIdToUse,
-            name: req.body.name || masterData.name, // Priority to body, fallback to master
+            name: req.body.name || masterData.name,
             isFreeDelivery: req.body.isFreeDelivery === 'true' || req.body.isFreeDelivery === true,
             
-            // Strictly from Master like Create flow
+            // Strictly from Master like your createProduct logic
             category: masterData.category,
             subCategory: masterData.subCategory,
             hsnCode: masterData.hsnMasterId?.hsnCode || product.hsnCode,
             gstPercentage: masterData.hsnMasterId?.gstRate || product.gstPercentage,
             
-            // Numeric conversions
+            // Numbers strictly enforced
             price: Number(req.body.price || product.price),
             mrp: Number(req.body.mrp || product.mrp),
             stock: Number(req.body.stock || product.stock),
@@ -180,7 +186,7 @@ exports.updateProduct = async (req, res) => {
             updateData.discountPercentage = 0;
         }
 
-        // 🚀 MASTER UPDATE
+        // 🚀 PERFORM UPDATE
         const updated = await Product.findByIdAndUpdate(
             productId, 
             { $set: updateData }, 
@@ -189,11 +195,12 @@ exports.updateProduct = async (req, res) => {
 
         res.json({ 
             success: true, 
-            message: "Product updated with Master Sync! ✅", 
+            message: "Product updated successfully! ✅", 
             data: updated 
         });
 
     } catch (err) { 
+        console.error("Mirror Update Critical Error:", err.message);
         res.status(400).json({ success: false, error: err.message }); 
     }
 };
