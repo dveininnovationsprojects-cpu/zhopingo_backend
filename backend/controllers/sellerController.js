@@ -141,58 +141,56 @@ exports.loginSeller = async (req, res) => {
   }
 };
 
-
 exports.getSellerDashboard = async (req, res) => {
   try {
     const { id } = req.params;
+    const sellerId = new mongoose.Types.ObjectId(id);
     
-    // 1. Seller Basic Details
+    // 1. Seller Details
     const seller = await Seller.findById(id).select("-password");
     if (!seller) return res.status(404).json({ success: false, message: "Seller not found" });
 
-    // 2. Orders Statistics (Live Count)
+    // 2. Orders Stats
     const orderStats = await Order.aggregate([
-      { $match: { "sellerSplitData.sellerId": new mongoose.Types.ObjectId(id) } },
-      {
-        $group: {
-          _id: "$status",
-          count: { $sum: 1 }
-        }
-      }
+      { $match: { "sellerSplitData.sellerId": sellerId } },
+      { $group: { _id: "$status", count: { $sum: 1 } } }
     ]);
 
-    // Grouping counts into a clean object
     const stats = { Placed: 0, Shipped: 0, Delivered: 0, Cancelled: 0 };
     orderStats.forEach(s => { stats[s._id] = s.count; });
 
-    // 🌟 3. REVENUE LOGIC: Using Payouts Data 🌟
-    // Inga dhaan 'Payout' model-la irundhu actual settlement amount-ah edukkurom
-    const payoutData = await mongoose.model("Payout").aggregate([
+    // 🌟 3. REAL REVENUE LOGIC: Delivered (Net) + Paid Payouts
+    // Aggregating net amount from Delivered orders that are not yet settled
+    const pendingRevenue = await Order.aggregate([
       { 
         $match: { 
-          sellerId: new mongoose.Types.ObjectId(id),
-          status: "Paid" // Actual-ah seller-ku pona amount mattum sum panrom
+          "sellerSplitData.sellerId": sellerId,
+          status: "Delivered",
+          isSettled: { $ne: true } // Settle aagaadha live orders mattum
         } 
       },
       {
         $group: {
           _id: null,
-          totalRevenue: { $sum: "$amount" } // Seller settlement amount[cite: 14]
+          total: { $sum: "$sellerSplitData.amount" } // Net amount after commission
         }
       }
     ]);
 
-    const totalRevenue = payoutData.length > 0 ? payoutData[0].totalRevenue : 0;
+    // Already Paid amounts from Settlement/Payout collection
+    const paidRevenue = await mongoose.model("Payout").aggregate([
+      { $match: { sellerId: sellerId, status: "Paid" } },
+      { $group: { _id: null, total: { $sum: "$amount" } } }
+    ]);
 
-    // 4. Top 7 Selling Items Logic (For Graph/List)[cite: 14]
-    // Inga orders-la irundhu top items logic ezhudhalam[cite: 14]
+    const liveNetRevenue = (pendingRevenue[0]?.total || 0) + (paidRevenue[0]?.total || 0);
 
     res.json({
       success: true,
       data: {
         seller,
         stats,
-        revenue: totalRevenue, // 💰 Real Revenue from Payouts[cite: 14]
+        revenue: liveNetRevenue, // 💰 Ippo correct seller share mattum vizhum
         newOrdersCount: stats.Placed || 0
       }
     });
