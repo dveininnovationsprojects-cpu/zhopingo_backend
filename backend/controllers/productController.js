@@ -126,37 +126,81 @@ exports.getAllProducts = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
-
-
 exports.updateProduct = async (req, res) => {
     try {
+        const productId = req.params.id;
+        const sellerId = req.user?.id;
+
+        // 1️⃣ First, product database-la irukka matrum andha seller-oda thaan-nu check panroam
+        let product = await Product.findOne({ _id: productId, seller: sellerId });
+        if (!product) {
+            return res.status(404).json({ success: false, message: "Product not found or unauthorized access" });
+        }
+
         let updateData = { ...req.body };
 
-        
+        // 2️⃣ Master Product change aana, HSN/GST-ayum thirumba sync pannanum
         if (updateData.masterProductId) {
             const masterData = await MasterProduct.findById(updateData.masterProductId).populate('hsnMasterId');
             if (masterData) {
                 updateData.name = masterData.name;
-                updateData.hsnCode = masterData.hsnMasterId.hsnCode;
-                updateData.gstPercentage = masterData.hsnMasterId.gstRate;
+                updateData.category = masterData.category;
+                updateData.subCategory = masterData.subCategory;
+                updateData.hsnCode = masterData.hsnMasterId?.hsnCode;
+                updateData.gstPercentage = masterData.hsnMasterId?.gstRate;
             }
         }
 
+        // 3️⃣ Number Conversion (Strictly converting strings to numbers)
+        if (updateData.price) updateData.price = Number(updateData.price);
+        if (updateData.mrp) updateData.mrp = Number(updateData.mrp);
+        if (updateData.stock) updateData.stock = Number(updateData.stock);
+
+        // 4️⃣ Variant Logic (JSON parse strictly required for form-data)
         if (updateData.variants && typeof updateData.variants === 'string') {
-            updateData.variants = JSON.parse(updateData.variants);
-        }
-        if (req.files) {
-            if (req.files['images']) updateData.images = req.files['images'].map(f => f.key);
-            if (req.files['video']) updateData.video = req.files['video'][0].key;
-        }
-        if (updateData.mrp && updateData.price) {
-            updateData.discountPercentage = updateData.mrp > updateData.price ? Math.round(((updateData.mrp - updateData.price) / updateData.mrp) * 100) : 0;
+            try {
+                updateData.variants = JSON.parse(updateData.variants);
+            } catch (e) {
+                console.error("Variant Parse Error:", e.message);
+            }
         }
 
-        const updated = await Product.findByIdAndUpdate(req.params.id, updateData, { new: true });
-        if (!updated) return res.status(404).json({ success: false, message: "Product not found" });
-        res.json({ success: true, data: updated });
-    } catch (err) { res.status(400).json({ success: false, error: err.message }); }
+        // 5️⃣ Files Update (Images/Video)
+        if (req.files) {
+            if (req.files['images'] && req.files['images'].length > 0) {
+                updateData.images = req.files['images'].map(f => f.key);
+            }
+            if (req.files['video'] && req.files['video'].length > 0) {
+                updateData.video = req.files['video'][0].key;
+            }
+        }
+
+        // 6️⃣ Discount Calculation logic
+        const finalMRP = updateData.mrp || product.mrp;
+        const finalPrice = updateData.price || product.price;
+        if (finalMRP && finalPrice) {
+            updateData.discountPercentage = finalMRP > finalPrice 
+                ? Math.round(((finalMRP - finalPrice) / finalMRP) * 100) 
+                : 0;
+        }
+
+        // 🚀 MASTER UPDATE
+        const updated = await Product.findByIdAndUpdate(
+            productId, 
+            { $set: updateData }, 
+            { new: true, runValidators: true }
+        );
+
+        res.json({ 
+            success: true, 
+            message: "Product updated successfully! ✅", 
+            data: updated 
+        });
+
+    } catch (err) { 
+        console.error("Update Product Error:", err.message);
+        res.status(400).json({ success: false, error: err.message }); 
+    }
 };
 
 exports.deleteProduct = async (req, res) => {
