@@ -3,6 +3,7 @@ const Order = require("../models/Order");
 const Payout = require("../models/Payout");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const Settlement = require("../models/Settlement");
 const { sendAdminNotification } = require("../utils/emailService");
 const mongoose = require("mongoose");
 
