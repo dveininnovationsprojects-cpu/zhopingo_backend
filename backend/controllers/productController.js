@@ -125,7 +125,8 @@ exports.getAllProducts = async (req, res) => {
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
-}exports.updateProduct = async (req, res) => {
+};
+exports.updateProduct = async (req, res) => {
     try {
         const productId = req.params.id;
         const sellerId = req.user?.id;
