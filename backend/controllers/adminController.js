@@ -264,20 +264,18 @@ exports.updateFinanceSettings = async (req, res) => {
         res.json({ success: true, message: "Finance Settings Updated!", data: settings });
     } catch (err) { res.status(500).json({ error: err.message }); }
 };
-
 /* =====================================================
     💰 MASTER WEEKLY SETTLEMENT GENERATOR 
-    (Maggie-Rice Sync, Return Deductions & 7-Day Completion)
+    (Maggie-Rice Sync, Return Deductions & Reversals)
 ===================================================== */
 exports.generateWeeklySettlement = async (req, res) => {
     try {
         const { sellerId, startDate, endDate } = req.body;
         
-        // 🛡️ Logic: Delivered aagi strictly 7 days mudinjirukanum (Return window safety)
         const settlementCutoffDate = new Date();
         settlementCutoffDate.setDate(settlementCutoffDate.getDate() - 7);
 
-        // 1️⃣ Fetch DELIVERED orders for this seller (Strictly 7+ days old)
+        // 1️⃣ Fetch DELIVERED orders (Strictly 7+ days old)
         const deliveredOrders = await Order.find({
             "sellerSplitData.sellerId": sellerId,
             status: 'Delivered',
@@ -286,6 +284,7 @@ exports.generateWeeklySettlement = async (req, res) => {
         }).populate('items.productId');
 
         // 2️⃣ Fetch RETURNED orders (Reflected in current week payout)
+        // 🌟 Fix: Return orders-ku settlement window thevai illa, process immediately
         const returnedOrders = await Order.find({
             "sellerSplitData.sellerId": sellerId,
             status: 'Returned',
@@ -294,69 +293,59 @@ exports.generateWeeklySettlement = async (req, res) => {
         }).populate('items.productId');
 
         if (deliveredOrders.length === 0 && returnedOrders.length === 0) {
-            return res.status(404).json({ success: false, message: "No eligible orders for settlement in this range." });
+            return res.status(404).json({ success: false, message: "No eligible orders for settlement." });
         }
 
-        let payoutRows = []; // Table columns-ku thevayana day-wise data
-        let summary = {
-            sales: 0,
-            deductions: 0,
-            logisticsActualTotal: 0,
-            finalPayable: 0
-        };
+        let payoutRows = []; 
+        let summary = { sales: 0, deductions: 0, finalPayable: 0 };
 
-        // ➕ Process Delivered Orders (Maggie vs Rice logic applied)
+        // ➕ Process Delivered Orders
         deliveredOrders.forEach(order => {
             const sellerData = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId);
             if (sellerData) {
                 const subtotal = sellerData.sellerSubtotal || 0;
-                // Calculations
-                const comm = sellerData.commissionTotal || 0;
-                const gst = sellerData.gstTotal || 0;
-                const tds = sellerData.tdsTotal || 0;
-                const deliveryDed = sellerData.deliveryDeduction || 0;
-                
-                const totalDed = comm + gst + tds + deliveryDed;
-                const lineFinal = subtotal - totalDed;
+                const totalDed = (sellerData.commissionTotal || 0) + 
+                                 (sellerData.gstTotal || 0) + 
+                                 (sellerData.tdsTotal || 0) + 
+                                 (sellerData.deliveryDeduction || 0);
 
                 summary.sales += subtotal;
                 summary.deductions += totalDed;
-                summary.logisticsActualTotal += (sellerData.actualShippingCost || 0);
 
                 payoutRows.push({
                     date: order.deliveredDate,
                     orderId: order._id,
                     type: 'SALE',
                     amount: subtotal,
-                    comm_gst_tds: comm + gst + tds,
-                    delivery_status: deliveryDed > 0 ? `Deducted (₹${deliveryDed})` : "Customer Paid (FREE FOR SELLER)",
-                    actual_logistics: sellerData.actualShippingCost, // Info only
-                    net_payable: lineFinal
+                    comm_gst_tds: (sellerData.commissionTotal || 0) + (sellerData.gstTotal || 0),
+                    delivery_status: (sellerData.deliveryDeduction > 0) ? `Deducted` : "FREE",
+                    net_payable: subtotal - totalDed
                 });
             }
         });
 
-        // ➖ Process Returned Orders (Maggie + 80 Logic)
+        // ➖ Process Returned Orders (Maggie + 80 Logic + Fee Reversal)
         returnedOrders.forEach(order => {
             const sellerData = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId);
             if (sellerData) {
                 const productAmt = sellerData.sellerSubtotal || 0;
-                const logisticsLoss = (sellerData.actualShippingCost || 80); // Namma partner-ku kudutha loss
-                
-                // 🌟 Logic: Seller payout-la irundhu Product Kaasu + Namma Partner-ku kudutha kaasu rendaiyum koraikurom
-                const totalReturnDeduction = productAmt + logisticsLoss;
+                const logisticsLoss = (sellerData.actualShippingCost || 80); 
+                const alreadyDeductedFees = (sellerData.commissionTotal || 0) + (sellerData.gstTotal || 0);
 
-                summary.sales -= productAmt;
+                // Formula: Recover (Product + Logistics) but Give back (Commission Fees)
+                const totalReturnDeduction = (productAmt + logisticsLoss) - alreadyDeductedFees;
+
+                summary.sales -= productAmt; 
                 summary.deductions += logisticsLoss;
+                summary.deductions -= alreadyDeductedFees;
 
                 payoutRows.push({
                     date: order.returnDate,
                     orderId: order._id,
                     type: 'RETURN',
                     amount: -productAmt,
-                    comm_gst_tds: 0,
+                    comm_gst_tds: -alreadyDeductedFees,
                     delivery_status: `Logistics Loss (₹${logisticsLoss})`,
-                    actual_logistics: logisticsLoss,
                     net_payable: -totalReturnDeduction
                 });
             }
@@ -364,11 +353,10 @@ exports.generateWeeklySettlement = async (req, res) => {
 
         summary.finalPayable = summary.sales - summary.deductions;
 
-        // 3️⃣ Save Settlement record
         const newSettlement = new Settlement({
             sellerId,
             weekRange: `${startDate} to ${endDate}`,
-            payoutBreakdown: payoutRows, // 🌟 Day-wise table data
+            payoutBreakdown: payoutRows,
             totalSales: summary.sales,
             totalDeductions: summary.deductions,
             finalPayable: summary.finalPayable,
@@ -377,15 +365,35 @@ exports.generateWeeklySettlement = async (req, res) => {
 
         await newSettlement.save();
 
-        // 🛡️ Flag orders as settled
         const orderIds = [...deliveredOrders, ...returnedOrders].map(o => o._id);
         await Order.updateMany({ _id: { $in: orderIds } }, { $set: { isSettled: true } });
 
-        res.json({ success: true, message: "Weekly Settlement Generated!", data: newSettlement });
+        res.json({ success: true, message: "Weekly Settlement Generated! ✅", data: newSettlement });
 
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
 
+// 3. Mark as Paid (🌟 Updated with Ledger Sync)
+exports.markSettlementAsPaid = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { utrNumber, paymentDate } = req.body;
+        
+        const settlement = await Settlement.findById(id);
+        if (!settlement) return res.status(404).json({ success: false, message: "Settlement not found" });
+        if (settlement.status === 'Paid') return res.status(400).json({ success: false, message: "Already paid" });
+
+        settlement.status = 'Paid';
+        settlement.utrNumber = utrNumber;
+        settlement.paymentDate = paymentDate || new Date();
+        await settlement.save();
+
+        // 🌟 CRITICAL: Update Seller Ledger on Payment
+        await this.createLedgerEntryForPayout(settlement.sellerId, settlement.finalPayable);
+
+        res.json({ success: true, message: "Payment recorded and Ledger updated! ✅", data: settlement });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+};
 // 🌟 1. API for Daily Orders View (Settlement aagaadha orders)
 exports.getPendingDailyOrders = async (req, res) => {
     try {
