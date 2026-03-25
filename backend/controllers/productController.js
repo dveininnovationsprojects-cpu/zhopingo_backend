@@ -131,68 +131,54 @@ exports.updateProduct = async (req, res) => {
         const productId = req.params.id;
         const sellerId = req.user?.id;
 
-        // 1️⃣ Product andha seller-oda thaan-nu first verify panroam
         let product = await Product.findOne({ _id: productId, seller: sellerId });
-        if (!product) {
-            return res.status(404).json({ success: false, message: "Product not found or unauthorized access" });
-        }
+        if (!product) return res.status(404).json({ success: false, message: "Unauthorized or Product not found" });
 
-        // 🌟 Initial Update Data formation
+        // 🌟 STEP 1: Capture Body Data directly
         let updateData = { ...req.body };
 
-        // 2️⃣ Master Product Logic Fix:
-        // Oru vaelai nee name-ah manual-ah update panna ninaicha, adhu masterProductId overwrite panna koodadhu
+        // 🌟 STEP 2: Logic Handshake
+        // Master Product details (Category/HSN/GST) venumna mattum dhaan populate pannanum.
+        // Product 'name'-ah namma Master name-oda overwrite panna koodadhu!
         if (updateData.masterProductId && updateData.masterProductId !== product.masterProductId?.toString()) {
             const masterData = await MasterProduct.findById(updateData.masterProductId).populate('hsnMasterId');
             if (masterData) {
-                updateData.name = masterData.name;
+                // HSN, GST, Category mattum Master list-la irundhu edukkalaam (Standards-kaga)
                 updateData.category = masterData.category;
                 updateData.subCategory = masterData.subCategory;
-                updateData.hsnCode = masterData.hsnMasterId?.hsnCode;
-                updateData.gstPercentage = masterData.hsnMasterId?.gstRate;
+                updateData.hsnCode = masterData.hsnMasterId?.hsnCode || product.hsnCode;
+                updateData.gstPercentage = masterData.hsnMasterId?.gstRate || product.gstPercentage;
+                
+                // ⚠️ Name logic: 
+                // Body-la name illana mattum Master name-ah default-ah vai.
+                // Body-la 'maggi' vandha adhaiye retain pannu.
+                if (!updateData.name) {
+                    updateData.name = masterData.name;
+                }
             }
-        } else {
-            // Master Product maathala na, nee body-la anuppura 'name'-ah allow pannanum
-            if (req.body.name) updateData.name = req.body.name;
         }
 
-        // 3️⃣ Strictly converting types (String to Number)
+        // 3️⃣ Type conversions (Numbers)
         if (updateData.price) updateData.price = Number(updateData.price);
         if (updateData.mrp) updateData.mrp = Number(updateData.mrp);
         if (updateData.stock) updateData.stock = Number(updateData.stock);
 
-        // 4️⃣ Variant Parsing logic
-        if (updateData.variants && typeof updateData.variants === 'string') {
-            try { updateData.variants = JSON.parse(updateData.variants); } catch (e) {}
-        }
-
-        // 5️⃣ Files (Images/Video) Update
-        if (req.files) {
-            if (req.files['images']) updateData.images = req.files['images'].map(f => f.key);
-            if (req.files['video']) updateData.video = req.files['video'][0].key;
-        }
-
-        // 6️⃣ Discount Auto-recalc
+        // 4️⃣ Discount Calculation logic
         const finalMRP = updateData.mrp !== undefined ? updateData.mrp : product.mrp;
         const finalPrice = updateData.price !== undefined ? updateData.price : product.price;
         if (finalMRP > 0) {
             updateData.discountPercentage = finalMRP > finalPrice 
-                ? Math.round(((finalMRP - finalPrice) / finalMRP) * 100) 
-                : 0;
+                ? Math.round(((finalMRP - finalPrice) / finalMRP) * 100) : 0;
         }
 
-        // 🚀 THE CRITICAL FIX: Direct Update using $set
+        // 🚀 PERFORM UPDATE
         const updated = await Product.findByIdAndUpdate(
             productId, 
             { $set: updateData }, 
             { new: true, runValidators: true }
         );
 
-        res.json({ 
-            success: true, 
-            message: "Product updated successfully!", 
-            data: updated 
-        });
+        res.json({ success: true, message: "Product updated using Body Data! ✅", data: updated });
 
     } catch (err) { 
         res.status(400).json({ success: false, error: err.message }); 
