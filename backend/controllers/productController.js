@@ -125,66 +125,62 @@ exports.getAllProducts = async (req, res) => {
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
-};
-// 🌟 UPDATE PRODUCT (Syncing Master logic exactly like Create Product)
-exports.updateProduct = async (req, res) => {
+};exports.updateProduct = async (req, res) => {
     try {
         const productId = req.params.id;
         const sellerId = req.user?.id;
 
-        // 1️⃣ Security Check: Product owner verify pannanum
+        // 1️⃣ Identity Check: Verify owner strictly
         let product = await Product.findOne({ _id: productId, seller: sellerId });
         if (!product) {
             return res.status(404).json({ success: false, message: "Unauthorized or Product not found" });
         }
 
+        // 🌟 2️⃣ Direct Body Capture (Strictly like Create Product)
+        // Ippo Master Product search panni overwrite panna maatoam. 
+        // Request Body-la enna varudho adhu dhaan Final.
         let updateData = { ...req.body };
 
-        // 2️⃣ MASTER REFERENCE LOGIC (Strictly like Create Product)
-        // Oru vaelai masterProductId change panna, HSN/GST-ayum populate panni sync pannanum
-        if (updateData.masterProductId && updateData.masterProductId !== product.masterProductId?.toString()) {
-            const masterData = await MasterProduct.findById(updateData.masterProductId).populate('hsnMasterId');
-            if (masterData) {
-                updateData.name = masterData.name;
-                updateData.category = masterData.category;
-                updateData.subCategory = masterData.subCategory;
-                updateData.hsnCode = masterData.hsnMasterId?.hsnCode || "0000";
-                updateData.gstPercentage = masterData.hsnMasterId?.gstRate || 0;
-            }
-        }
-
-        // 3️⃣ DATA TYPE SYNC (Postman reference fix)
-        // Numbers-ah strictly maathanum, illaati update database-la fail aagum
+        // 3️⃣ Type Safety & Conversions (Postman/Frontend sync)
         if (updateData.price) updateData.price = Number(updateData.price);
         if (updateData.mrp) updateData.mrp = Number(updateData.mrp);
         if (updateData.stock) updateData.stock = Number(updateData.stock);
         
-        // Boolean conversion for free delivery (like create logic)
         if (updateData.isFreeDelivery !== undefined) {
             updateData.isFreeDelivery = updateData.isFreeDelivery === 'true' || updateData.isFreeDelivery === true;
         }
 
-        // 4️⃣ VARIANT HANDSHAKE
+        // 4️⃣ JSON Parsing for Variants (Strictly for form-data)
         if (updateData.variants && typeof updateData.variants === 'string') {
-            try { updateData.variants = JSON.parse(updateData.variants); } catch (e) {}
+            try {
+                updateData.variants = JSON.parse(updateData.variants);
+            } catch (e) {
+                console.error("Variant Parse Error:", e.message);
+            }
         }
 
-        // 5️⃣ FILE SYNC (Images & Video)
+        // 5️⃣ Files Handshake (Images/Video)
+        // Oru vaelai images anuppala na, existing images retain aagum
         if (req.files) {
-            if (req.files['images']) updateData.images = req.files['images'].map(f => f.key);
-            if (req.files['video']) updateData.video = req.files['video'][0].key;
+            if (req.files['images'] && req.files['images'].length > 0) {
+                updateData.images = req.files['images'].map(f => f.key);
+            }
+            if (req.files['video'] && req.files['video'].length > 0) {
+                updateData.video = req.files['video'][0].key;
+            }
         }
 
-        // 6️⃣ DISCOUNT CALCULATION (Automatic recalculation)
+        // 6️⃣ Discount Recalculation (Logic based on new or existing values)
         const finalMRP = updateData.mrp !== undefined ? updateData.mrp : product.mrp;
         const finalPrice = updateData.price !== undefined ? updateData.price : product.price;
+        
         if (finalMRP > 0) {
             updateData.discountPercentage = finalMRP > finalPrice 
                 ? Math.round(((finalMRP - finalPrice) / finalMRP) * 100) 
                 : 0;
         }
 
-        // 🚀 MASTER UPDATE EXECUTION
+        // 🚀 PERFORM UPDATE (Using $set to ensure only body fields are changed)
         const updated = await Product.findByIdAndUpdate(
             productId, 
             { $set: updateData }, 
@@ -193,11 +189,12 @@ exports.updateProduct = async (req, res) => {
 
         res.json({ 
             success: true, 
-            message: "Product updated successfully with Master sync! ✅", 
+            message: "Product updated successfully using Request Body! ✅", 
             data: updated 
         });
 
     } catch (err) { 
+        console.error("Update Logic Error:", err.message);
         res.status(400).json({ success: false, error: err.message }); 
     }
 };
