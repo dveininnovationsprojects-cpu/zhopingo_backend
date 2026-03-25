@@ -144,10 +144,61 @@ exports.loginSeller = async (req, res) => {
 
 exports.getSellerDashboard = async (req, res) => {
   try {
-    const seller = await Seller.findById(req.params.id).select("-password");
+    const { id } = req.params;
+    
+    // 1. Seller Basic Details
+    const seller = await Seller.findById(id).select("-password");
     if (!seller) return res.status(404).json({ success: false, message: "Seller not found" });
-    res.json({ success: true, data: seller });
+
+    // 2. Orders Statistics (Live Count)
+    const orderStats = await Order.aggregate([
+      { $match: { "sellerSplitData.sellerId": new mongoose.Types.ObjectId(id) } },
+      {
+        $group: {
+          _id: "$status",
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    // Grouping counts into a clean object
+    const stats = { Placed: 0, Shipped: 0, Delivered: 0, Cancelled: 0 };
+    orderStats.forEach(s => { stats[s._id] = s.count; });
+
+    // 🌟 3. REVENUE LOGIC: Using Payouts Data 🌟
+    // Inga dhaan 'Payout' model-la irundhu actual settlement amount-ah edukkurom
+    const payoutData = await mongoose.model("Payout").aggregate([
+      { 
+        $match: { 
+          sellerId: new mongoose.Types.ObjectId(id),
+          status: "Paid" // Actual-ah seller-ku pona amount mattum sum panrom
+        } 
+      },
+      {
+        $group: {
+          _id: null,
+          totalRevenue: { $sum: "$amount" } // Seller settlement amount[cite: 14]
+        }
+      }
+    ]);
+
+    const totalRevenue = payoutData.length > 0 ? payoutData[0].totalRevenue : 0;
+
+    // 4. Top 7 Selling Items Logic (For Graph/List)[cite: 14]
+    // Inga orders-la irundhu top items logic ezhudhalam[cite: 14]
+
+    res.json({
+      success: true,
+      data: {
+        seller,
+        stats,
+        revenue: totalRevenue, // 💰 Real Revenue from Payouts[cite: 14]
+        newOrdersCount: stats.Placed || 0
+      }
+    });
+
   } catch (err) {
+    console.error("Dashboard Sync Error:", err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 };
