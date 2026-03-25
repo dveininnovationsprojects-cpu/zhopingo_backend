@@ -125,32 +125,31 @@ exports.getAllProducts = async (req, res) => {
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
-};exports.updateProduct = async (req, res) => {
+}exports.updateProduct = async (req, res) => {
     try {
         const productId = req.params.id;
         const sellerId = req.user?.id;
 
-        // 1️⃣ Identity Check: Verify owner strictly
+        // 1️⃣ Verify product owner strictly
         let product = await Product.findOne({ _id: productId, seller: sellerId });
         if (!product) {
             return res.status(404).json({ success: false, message: "Unauthorized or Product not found" });
         }
 
-        // 🌟 2️⃣ Direct Body Capture (Strictly like Create Product)
-        // Ippo Master Product search panni overwrite panna maatoam. 
-        // Request Body-la enna varudho adhu dhaan Final.
-        let updateData = { ...req.body };
+        // 🌟 2️⃣ Clean the incoming body to prevent accidental overwrites
+        // Create a fresh object to avoid any hidden prototype chain issues
+        let updateData = JSON.parse(JSON.stringify(req.body));
 
-        // 3️⃣ Type Safety & Conversions (Postman/Frontend sync)
-        if (updateData.price) updateData.price = Number(updateData.price);
-        if (updateData.mrp) updateData.mrp = Number(updateData.mrp);
-        if (updateData.stock) updateData.stock = Number(updateData.stock);
+        // 3️⃣ Strict Type Conversion (Postman/Frontend sync)
+        if (updateData.price !== undefined) updateData.price = Number(updateData.price);
+        if (updateData.mrp !== undefined) updateData.mrp = Number(updateData.mrp);
+        if (updateData.stock !== undefined) updateData.stock = Number(updateData.stock);
         
         if (updateData.isFreeDelivery !== undefined) {
-            updateData.isFreeDelivery = updateData.isFreeDelivery === 'true' || updateData.isFreeDelivery === true;
+            updateData.isFreeDelivery = String(updateData.isFreeDelivery) === 'true';
         }
 
-        // 4️⃣ JSON Parsing for Variants (Strictly for form-data)
+        // 4️⃣ JSON Parsing for Variants
         if (updateData.variants && typeof updateData.variants === 'string') {
             try {
                 updateData.variants = JSON.parse(updateData.variants);
@@ -159,8 +158,7 @@ exports.getAllProducts = async (req, res) => {
             }
         }
 
-        // 5️⃣ Files Handshake (Images/Video)
-        // Oru vaelai images anuppala na, existing images retain aagum
+        // 5️⃣ Files Handshake
         if (req.files) {
             if (req.files['images'] && req.files['images'].length > 0) {
                 updateData.images = req.files['images'].map(f => f.key);
@@ -170,7 +168,7 @@ exports.getAllProducts = async (req, res) => {
             }
         }
 
-        // 6️⃣ Discount Recalculation (Logic based on new or existing values)
+        // 6️⃣ Discount Recalculation (Critical Industry logic)
         const finalMRP = updateData.mrp !== undefined ? updateData.mrp : product.mrp;
         const finalPrice = updateData.price !== undefined ? updateData.price : product.price;
         
@@ -180,16 +178,16 @@ exports.getAllProducts = async (req, res) => {
                 : 0;
         }
 
-        // 🚀 PERFORM UPDATE (Using $set to ensure only body fields are changed)
+        // 🚀 THE FIX: Directly update using $set to bypass any logic interference
         const updated = await Product.findByIdAndUpdate(
             productId, 
             { $set: updateData }, 
             { new: true, runValidators: true }
-        );
+        ).lean();
 
         res.json({ 
             success: true, 
-            message: "Product updated successfully using Request Body! ✅", 
+            message: "Product updated successfully! ✅", 
             data: updated 
         });
 
