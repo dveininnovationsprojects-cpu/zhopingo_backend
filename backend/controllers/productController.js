@@ -131,69 +131,70 @@ exports.updateProduct = async (req, res) => {
         const productId = req.params.id;
         const sellerId = req.user?.id;
 
-        // 1️⃣ Verify product owner strictly
+        // 1️⃣ Product andha seller-oda thaan-nu first verify panroam
         let product = await Product.findOne({ _id: productId, seller: sellerId });
         if (!product) {
-            return res.status(404).json({ success: false, message: "Unauthorized or Product not found" });
+            return res.status(404).json({ success: false, message: "Product not found or unauthorized access" });
         }
 
-        // 🌟 2️⃣ Clean the incoming body to prevent accidental overwrites
-        // Create a fresh object to avoid any hidden prototype chain issues
-        let updateData = JSON.parse(JSON.stringify(req.body));
+        // 🌟 Initial Update Data formation
+        let updateData = { ...req.body };
 
-        // 3️⃣ Strict Type Conversion (Postman/Frontend sync)
-        if (updateData.price !== undefined) updateData.price = Number(updateData.price);
-        if (updateData.mrp !== undefined) updateData.mrp = Number(updateData.mrp);
-        if (updateData.stock !== undefined) updateData.stock = Number(updateData.stock);
-        
-        if (updateData.isFreeDelivery !== undefined) {
-            updateData.isFreeDelivery = String(updateData.isFreeDelivery) === 'true';
+        // 2️⃣ Master Product Logic Fix:
+        // Oru vaelai nee name-ah manual-ah update panna ninaicha, adhu masterProductId overwrite panna koodadhu
+        if (updateData.masterProductId && updateData.masterProductId !== product.masterProductId?.toString()) {
+            const masterData = await MasterProduct.findById(updateData.masterProductId).populate('hsnMasterId');
+            if (masterData) {
+                updateData.name = masterData.name;
+                updateData.category = masterData.category;
+                updateData.subCategory = masterData.subCategory;
+                updateData.hsnCode = masterData.hsnMasterId?.hsnCode;
+                updateData.gstPercentage = masterData.hsnMasterId?.gstRate;
+            }
+        } else {
+            // Master Product maathala na, nee body-la anuppura 'name'-ah allow pannanum
+            if (req.body.name) updateData.name = req.body.name;
         }
 
-        // 4️⃣ JSON Parsing for Variants
+        // 3️⃣ Strictly converting types (String to Number)
+        if (updateData.price) updateData.price = Number(updateData.price);
+        if (updateData.mrp) updateData.mrp = Number(updateData.mrp);
+        if (updateData.stock) updateData.stock = Number(updateData.stock);
+
+        // 4️⃣ Variant Parsing logic
         if (updateData.variants && typeof updateData.variants === 'string') {
-            try {
-                updateData.variants = JSON.parse(updateData.variants);
-            } catch (e) {
-                console.error("Variant Parse Error:", e.message);
-            }
+            try { updateData.variants = JSON.parse(updateData.variants); } catch (e) {}
         }
 
-        // 5️⃣ Files Handshake
+        // 5️⃣ Files (Images/Video) Update
         if (req.files) {
-            if (req.files['images'] && req.files['images'].length > 0) {
-                updateData.images = req.files['images'].map(f => f.key);
-            }
-            if (req.files['video'] && req.files['video'].length > 0) {
-                updateData.video = req.files['video'][0].key;
-            }
+            if (req.files['images']) updateData.images = req.files['images'].map(f => f.key);
+            if (req.files['video']) updateData.video = req.files['video'][0].key;
         }
 
-        // 6️⃣ Discount Recalculation (Critical Industry logic)
+        // 6️⃣ Discount Auto-recalc
         const finalMRP = updateData.mrp !== undefined ? updateData.mrp : product.mrp;
         const finalPrice = updateData.price !== undefined ? updateData.price : product.price;
-        
         if (finalMRP > 0) {
             updateData.discountPercentage = finalMRP > finalPrice 
                 ? Math.round(((finalMRP - finalPrice) / finalMRP) * 100) 
                 : 0;
         }
 
-        // 🚀 THE FIX: Directly update using $set to bypass any logic interference
+        // 🚀 THE CRITICAL FIX: Direct Update using $set
         const updated = await Product.findByIdAndUpdate(
             productId, 
             { $set: updateData }, 
             { new: true, runValidators: true }
-        ).lean();
+        );
 
         res.json({ 
             success: true, 
-            message: "Product updated successfully! ✅", 
+            message: "Product updated successfully!", 
             data: updated 
         });
 
     } catch (err) { 
-        console.error("Update Logic Error:", err.message);
         res.status(400).json({ success: false, error: err.message }); 
     }
 };
