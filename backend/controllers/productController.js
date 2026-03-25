@@ -131,54 +131,67 @@ exports.updateProduct = async (req, res) => {
         const productId = req.params.id;
         const sellerId = req.user?.id;
 
+        // 1️⃣ Security Check: Verify owner like create flow
         let product = await Product.findOne({ _id: productId, seller: sellerId });
-        if (!product) return res.status(404).json({ success: false, message: "Unauthorized or Product not found" });
-
-        // 🌟 STEP 1: Capture Body Data directly
-        let updateData = { ...req.body };
-
-        // 🌟 STEP 2: Logic Handshake
-        // Master Product details (Category/HSN/GST) venumna mattum dhaan populate pannanum.
-        // Product 'name'-ah namma Master name-oda overwrite panna koodadhu!
-        if (updateData.masterProductId && updateData.masterProductId !== product.masterProductId?.toString()) {
-            const masterData = await MasterProduct.findById(updateData.masterProductId).populate('hsnMasterId');
-            if (masterData) {
-                // HSN, GST, Category mattum Master list-la irundhu edukkalaam (Standards-kaga)
-                updateData.category = masterData.category;
-                updateData.subCategory = masterData.subCategory;
-                updateData.hsnCode = masterData.hsnMasterId?.hsnCode || product.hsnCode;
-                updateData.gstPercentage = masterData.hsnMasterId?.gstRate || product.gstPercentage;
-                
-                // ⚠️ Name logic: 
-                // Body-la name illana mattum Master name-ah default-ah vai.
-                // Body-la 'maggi' vandha adhaiye retain pannu.
-                if (!updateData.name) {
-                    updateData.name = masterData.name;
-                }
-            }
+        if (!product) {
+            return res.status(404).json({ success: false, message: "Unauthorized or Product not found" });
         }
 
-        // 3️⃣ Type conversions (Numbers)
-        if (updateData.price) updateData.price = Number(updateData.price);
-        if (updateData.mrp) updateData.mrp = Number(updateData.mrp);
-        if (updateData.stock) updateData.stock = Number(updateData.stock);
-
-        // 4️⃣ Discount Calculation logic
-        const finalMRP = updateData.mrp !== undefined ? updateData.mrp : product.mrp;
-        const finalPrice = updateData.price !== undefined ? updateData.price : product.price;
-        if (finalMRP > 0) {
-            updateData.discountPercentage = finalMRP > finalPrice 
-                ? Math.round(((finalMRP - finalPrice) / finalMRP) * 100) : 0;
+        // 🌟 2️⃣ Master Data Population (Strictly mirroring Create Product)
+        // Body-la masterProductId irundha, adha vachu fresh metadata fetch pannanum
+        const masterIdToUse = req.body.masterProductId || product.masterProductId;
+        const masterData = await MasterProduct.findById(masterIdToUse).populate('hsnMasterId');
+        
+        if (!masterData) {
+            return res.status(400).json({ success: false, message: "Invalid Master Product reference" });
         }
 
-        // 🚀 PERFORM UPDATE
+        // 3️⃣ Media Handling (Mirroring Create Product)
+        const images = req.files && req.files['images'] ? req.files['images'].map(f => f.key) : product.images;
+        const video = req.files && req.files['video'] ? req.files['video'][0].key : product.video;
+
+        // 🌟 4️⃣ Construction Logic (Mirroring Create Product structure)
+        const updateData = {
+            ...req.body,
+            masterProductId: masterIdToUse,
+            name: req.body.name || masterData.name, // Priority to body, fallback to master
+            isFreeDelivery: req.body.isFreeDelivery === 'true' || req.body.isFreeDelivery === true,
+            
+            // Strictly from Master like Create flow
+            category: masterData.category,
+            subCategory: masterData.subCategory,
+            hsnCode: masterData.hsnMasterId?.hsnCode || product.hsnCode,
+            gstPercentage: masterData.hsnMasterId?.gstRate || product.gstPercentage,
+            
+            // Numeric conversions
+            price: Number(req.body.price || product.price),
+            mrp: Number(req.body.mrp || product.mrp),
+            stock: Number(req.body.stock || product.stock),
+            
+            images,
+            video,
+            variants: req.body.variants ? (typeof req.body.variants === 'string' ? JSON.parse(req.body.variants) : req.body.variants) : product.variants
+        };
+
+        // 5️⃣ Discount Sync
+        if (updateData.mrp > updateData.price) {
+            updateData.discountPercentage = Math.round(((updateData.mrp - updateData.price) / updateData.mrp) * 100);
+        } else {
+            updateData.discountPercentage = 0;
+        }
+
+        // 🚀 MASTER UPDATE
         const updated = await Product.findByIdAndUpdate(
             productId, 
             { $set: updateData }, 
             { new: true, runValidators: true }
         );
 
-        res.json({ success: true, message: "Product updated using Body Data! ✅", data: updated });
+        res.json({ 
+            success: true, 
+            message: "Product updated with Master Sync! ✅", 
+            data: updated 
+        });
 
     } catch (err) { 
         res.status(400).json({ success: false, error: err.message }); 
