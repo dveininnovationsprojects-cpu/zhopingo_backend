@@ -1,5 +1,6 @@
 const Seller = require("../models/Seller");
 const Order = require("../models/Order");
+const Payout = require("../models/Payout");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { sendAdminNotification } = require("../utils/emailService");
