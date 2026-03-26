@@ -8,8 +8,6 @@ const FinanceSettings = require('../models/FinanceSettings');
 const Settlement = require('../models/Settlement');
 const WeightSlab = require('../models/WeightSlab');
 const Order = require('../models/Order');
-const mongoose = require('mongoose');
-
 
 const JWT_SECRET = process.env.JWT_SECRET || "secret123";
 
@@ -268,99 +266,90 @@ exports.updateFinanceSettings = async (req, res) => {
 };
 /* =====================================================
     💰 MASTER WEEKLY SETTLEMENT GENERATOR 
-    (Maggie-Rice Sync & Nested Array Date Logic)
+    (Maggie-Rice Sync, Return Deductions & Reversals)
 ===================================================== */
 exports.generateWeeklySettlement = async (req, res) => {
     try {
         const { sellerId, startDate, endDate } = req.body;
-        const filterStart = new Date(startDate);
-        const filterEnd = new Date(endDate);
-        filterEnd.setHours(23, 59, 59, 999);
+        
+        const settlementCutoffDate = new Date();
+        settlementCutoffDate.setDate(settlementCutoffDate.getDate() - 7);
 
-        // 1️⃣ Fetch DELIVERED orders strictly within the Frontend's week range
-        // 🌟 Fix: Querying nested deliveredDate inside sellerSplitData array
+        // 1️⃣ Fetch DELIVERED orders (Strictly 7+ days old)
         const deliveredOrders = await Order.find({
+            "sellerSplitData.sellerId": sellerId,
             status: 'Delivered',
-            isSettled: { $ne: true },
-            sellerSplitData: {
-                $elemMatch: {
-                    sellerId: new mongoose.Types.ObjectId(sellerId),
-                    packageStatus: 'Delivered',
-                    deliveredDate: { $gte: filterStart, $lte: filterEnd }
-                }
-            }
+            deliveredDate: { $lte: settlementCutoffDate }, 
+            isSettled: { $ne: true } 
         }).populate('items.productId');
 
-        // 2️⃣ Fetch RETURNED orders within the same week range
-        // 🌟 Fix: Querying nested returnDate inside sellerSplitData array
+        // 2️⃣ Fetch RETURNED orders (Reflected in current week payout)
+        // 🌟 Fix: Return orders-ku settlement window thevai illa, process immediately
         const returnedOrders = await Order.find({
+            "sellerSplitData.sellerId": sellerId,
             status: 'Returned',
-            isSettled: { $ne: true },
-            sellerSplitData: {
-                $elemMatch: {
-                    sellerId: new mongoose.Types.ObjectId(sellerId),
-                    // status 'Returned' na returnDate kandippa irukanum
-                    returnDate: { $gte: filterStart, $lte: filterEnd }
-                }
-            }
+            returnDate: { $gte: new Date(startDate), $lte: new Date(endDate) },
+            isSettled: { $ne: true }
         }).populate('items.productId');
 
         if (deliveredOrders.length === 0 && returnedOrders.length === 0) {
-            return res.status(404).json({ 
-                success: false, 
-                message: `No eligible orders found between ${startDate} and ${endDate}.` 
-            });
+            return res.status(404).json({ success: false, message: "No eligible orders for settlement." });
         }
 
         let payoutRows = []; 
         let summary = { sales: 0, deductions: 0, finalPayable: 0 };
 
-        // Process Orders Logic (Processing Delivered & Returned)
-        const processOrders = (orders, type) => {
-            orders.forEach(order => {
-                const sellerData = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId);
-                if (sellerData) {
-                    const subtotal = sellerData.sellerSubtotal || 0;
-                    const comm = sellerData.commissionTotal || 0;
-                    const gst = sellerData.gstTotal || 0;
-                    const tds = sellerData.tdsTotal || 0;
-                    const delDed = sellerData.deliveryDeduction || 0;
-                    const shipCost = sellerData.actualShippingCost || 80;
+        // ➕ Process Delivered Orders
+        deliveredOrders.forEach(order => {
+            const sellerData = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId);
+            if (sellerData) {
+                const subtotal = sellerData.sellerSubtotal || 0;
+                const totalDed = (sellerData.commissionTotal || 0) + 
+                                 (sellerData.gstTotal || 0) + 
+                                 (sellerData.tdsTotal || 0) + 
+                                 (sellerData.deliveryDeduction || 0);
 
-                    if (type === 'SALE') {
-                        const totalDed = comm + gst + tds + delDed;
-                        summary.sales += subtotal;
-                        summary.deductions += totalDed;
-                        payoutRows.push({
-                            date: sellerData.deliveredDate, // 🌟 UI sync
-                            orderId: order._id,
-                            type: 'SALE',
-                            amount: subtotal,
-                            comm_gst_tds: comm + gst,
-                            delivery_status: delDed > 0 ? "Deducted" : "FREE",
-                            net_payable: subtotal - totalDed
-                        });
-                    } else {
-                        const alreadyDeducted = comm + gst;
-                        const totalReturnDeduction = (subtotal + shipCost) - alreadyDeducted;
-                        summary.sales -= subtotal;
-                        summary.deductions += (shipCost - alreadyDeducted);
-                        payoutRows.push({
-                            date: sellerData.returnDate, // 🌟 UI sync
-                            orderId: order._id,
-                            type: 'RETURN',
-                            amount: -subtotal,
-                            comm_gst_tds: -alreadyDeducted,
-                            delivery_status: `Loss (₹${shipCost})`,
-                            net_payable: -totalReturnDeduction
-                        });
-                    }
-                }
-            });
-        };
+                summary.sales += subtotal;
+                summary.deductions += totalDed;
 
-        processOrders(deliveredOrders, 'SALE');
-        processOrders(returnedOrders, 'RETURN');
+                payoutRows.push({
+                    date: order.deliveredDate,
+                    orderId: order._id,
+                    type: 'SALE',
+                    amount: subtotal,
+                    comm_gst_tds: (sellerData.commissionTotal || 0) + (sellerData.gstTotal || 0),
+                    delivery_status: (sellerData.deliveryDeduction > 0) ? `Deducted` : "FREE",
+                    net_payable: subtotal - totalDed
+                });
+            }
+        });
+
+        // ➖ Process Returned Orders (Maggie + 80 Logic + Fee Reversal)
+        returnedOrders.forEach(order => {
+            const sellerData = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId);
+            if (sellerData) {
+                const productAmt = sellerData.sellerSubtotal || 0;
+                const logisticsLoss = (sellerData.actualShippingCost || 80); 
+                const alreadyDeductedFees = (sellerData.commissionTotal || 0) + (sellerData.gstTotal || 0);
+
+                // Formula: Recover (Product + Logistics) but Give back (Commission Fees)
+                const totalReturnDeduction = (productAmt + logisticsLoss) - alreadyDeductedFees;
+
+                summary.sales -= productAmt; 
+                summary.deductions += logisticsLoss;
+                summary.deductions -= alreadyDeductedFees;
+
+                payoutRows.push({
+                    date: order.returnDate,
+                    orderId: order._id,
+                    type: 'RETURN',
+                    amount: -productAmt,
+                    comm_gst_tds: -alreadyDeductedFees,
+                    delivery_status: `Logistics Loss (₹${logisticsLoss})`,
+                    net_payable: -totalReturnDeduction
+                });
+            }
+        });
 
         summary.finalPayable = summary.sales - summary.deductions;
 
