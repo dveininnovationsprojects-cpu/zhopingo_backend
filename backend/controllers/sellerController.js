@@ -272,14 +272,27 @@ exports.getAndUpdateMyKyc = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
+// 🌟 THE FIX: Set Date when status changes
 exports.updateSellerOrderStatus = async (req, res) => {
   try {
-    const { orderId, status } = req.body; 
-    const order = await Order.findByIdAndUpdate(orderId, { status }, { new: true });
+    const { orderId, sellerId, status } = req.body;
+    const order = await Order.findById(orderId);
     
     if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
-    res.json({ success: true, message: `Order marked as ${status}`, data: order });
+    const splitIndex = order.sellerSplitData.findIndex(s => s.sellerId.toString() === sellerId);
+    
+    if (splitIndex !== -1) {
+      order.sellerSplitData[splitIndex].packageStatus = status;
+      // Katchithama date update aaganum
+      if (status === 'Delivered') order.sellerSplitData[splitIndex].deliveredDate = new Date();
+      if (status === 'Returned') order.sellerSplitData[splitIndex].returnDate = new Date();
+    }
+
+    order.status = status; // Overall status
+    await order.save();
+
+    res.json({ success: true, message: `Status updated to ${status} with timestamp! ✅` });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
