@@ -211,32 +211,27 @@ exports.getSellerNewOrders = async (req, res) => {
 exports.getAndUpdateMyKyc = async (req, res) => {
     try {
         const sellerId = req.query.id || req.body.sellerId || req.params.id;
+        const CF_URL = process.env.CLOUDFRONT_URL; // 🚀 Using same env as product helper
 
         if (!sellerId) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Seller ID is missing." 
-            });
+            return res.status(400).json({ success: false, message: "Seller ID is missing." });
         }
 
         const seller = await Seller.findById(sellerId);
         if (!seller) return res.status(404).json({ success: false, message: "Seller not found" });
 
-        // 🚀 CloudFront URL construct panrom (Image 67 fix)
-        const CLOUDFRONT_BASE = "https://d1utzn73483swp.cloudfront.net/";
-
-        // Documents array-ah format panni full URL sethu anuppuvom
+        // 🚀 SYNC WITH PRODUCT LOGIC: Formatting Docs with CloudFront URL
         const formattedDocs = {};
         if (seller.kycDocuments) {
-            const docs = ['panDoc', 'gstDoc', 'fssaiDoc', 'msmeDoc'];
-            docs.forEach(docKey => {
-                if (seller.kycDocuments[docKey] && seller.kycDocuments[docKey].fileUrl) {
-                    formattedDocs[docKey] = {
-                        ...seller.kycDocuments[docKey].toObject(),
-                        // 🌟 Database-la irukkura path-oda base URL sethukkurom
-                        fullUrl: seller.kycDocuments[docKey].fileUrl.startsWith('http') 
-                                 ? seller.kycDocuments[docKey].fileUrl 
-                                 : `${CLOUDFRONT_BASE}${seller.kycDocuments[docKey].fileUrl}`
+            const docKeys = ['panDoc', 'gstDoc', 'fssaiDoc', 'msmeDoc'];
+            
+            docKeys.forEach(key => {
+                const doc = seller.kycDocuments[key];
+                if (doc && doc.fileUrl) {
+                    formattedDocs[key] = {
+                        ...doc.toObject(),
+                        // 🌟 Same Logic as Product Media Helper
+                        fullUrl: doc.fileUrl.startsWith("http") ? doc.fileUrl : CF_URL + doc.fileUrl
                     };
                 }
             });
@@ -253,7 +248,7 @@ exports.getAndUpdateMyKyc = async (req, res) => {
                     gstNumber: seller.gstNumber,
                     fssaiNumber: seller.fssaiNumber,
                     msmeNumber: seller.msmeNumber,
-                    kycDocuments: formattedDocs // 🔥 Ippo indha fullUrl frontend-la varum
+                    kycDocuments: formattedDocs // 🔥 Ippo fullUrl katchithama varum
                 }
             });
         }
@@ -267,7 +262,7 @@ exports.getAndUpdateMyKyc = async (req, res) => {
         if (msmeNumber) seller.msmeNumber = msmeNumber;
 
         if (req.files) {
-            // Un multer logic-padi folders-ah strictly mapping panrom
+            // Un multerConfig-la 'pan_doc', 'gst_doc' dhaan folder path keys
             if (req.files.pan_doc) seller.kycDocuments.panDoc = { fileName: req.files.pan_doc[0].key.split('/').pop(), fileUrl: req.files.pan_doc[0].key };
             if (req.files.gst_doc) seller.kycDocuments.gstDoc = { fileName: req.files.gst_doc[0].key.split('/').pop(), fileUrl: req.files.gst_doc[0].key };
             if (req.files.fssai_doc) seller.kycDocuments.fssaiDoc = { fileName: req.files.fssai_doc[0].key.split('/').pop(), fileUrl: req.files.fssai_doc[0].key };
@@ -277,11 +272,7 @@ exports.getAndUpdateMyKyc = async (req, res) => {
         seller.kycStatus = "pending";
         await seller.save();
 
-        res.json({ 
-            success: true, 
-            message: "KYC Documents updated successfully!", 
-            data: seller.kycDocuments 
-        });
+        res.json({ success: true, message: "KYC Documents updated!", data: seller.kycDocuments });
 
     } catch (err) {
         console.error("KYC Logic Error:", err.message);
