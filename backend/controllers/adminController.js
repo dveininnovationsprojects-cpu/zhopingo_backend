@@ -266,34 +266,40 @@ exports.updateFinanceSettings = async (req, res) => {
 };
 /* =====================================================
     💰 MASTER WEEKLY SETTLEMENT GENERATOR 
-    (Maggie-Rice Sync, Return Deductions & Reversals)
+    (Frontend Sync: Strictly uses dates provided by UI)
 ===================================================== */
 exports.generateWeeklySettlement = async (req, res) => {
     try {
         const { sellerId, startDate, endDate } = req.body;
         
-        const settlementCutoffDate = new Date();
-        settlementCutoffDate.setDate(settlementCutoffDate.getDate() - 7);
+        // 🌟 THE FIX: Frontend-la irundhu vara date range-ah strictly follow pannuvom
+        // Industry window (7 days) restriction-ah testing/custom week-kaga ippo remove pannittaen.
+        const filterStart = new Date(startDate);
+        const filterEnd = new Date(endDate);
+        filterEnd.setHours(23, 59, 59, 999); // End of the day sync
 
-        // 1️⃣ Fetch DELIVERED orders (Strictly 7+ days old)
+        // 1️⃣ Fetch DELIVERED orders strictly within the Frontend's week range
         const deliveredOrders = await Order.find({
             "sellerSplitData.sellerId": sellerId,
             status: 'Delivered',
-            deliveredDate: { $lte: settlementCutoffDate }, 
+            deliveredDate: { $gte: filterStart, $lte: filterEnd }, // 👈 Directly uses Frontend dates
             isSettled: { $ne: true } 
         }).populate('items.productId');
 
-        // 2️⃣ Fetch RETURNED orders (Reflected in current week payout)
-        // 🌟 Fix: Return orders-ku settlement window thevai illa, process immediately
+        // 2️⃣ Fetch RETURNED orders within the same week range
         const returnedOrders = await Order.find({
             "sellerSplitData.sellerId": sellerId,
             status: 'Returned',
-            returnDate: { $gte: new Date(startDate), $lte: new Date(endDate) },
+            returnDate: { $gte: filterStart, $lte: filterEnd }, // 👈 Strictly follows UI week
             isSettled: { $ne: true }
         }).populate('items.productId');
 
+        // Logic check: orders empty-ah irundha settlement create aagaadhu
         if (deliveredOrders.length === 0 && returnedOrders.length === 0) {
-            return res.status(404).json({ success: false, message: "No eligible orders for settlement." });
+            return res.status(404).json({ 
+                success: false, 
+                message: `No eligible orders found between ${startDate} and ${endDate}. Make sure orders are marked 'Delivered' in DB.` 
+            });
         }
 
         let payoutRows = []; 
@@ -324,7 +330,7 @@ exports.generateWeeklySettlement = async (req, res) => {
             }
         });
 
-        // ➖ Process Returned Orders (Maggie + 80 Logic + Fee Reversal)
+        // ➖ Process Returned Orders
         returnedOrders.forEach(order => {
             const sellerData = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId);
             if (sellerData) {
@@ -332,12 +338,10 @@ exports.generateWeeklySettlement = async (req, res) => {
                 const logisticsLoss = (sellerData.actualShippingCost || 80); 
                 const alreadyDeductedFees = (sellerData.commissionTotal || 0) + (sellerData.gstTotal || 0);
 
-                // Formula: Recover (Product + Logistics) but Give back (Commission Fees)
                 const totalReturnDeduction = (productAmt + logisticsLoss) - alreadyDeductedFees;
 
                 summary.sales -= productAmt; 
-                summary.deductions += logisticsLoss;
-                summary.deductions -= alreadyDeductedFees;
+                summary.deductions += (logisticsLoss - alreadyDeductedFees);
 
                 payoutRows.push({
                     date: order.returnDate,
@@ -368,7 +372,7 @@ exports.generateWeeklySettlement = async (req, res) => {
         const orderIds = [...deliveredOrders, ...returnedOrders].map(o => o._id);
         await Order.updateMany({ _id: { $in: orderIds } }, { $set: { isSettled: true } });
 
-        res.json({ success: true, message: "Weekly Settlement Generated! ✅", data: newSettlement });
+        res.json({ success: true, message: "Weekly Settlement Generated based on selected week! ✅", data: newSettlement });
 
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
