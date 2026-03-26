@@ -272,28 +272,50 @@ exports.getAndUpdateMyKyc = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
-// 🌟 THE FIX: Set Date when status changes
+// 🌟 THE FINAL FIX: Nested Date Persistence
 exports.updateSellerOrderStatus = async (req, res) => {
   try {
     const { orderId, sellerId, status } = req.body;
-    const order = await Order.findById(orderId);
     
+    // Find the order
+    const order = await Order.findById(orderId);
     if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
-    const splitIndex = order.sellerSplitData.findIndex(s => s.sellerId.toString() === sellerId);
+    // 1. Correct Seller Split-ah kandupidi
+    const splitIndex = order.sellerSplitData.findIndex(
+      (s) => (s.sellerId._id || s.sellerId).toString() === sellerId
+    );
     
     if (splitIndex !== -1) {
+      // 2. Status update
       order.sellerSplitData[splitIndex].packageStatus = status;
-      // Katchithama date update aaganum
-      if (status === 'Delivered') order.sellerSplitData[splitIndex].deliveredDate = new Date();
-      if (status === 'Returned') order.sellerSplitData[splitIndex].returnDate = new Date();
+      
+      // 3. Date update logic strictly
+      const now = new Date();
+      if (status === 'Delivered') {
+        order.sellerSplitData[splitIndex].deliveredDate = now;
+      } else if (status === 'Returned' || status === 'Return Requested') {
+        order.sellerSplitData[splitIndex].returnDate = now;
+      }
+
+      // 🌟 IMPORTANT: Mongoose-ku nested array modify aayiduchunu "alert" panrom
+      order.markModified('sellerSplitData'); 
     }
 
-    order.status = status; // Overall status
-    await order.save();
+    // 4. Overall status update (for tracking)
+    order.status = status; 
+    
+    // 5. Save strictly
+    const updatedOrder = await order.save();
 
-    res.json({ success: true, message: `Status updated to ${status} with timestamp! ✅` });
+    res.json({ 
+      success: true, 
+      message: `Status updated to ${status} with Date! ✅`, 
+      data: updatedOrder 
+    });
+
   } catch (err) {
+    console.error("Status Update Error:", err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 };
