@@ -8,7 +8,7 @@ const FinanceSettings = require('../models/FinanceSettings');
 const Settlement = require('../models/Settlement');
 const WeightSlab = require('../models/WeightSlab');
 const Order = require('../models/Order');
-
+const mongoose = require('mongoose');
 const JWT_SECRET = process.env.JWT_SECRET || "secret123";
 
 exports.adminLogin = async (req, res) => {
