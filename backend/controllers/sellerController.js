@@ -277,46 +277,53 @@ exports.updateSellerOrderStatus = async (req, res) => {
   try {
     const { orderId, sellerId, status } = req.body;
     
-    // 1. Current timestamp
-    const now = new Date();
-    
-    // 2. Logic to determine which date field to update strictly
-    let updateFields = {
-        "sellerSplitData.$.packageStatus": status,
-        "status": status // Overall order status update
-    };
-
-    if (status === 'Delivered') {
-        updateFields["sellerSplitData.$.deliveredDate"] = now;
-    } else if (status === 'Returned' || status === 'Return Requested') {
-        updateFields["sellerSplitData.$.returnDate"] = now;
+    if (!orderId || !sellerId || !status) {
+        return res.status(400).json({ success: false, message: "Missing required fields" });
     }
 
-    // 🚀 3. THE ATOMIC UPDATE: positional operator ($) targets the specific seller in array
-    const updatedOrder = await Order.findOneAndUpdate(
-      { 
-        _id: orderId, 
+    const now = new Date();
+    
+    // 🚀 THE ATOMIC UPDATE: positional operator ($) targets the specific seller in array
+    // Filter criteria-la sellerId and orderId renduமே strictly match aaganum
+    const updateQuery = { 
+        _id: new mongoose.Types.ObjectId(orderId), 
         "sellerSplitData.sellerId": new mongoose.Types.ObjectId(sellerId) 
-      },
-      { $set: updateFields },
-      { new: true } // Returns the updated document strictly
+    };
+
+    const updateData = { 
+        $set: { 
+            "sellerSplitData.$.packageStatus": status,
+            "status": status // Overall order status update
+        } 
+    };
+
+    // Date logical switch
+    if (status === 'Delivered') {
+        updateData.$set["sellerSplitData.$.deliveredDate"] = now;
+    } else if (status === 'Returned') {
+        updateData.$set["sellerSplitData.$.returnDate"] = now;
+    }
+
+    const updatedOrder = await Order.findOneAndUpdate(
+      updateQuery,
+      updateData,
+      { new: true, runValidators: true }
     );
 
     if (!updatedOrder) {
         return res.status(404).json({ 
             success: false, 
-            message: "Order or Seller Split not found in database." 
+            message: "Order or Seller ID mismatch in Database. Check IDs strictly." 
         });
     }
 
     res.json({ 
       success: true, 
-      message: `Status & Date Synced to DB! ✅`, 
+      message: `Status & Date Updated Successfully! ✅`, 
       data: updatedOrder 
     });
 
   } catch (err) {
-    console.error("Critical Persistence Error:", err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 };
