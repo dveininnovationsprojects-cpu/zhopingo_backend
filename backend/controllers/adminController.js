@@ -266,94 +266,99 @@ exports.updateFinanceSettings = async (req, res) => {
 };
 /* =====================================================
     💰 MASTER WEEKLY SETTLEMENT GENERATOR 
-    (Frontend Sync: Strictly uses dates provided by UI)
+    (Maggie-Rice Sync & Nested Array Date Logic)
 ===================================================== */
 exports.generateWeeklySettlement = async (req, res) => {
     try {
         const { sellerId, startDate, endDate } = req.body;
-        
-        // 🌟 THE FIX: Frontend-la irundhu vara date range-ah strictly follow pannuvom
-        // Industry window (7 days) restriction-ah testing/custom week-kaga ippo remove pannittaen.
         const filterStart = new Date(startDate);
         const filterEnd = new Date(endDate);
-        filterEnd.setHours(23, 59, 59, 999); // End of the day sync
+        filterEnd.setHours(23, 59, 59, 999);
 
         // 1️⃣ Fetch DELIVERED orders strictly within the Frontend's week range
+        // 🌟 Fix: Querying nested deliveredDate inside sellerSplitData array
         const deliveredOrders = await Order.find({
-            "sellerSplitData.sellerId": sellerId,
             status: 'Delivered',
-            deliveredDate: { $gte: filterStart, $lte: filterEnd }, // 👈 Directly uses Frontend dates
-            isSettled: { $ne: true } 
+            isSettled: { $ne: true },
+            sellerSplitData: {
+                $elemMatch: {
+                    sellerId: new mongoose.Types.ObjectId(sellerId),
+                    packageStatus: 'Delivered',
+                    deliveredDate: { $gte: filterStart, $lte: filterEnd }
+                }
+            }
         }).populate('items.productId');
 
         // 2️⃣ Fetch RETURNED orders within the same week range
+        // 🌟 Fix: Querying nested returnDate inside sellerSplitData array
         const returnedOrders = await Order.find({
-            "sellerSplitData.sellerId": sellerId,
             status: 'Returned',
-            returnDate: { $gte: filterStart, $lte: filterEnd }, // 👈 Strictly follows UI week
-            isSettled: { $ne: true }
+            isSettled: { $ne: true },
+            sellerSplitData: {
+                $elemMatch: {
+                    sellerId: new mongoose.Types.ObjectId(sellerId),
+                    // status 'Returned' na returnDate kandippa irukanum
+                    returnDate: { $gte: filterStart, $lte: filterEnd }
+                }
+            }
         }).populate('items.productId');
 
-        // Logic check: orders empty-ah irundha settlement create aagaadhu
         if (deliveredOrders.length === 0 && returnedOrders.length === 0) {
             return res.status(404).json({ 
                 success: false, 
-                message: `No eligible orders found between ${startDate} and ${endDate}. Make sure orders are marked 'Delivered' in DB.` 
+                message: `No eligible orders found between ${startDate} and ${endDate}.` 
             });
         }
 
         let payoutRows = []; 
         let summary = { sales: 0, deductions: 0, finalPayable: 0 };
 
-        // ➕ Process Delivered Orders
-        deliveredOrders.forEach(order => {
-            const sellerData = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId);
-            if (sellerData) {
-                const subtotal = sellerData.sellerSubtotal || 0;
-                const totalDed = (sellerData.commissionTotal || 0) + 
-                                 (sellerData.gstTotal || 0) + 
-                                 (sellerData.tdsTotal || 0) + 
-                                 (sellerData.deliveryDeduction || 0);
+        // Process Orders Logic (Processing Delivered & Returned)
+        const processOrders = (orders, type) => {
+            orders.forEach(order => {
+                const sellerData = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId);
+                if (sellerData) {
+                    const subtotal = sellerData.sellerSubtotal || 0;
+                    const comm = sellerData.commissionTotal || 0;
+                    const gst = sellerData.gstTotal || 0;
+                    const tds = sellerData.tdsTotal || 0;
+                    const delDed = sellerData.deliveryDeduction || 0;
+                    const shipCost = sellerData.actualShippingCost || 80;
 
-                summary.sales += subtotal;
-                summary.deductions += totalDed;
+                    if (type === 'SALE') {
+                        const totalDed = comm + gst + tds + delDed;
+                        summary.sales += subtotal;
+                        summary.deductions += totalDed;
+                        payoutRows.push({
+                            date: sellerData.deliveredDate, // 🌟 UI sync
+                            orderId: order._id,
+                            type: 'SALE',
+                            amount: subtotal,
+                            comm_gst_tds: comm + gst,
+                            delivery_status: delDed > 0 ? "Deducted" : "FREE",
+                            net_payable: subtotal - totalDed
+                        });
+                    } else {
+                        const alreadyDeducted = comm + gst;
+                        const totalReturnDeduction = (subtotal + shipCost) - alreadyDeducted;
+                        summary.sales -= subtotal;
+                        summary.deductions += (shipCost - alreadyDeducted);
+                        payoutRows.push({
+                            date: sellerData.returnDate, // 🌟 UI sync
+                            orderId: order._id,
+                            type: 'RETURN',
+                            amount: -subtotal,
+                            comm_gst_tds: -alreadyDeducted,
+                            delivery_status: `Loss (₹${shipCost})`,
+                            net_payable: -totalReturnDeduction
+                        });
+                    }
+                }
+            });
+        };
 
-                payoutRows.push({
-                    date: order.deliveredDate,
-                    orderId: order._id,
-                    type: 'SALE',
-                    amount: subtotal,
-                    comm_gst_tds: (sellerData.commissionTotal || 0) + (sellerData.gstTotal || 0),
-                    delivery_status: (sellerData.deliveryDeduction > 0) ? `Deducted` : "FREE",
-                    net_payable: subtotal - totalDed
-                });
-            }
-        });
-
-        // ➖ Process Returned Orders
-        returnedOrders.forEach(order => {
-            const sellerData = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId);
-            if (sellerData) {
-                const productAmt = sellerData.sellerSubtotal || 0;
-                const logisticsLoss = (sellerData.actualShippingCost || 80); 
-                const alreadyDeductedFees = (sellerData.commissionTotal || 0) + (sellerData.gstTotal || 0);
-
-                const totalReturnDeduction = (productAmt + logisticsLoss) - alreadyDeductedFees;
-
-                summary.sales -= productAmt; 
-                summary.deductions += (logisticsLoss - alreadyDeductedFees);
-
-                payoutRows.push({
-                    date: order.returnDate,
-                    orderId: order._id,
-                    type: 'RETURN',
-                    amount: -productAmt,
-                    comm_gst_tds: -alreadyDeductedFees,
-                    delivery_status: `Logistics Loss (₹${logisticsLoss})`,
-                    net_payable: -totalReturnDeduction
-                });
-            }
-        });
+        processOrders(deliveredOrders, 'SALE');
+        processOrders(returnedOrders, 'RETURN');
 
         summary.finalPayable = summary.sales - summary.deductions;
 
@@ -372,7 +377,7 @@ exports.generateWeeklySettlement = async (req, res) => {
         const orderIds = [...deliveredOrders, ...returnedOrders].map(o => o._id);
         await Order.updateMany({ _id: { $in: orderIds } }, { $set: { isSettled: true } });
 
-        res.json({ success: true, message: "Weekly Settlement Generated based on selected week! ✅", data: newSettlement });
+        res.json({ success: true, message: "Weekly Settlement Generated! ✅", data: newSettlement });
 
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
