@@ -299,40 +299,45 @@ exports.generateWeeklySettlement = async (req, res) => {
     const filterEnd = new Date(endDate);
     filterEnd.setHours(23, 59, 59, 999);
 
-    // 🛡️ logic 1: PREVENT DUPLICATES
-    // Indha week-ku already oru settlement (Pending or Paid) irukkannu check panrom
+    const sellerObjectId = new mongoose.Types.ObjectId(sellerId);
+
+    // 🛡️ logic 1: PREVENT DUPLICATES (Strict check for same week)
     const existingSettlement = await Settlement.findOne({
-      sellerId: new mongoose.Types.ObjectId(sellerId),
+      sellerId: sellerObjectId,
       weekRange: `${startDate} to ${endDate}`
     });
 
     if (existingSettlement) {
       return res.status(400).json({ 
         success: false, 
-        message: `Settlement for ${startDate} to ${endDate} already exists (Status: ${existingSettlement.status}). Use 'Mark as Paid' instead.` 
+        message: `Settlement already exists for this cycle (Status: ${existingSettlement.status}).` 
       });
     }
 
+    // Fetch live finance rules
     const settings = (await FinanceSettings.findOne()) || {
       commissionPercent: 10,
       gstOnCommissionPercent: 18,
       tdsPercent: 2,
     };
 
-    // 🛡️ logic 2: STRICTLY UNSETTLED DELIVERED/RETURNED DATA
-    // isSettled: { $ne: true } dhaan main safety lock
+    // 🛡️ logic 2: NESTED DATE QUERY (Image 64 Sync)
+    // isSettled: { $ne: true } is the core safety lock
     const orders = await Order.find({
-      "sellerSplitData.sellerId": new mongoose.Types.ObjectId(sellerId),
       isSettled: { $ne: true }, 
-      status: { $in: ["Delivered", "Returned"] },
-      updatedAt: { $gte: filterStart, $lte: filterEnd }
+      sellerSplitData: {
+        $elemMatch: {
+          sellerId: sellerObjectId,
+          $or: [
+            { packageStatus: "Delivered", deliveredDate: { $gte: filterStart, $lte: filterEnd } },
+            { packageStatus: "Returned", returnDate: { $gte: filterStart, $lte: filterEnd } }
+          ]
+        }
+      }
     });
 
     if (!orders || orders.length === 0) {
-      return res.status(404).json({ 
-        success: false, 
-        message: "No new delivered/returned orders found for this cycle." 
-      });
+      return res.status(404).json({ success: false, message: "No eligible orders found for this specific week cycle." });
     }
 
     let payoutRows = [];
@@ -342,20 +347,25 @@ exports.generateWeeklySettlement = async (req, res) => {
       const split = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId);
       if (split) {
         summary.count++;
-        const isReturned = order.status === "Returned";
+        // Status from nested split data (Image 64 standard)
+        const currentStatus = split.packageStatus || order.status;
+        const isReturned = currentStatus === "Returned" || currentStatus === "Return Requested";
+
         const totalPaidByCustomer = order.billDetails?.totalAmount || order.totalAmount || split.sellerSubtotal || 0;
         const productAmount = split.sellerSubtotal || 0;
         const deliveryDeduction = totalPaidByCustomer > productAmount ? totalPaidByCustomer - productAmount : 0;
 
         if (isReturned) {
-          // 🚚 Industry Return Logic: Subtract Product Amt + Deduct Logistics Loss
+          // 🚚 RETURN LOGIC (From Image 64: Comm=0, NetShare = -(TotalPaid + Delivery))
           const returnFinalShare = -(totalPaidByCustomer + deliveryDeduction);
+          
           summary.sales -= totalPaidByCustomer;
           summary.delivery += deliveryDeduction;
           summary.final += returnFinalShare;
 
           payoutRows.push({
             orderId: order._id,
+            date: split.returnDate || order.updatedAt,
             type: "RETURN",
             amount: -totalPaidByCustomer,
             comm_gst_tds: 0,
@@ -363,10 +373,11 @@ exports.generateWeeklySettlement = async (req, res) => {
             net_payable: returnFinalShare,
           });
         } else {
-          // 💰 Sale Logic: Standard Deductions
+          // 💰 SALE LOGIC (From Image 64: Strict Deductions)
           const platformComm = productAmount * (Number(settings.commissionPercent) / 100);
           const gstOnComm = platformComm * (Number(settings.gstOnCommissionPercent) / 100);
           const tdsOnComm = platformComm * (Number(settings.tdsPercent) / 100);
+          
           const totalFees = platformComm + gstOnComm + tdsOnComm;
           const saleFinalShare = totalPaidByCustomer - (totalFees + deliveryDeduction);
 
@@ -379,6 +390,7 @@ exports.generateWeeklySettlement = async (req, res) => {
 
           payoutRows.push({
             orderId: order._id,
+            date: split.deliveredDate || order.updatedAt,
             type: "SALE",
             amount: totalPaidByCustomer,
             comm_gst_tds: totalFees,
@@ -394,22 +406,22 @@ exports.generateWeeklySettlement = async (req, res) => {
       weekRange: `${startDate} to ${endDate}`,
       payoutBreakdown: payoutRows,
       orderCount: summary.count,
-      totalSales: Number(summary.sales.toFixed(2)),
-      commissionTotal: Number(summary.comm.toFixed(2)),
-      gstTotal: Number(summary.gst.toFixed(2)),
-      tdsTotal: Number(summary.tds.toFixed(2)),
-      deliveryTotal: Number(summary.delivery.toFixed(2)),
-      finalPayable: Number(summary.final.toFixed(2)),
+      totalSales: Number(summary.sales.toFixed(3)),
+      commissionTotal: Number(summary.comm.toFixed(3)),
+      gstTotal: Number(summary.gst.toFixed(3)),
+      tdsTotal: Number(summary.tds.toFixed(3)),
+      deliveryTotal: Number(summary.delivery.toFixed(3)),
+      finalPayable: Number(summary.final.toFixed(3)), // 💰 Exact Sync with ₹5,264.755
       status: "Pending",
     });
 
     await newSettlement.save();
 
-    // 🌟 THE FINISHER: Mark these orders as Settled forever
+    // 🌟 THE LOCK: Mark these orders as Settled
     const orderIds = orders.map((o) => o._id);
     await Order.updateMany(
-      { _id: { $in: orderIds } },
-      { $set: { isSettled: true } }
+        { _id: { $in: orderIds } },
+        { $set: { isSettled: true } }
     );
 
     res.json({
