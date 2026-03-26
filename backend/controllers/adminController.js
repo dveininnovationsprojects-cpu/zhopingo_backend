@@ -686,3 +686,23 @@ exports.getSellerLedger = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
+
+
+// 🌟 2. Admin can view any seller's KYC documents strictly
+exports.getSellerKycForAdmin = async (req, res) => {
+    try {
+        const { sellerId } = req.params;
+        const seller = await Seller.findById(sellerId).select("name shopName email phone kycDocuments kycStatus panNumber gstNumber fssaiNumber msmeNumber rejectionReason");
+
+        if (!seller) {
+            return res.status(404).json({ success: false, message: "Seller not found" });
+        }
+
+        res.json({
+            success: true,
+            data: seller
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};

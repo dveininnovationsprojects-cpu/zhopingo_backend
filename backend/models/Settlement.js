@@ -25,5 +25,5 @@ const SettlementSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
-// 🌟 THE FIX: Intha line katchithama irukanum
+
 module.exports = mongoose.model("Settlement", SettlementSchema);

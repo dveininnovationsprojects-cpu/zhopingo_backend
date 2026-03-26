@@ -43,5 +43,12 @@ router.put("/update-profile/:id", upload.single("profileImage"), sellerCtrl.upda
 router.put('/toggle-brand/:sellerId',  sellerCtrl.toggleSellerBrandStatus);
 router.get("/brands/all", sellerCtrl.getAllBrands);
 router.get("/products/:sellerId", sellerCtrl.getProductsBySeller);
+router.get("/my-kyc", sellerCtrl.getAndUpdateMyKyc);
+router.put("/update-kyc",  upload.fields([
+    { name: "pan_doc", maxCount: 1 },
+    { name: "gst_doc", maxCount: 1 },
+    { name: "fssai_doc", maxCount: 1 },
+    { name: "msme_doc", maxCount: 1 }
+  ]), sellerCtrl.getAndUpdateMyKyc);
 
 module.exports = router;

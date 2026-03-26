@@ -208,6 +208,54 @@ exports.getSellerNewOrders = async (req, res) => {
   }
 };
 
+// 🌟 1. Seller-ae thon kyc-ah paathuttu eppo venumnalum update pannalam
+exports.getAndUpdateMyKyc = async (req, res) => {
+    try {
+        const sellerId = req.user.id; // From JWT
+        const seller = await Seller.findById(sellerId);
+
+        if (!seller) return res.status(404).json({ success: false, message: "Seller not found" });
+
+        // Method: GET - Just view documents
+        if (req.method === "GET") {
+            return res.json({ 
+                success: true, 
+                kycDocuments: seller.kycDocuments,
+                kycStatus: seller.kycStatus,
+                numbers: {
+                    pan: seller.panNumber,
+                    gst: seller.gstNumber,
+                    fssai: seller.fssaiNumber,
+                    msme: seller.msmeNumber
+                }
+            });
+        }
+
+        // Method: PUT/POST - Update documents
+        const { panNumber, gstNumber, fssaiNumber, msmeNumber } = req.body;
+
+        if (panNumber) seller.panNumber = panNumber;
+        if (gstNumber) seller.gstNumber = gstNumber;
+        if (fssaiNumber) seller.fssaiNumber = fssaiNumber;
+        if (msmeNumber) seller.msmeNumber = msmeNumber;
+
+        // File Update logic (S3 path or Local path based on your config)
+        if (req.files) {
+            if (req.files.pan_doc) seller.kycDocuments.panDoc = { fileName: req.files.pan_doc[0].filename, fileUrl: `uploads/kyc/${req.files.pan_doc[0].filename}` };
+            if (req.files.gst_doc) seller.kycDocuments.gstDoc = { fileName: req.files.gst_doc[0].filename, fileUrl: `uploads/kyc/${req.files.gst_doc[0].filename}` };
+            if (req.files.fssai_doc) seller.kycDocuments.fssaiDoc = { fileName: req.files.fssai_doc[0].filename, fileUrl: `uploads/kyc/${req.files.fssai_doc[0].filename}` };
+            if (req.files.msme_doc) seller.kycDocuments.msmeDoc = { fileName: req.files.msme_doc[0].filename, fileUrl: `uploads/kyc/${req.files.msme_doc[0].filename}` };
+        }
+
+        seller.kycStatus = "pending"; // Resubmit panna status pending-ku maaridum
+        await seller.save();
+
+        res.json({ success: true, message: "KYC Documents updated and sent for verification!", data: seller.kycDocuments });
+
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
 
 exports.updateSellerOrderStatus = async (req, res) => {
   try {
