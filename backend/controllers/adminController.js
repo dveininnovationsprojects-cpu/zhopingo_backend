@@ -292,7 +292,6 @@ exports.updateFinanceSettings = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
-
 exports.generateWeeklySettlement = async (req, res) => {
   try {
     const { sellerId, startDate, endDate } = req.body;
