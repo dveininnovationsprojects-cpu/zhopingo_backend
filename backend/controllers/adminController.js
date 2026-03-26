@@ -287,68 +287,66 @@ exports.generateWeeklySettlement = async (req, res) => {
         }
 
         let payoutRows = []; 
-        let summary = { 
-            sales: 0, 
-            comm: 0, 
-            gst: 0, 
-            tds: 0, 
-            delivery: 0, 
-            count: 0 
-        };
+        let summary = { sales: 0, comm: 0, gst: 0, tds: 0, delivery: 0, final: 0, count: 0 };
 
         orders.forEach(order => {
             const split = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId);
             if (split) {
                 summary.count++;
                 const isReturned = order.status === 'Returned';
-                const totalPaidByCustomer = order.billDetails?.totalAmount || 0; 
+                
+                // 🌟 FIX: Getting total paid strictly from billDetails OR fallback to split amount
+                const totalPaidByCustomer = order.billDetails?.totalAmount || order.totalAmount || split.sellerSubtotal || 0; 
                 const productAmount = split.sellerSubtotal || 0;
-                const deliveryDeduction = totalPaidByCustomer - productAmount;
-
-                let row = {
-                    orderId: order._id,
-                    date: order.updatedAt,
-                    totalPaid: totalPaidByCustomer,
-                    status: order.status
-                };
+                
+                // Delivery Deduction calculation
+                const deliveryDeduction = totalPaidByCustomer > productAmount ? (totalPaidByCustomer - productAmount) : 0;
 
                 if (isReturned) {
-                    const finalShare = -(totalPaidByCustomer + deliveryDeduction);
+                    // RETURN LOGIC: Mirrored from UI Image 64
+                    const returnFinalShare = -(totalPaidByCustomer + deliveryDeduction);
                     
                     summary.sales -= totalPaidByCustomer;
                     summary.delivery += deliveryDeduction;
+                    summary.final += returnFinalShare;
 
-                    row.type = 'RETURN';
-                    row.amount = -totalPaidByCustomer;
-                    row.comm_gst_tds = 0;
-                    row.delivery_status = `+ ₹${deliveryDeduction}`;
-                    row.net_payable = finalShare;
+                    payoutRows.push({
+                        orderId: order._id,
+                        type: 'RETURN',
+                        amount: -totalPaidByCustomer,
+                        comm_gst_tds: 0,
+                        delivery_status: `+ ₹${deliveryDeduction}`,
+                        net_payable: returnFinalShare
+                    });
                 } else {
+                    // SALE LOGIC: Strictly Following Frontend Sequences
                     const platformComm = (productAmount * (Number(settings.commissionPercent) / 100));
                     const gstOnComm = (platformComm * (Number(settings.gstOnCommissionPercent) / 100));
                     const tdsOnComm = (platformComm * (Number(settings.tdsPercent) / 100));
                     
                     const totalFees = platformComm + gstOnComm + tdsOnComm;
-                    const finalShare = totalPaidByCustomer - (totalFees + deliveryDeduction);
+                    const saleFinalShare = totalPaidByCustomer - (totalFees + deliveryDeduction);
 
-                    // Update Summary Totals
                     summary.sales += totalPaidByCustomer;
                     summary.comm += platformComm;
                     summary.gst += gstOnComm;
                     summary.tds += tdsOnComm;
                     summary.delivery += deliveryDeduction;
+                    summary.final += saleFinalShare;
 
-                    row.type = 'SALE';
-                    row.amount = totalPaidByCustomer;
-                    row.comm_gst_tds = totalFees;
-                    row.delivery_status = `- ₹${deliveryDeduction}`;
-                    row.net_payable = finalShare;
+                    payoutRows.push({
+                        orderId: order._id,
+                        type: 'SALE',
+                        amount: totalPaidByCustomer,
+                        comm_gst_tds: totalFees,
+                        delivery_status: `- ₹${deliveryDeduction}`,
+                        net_payable: saleFinalShare
+                    });
                 }
-                payoutRows.push(row);
             }
         });
 
-        // 🌟 THE FIX: Mapping calculated summary to Settlement fields
+        // 🌟 FINAL SYNC: Mapping calculated summary to Settlement fields
         const newSettlement = new Settlement({
             sellerId,
             weekRange: `${startDate} to ${endDate}`,
@@ -359,7 +357,7 @@ exports.generateWeeklySettlement = async (req, res) => {
             gstTotal: summary.gst,
             tdsTotal: summary.tds,
             deliveryTotal: summary.delivery,
-            finalPayable: summary.sales - (summary.comm + summary.gst + summary.tds + summary.delivery),
+            finalPayable: summary.final, // 💰 STRICTLY SYNCED VALUE
             status: 'Pending'
         });
 
