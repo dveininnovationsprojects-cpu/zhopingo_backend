@@ -271,10 +271,8 @@ exports.generateWeeklySettlement = async (req, res) => {
         const filterEnd = new Date(endDate);
         filterEnd.setHours(23, 59, 59, 999);
 
-        // 1. Fetch Finance Settings strictly (Frontend-la irukkura adhae percentages)
         const settings = await FinanceSettings.findOne() || { commissionPercent: 10, gstOnCommissionPercent: 18, tdsPercent: 2 };
 
-        // 2. Fetch Orders strictly within the selected week range
         const orders = await Order.find({
             "sellerSplitData.sellerId": new mongoose.Types.ObjectId(sellerId),
             isSettled: { $ne: true },
@@ -285,15 +283,23 @@ exports.generateWeeklySettlement = async (req, res) => {
         });
 
         if (!orders || orders.length === 0) {
-            return res.status(404).json({ success: false, message: "No eligible orders found in this date range." });
+            return res.status(404).json({ success: false, message: "No eligible orders found." });
         }
 
         let payoutRows = []; 
-        let summary = { sales: 0, deductions: 0, finalPayable: 0 };
+        let summary = { 
+            sales: 0, 
+            comm: 0, 
+            gst: 0, 
+            tds: 0, 
+            delivery: 0, 
+            count: 0 
+        };
 
         orders.forEach(order => {
             const split = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId);
             if (split) {
+                summary.count++;
                 const isReturned = order.status === 'Returned';
                 const totalPaidByCustomer = order.billDetails?.totalAmount || 0; 
                 const productAmount = split.sellerSubtotal || 0;
@@ -307,12 +313,10 @@ exports.generateWeeklySettlement = async (req, res) => {
                 };
 
                 if (isReturned) {
-                    // 🌟 RETURN LOGIC (Mirrored from your frontend)
-                    // Final Share: -(Total Paid + Delivery Deduction)
                     const finalShare = -(totalPaidByCustomer + deliveryDeduction);
                     
                     summary.sales -= totalPaidByCustomer;
-                    summary.deductions += deliveryDeduction;
+                    summary.delivery += deliveryDeduction;
 
                     row.type = 'RETURN';
                     row.amount = -totalPaidByCustomer;
@@ -320,20 +324,23 @@ exports.generateWeeklySettlement = async (req, res) => {
                     row.delivery_status = `+ ₹${deliveryDeduction}`;
                     row.net_payable = finalShare;
                 } else {
-                    // 🚀 SALE LOGIC (Mirrored from your frontend calculateOrderPayout)
                     const platformComm = (productAmount * (Number(settings.commissionPercent) / 100));
                     const gstOnComm = (platformComm * (Number(settings.gstOnCommissionPercent) / 100));
                     const tdsOnComm = (platformComm * (Number(settings.tdsPercent) / 100));
                     
-                    const totalDeductionFees = platformComm + gstOnComm + tdsOnComm;
-                    const finalShare = totalPaidByCustomer - (totalDeductionFees + deliveryDeduction);
+                    const totalFees = platformComm + gstOnComm + tdsOnComm;
+                    const finalShare = totalPaidByCustomer - (totalFees + deliveryDeduction);
 
+                    // Update Summary Totals
                     summary.sales += totalPaidByCustomer;
-                    summary.deductions += (totalDeductionFees + deliveryDeduction);
+                    summary.comm += platformComm;
+                    summary.gst += gstOnComm;
+                    summary.tds += tdsOnComm;
+                    summary.delivery += deliveryDeduction;
 
                     row.type = 'SALE';
                     row.amount = totalPaidByCustomer;
-                    row.comm_gst_tds = platformComm + gstOnComm + tdsOnComm;
+                    row.comm_gst_tds = totalFees;
                     row.delivery_status = `- ₹${deliveryDeduction}`;
                     row.net_payable = finalShare;
                 }
@@ -341,29 +348,29 @@ exports.generateWeeklySettlement = async (req, res) => {
             }
         });
 
-        summary.finalPayable = summary.sales - summary.deductions;
-
-        // 3. Create Settlement Document
+        // 🌟 THE FIX: Mapping calculated summary to Settlement fields
         const newSettlement = new Settlement({
             sellerId,
             weekRange: `${startDate} to ${endDate}`,
             payoutBreakdown: payoutRows,
+            orderCount: summary.count,
             totalSales: summary.sales,
-            totalDeductions: summary.deductions,
-            finalPayable: summary.finalPayable,
+            commissionTotal: summary.comm,
+            gstTotal: summary.gst,
+            tdsTotal: summary.tds,
+            deliveryTotal: summary.delivery,
+            finalPayable: summary.sales - (summary.comm + summary.gst + summary.tds + summary.delivery),
             status: 'Pending'
         });
 
         await newSettlement.save();
 
-        // 4. Mark orders as Settled
         const orderIds = orders.map(o => o._id);
         await Order.updateMany({ _id: { $in: orderIds } }, { $set: { isSettled: true } });
 
         res.json({ success: true, message: "Weekly Settlement Generated! ✅", data: newSettlement });
 
     } catch (err) { 
-        console.error("Backend Generator Error:", err.message);
         res.status(500).json({ success: false, error: err.message }); 
     }
 };
