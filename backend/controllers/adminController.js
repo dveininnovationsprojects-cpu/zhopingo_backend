@@ -372,27 +372,42 @@ exports.generateWeeklySettlement = async (req, res) => {
 
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
-
-// 3. Mark as Paid (🌟 Updated with Ledger Sync)
+// 3. Mark as Paid (🌟 Strictly Button Click - No Body Needed)
 exports.markSettlementAsPaid = async (req, res) => {
     try {
-        const { id } = req.params;
-        const { utrNumber, paymentDate } = req.body;
+        const { id } = req.params; 
         
+        // 1. Find settlement
         const settlement = await Settlement.findById(id);
         if (!settlement) return res.status(404).json({ success: false, message: "Settlement not found" });
-        if (settlement.status === 'Paid') return res.status(400).json({ success: false, message: "Already paid" });
+        
+        // 2. Already paid check
+        if (settlement.status === 'Paid') {
+            return res.status(400).json({ success: false, message: "Already marked as PAID" });
+        }
 
+        // 🌟 CHANGE: No destructuring from req.body anymore!
         settlement.status = 'Paid';
-        settlement.utrNumber = utrNumber;
-        settlement.paymentDate = paymentDate || new Date();
+        settlement.paymentDate = new Date(); 
+        
         await settlement.save();
 
-        // 🌟 CRITICAL: Update Seller Ledger on Payment
-        await this.createLedgerEntryForPayout(settlement.sellerId, settlement.finalPayable);
+        // 🚀 SYNC: Update Seller Ledger & Dashboard
+        // Internal function call reference fix
+        if (exports.createLedgerEntryForPayout) {
+            await exports.createLedgerEntryForPayout(settlement.sellerId, settlement.finalPayable);
+        }
 
-        res.json({ success: true, message: "Payment recorded and Ledger updated! ✅", data: settlement });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        res.json({ 
+            success: true, 
+            message: "Payment Success! Status changed to PAID ✅", 
+            data: settlement 
+        });
+
+    } catch (err) { 
+        console.error("Payout Button Error:", err.message);
+        res.status(500).json({ success: false, error: err.message }); 
+    }
 };
 // 🌟 1. API for Daily Orders View (Settlement aagaadha orders)
 exports.getPendingDailyOrders = async (req, res) => {
@@ -457,17 +472,7 @@ exports.generateGlobalLogisticsSettlement = async (req, res) => {
 
     } catch (err) { res.status(500).json({ error: err.message }); }
 };
-// 3. Mark as Paid (UTR Entry)
-exports.markSettlementAsPaid = async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { utrNumber, paymentDate } = req.body;
-        const settlement = await Settlement.findByIdAndUpdate(id, {
-            status: 'Paid', utrNumber, paymentDate: paymentDate || new Date()
-        }, { new: true });
-        res.json({ success: true, message: "Payment recorded!", data: settlement });
-    } catch (err) { res.status(500).json({ error: err.message }); }
-};
+
 // 3. WEIGHT SLABS (For Admin reference & Manual Override if API fails)
 exports.manageWeightSlabs = async (req, res) => {
     try {

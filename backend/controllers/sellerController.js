@@ -147,38 +147,21 @@ exports.getSellerDashboard = async (req, res) => {
     const { id } = req.params;
     const sellerObjectId = new mongoose.Types.ObjectId(id);
     
-    // 1. Seller Basic Details Fetch
+    // 1. Seller Details Fetch
     const seller = await Seller.findById(id).select("-password");
     if (!seller) return res.status(404).json({ success: false, message: "Seller not found" });
 
-    // 2. Orders Statistics (Delivered, Placed, etc.)
+    // 2. Orders Statistics (Live counts strictly from Order collection)
     const orderStats = await Order.aggregate([
       { $match: { "sellerSplitData.sellerId": sellerObjectId } },
       { $group: { _id: "$status", count: { $sum: 1 } } }
     ]);
 
-    const stats = { Placed: 0, Shipped: 0, Delivered: 0, Cancelled: 0 };
-    orderStats.forEach(s => { stats[s._id] = s.count; });
+    const stats = { Placed: 0, Shipped: 0, Delivered: 0, Cancelled: 0, Pending: 0, Returned: 0 };
+    orderStats.forEach(s => { if (s._id) stats[s._id] = s.count; });
 
-    // 🌟 3. REAL SELLER REVENUE LOGIC (Excluding Admin Commission)
-    // Part A: Aggregate Net Amount from Delivered orders (Not yet settled)
-    const pendingRevenue = await Order.aggregate([
-      { 
-        $match: { 
-          "sellerSplitData.sellerId": sellerObjectId,
-          status: "Delivered",
-          isSettled: { $ne: true } 
-        } 
-      },
-      {
-        $group: {
-          _id: null,
-          total: { $sum: "$sellerSplitData.amount" } // Strictly seller's net share
-        }
-      }
-    ]);
-
-    // Part B: Already Processed/Paid Revenue from Settlements
+    // 🌟 3. REVENUE LOGIC: Strictly from Finalized Settlements 🌟
+    // Admin generate panna 'Settlement' collection-la 'Paid' status-la irukkura amount-ah mattum kooturom
     const paidRevenue = await Settlement.aggregate([
       { 
         $match: { 
@@ -189,30 +172,29 @@ exports.getSellerDashboard = async (req, res) => {
       {
         $group: {
           _id: null,
-          total: { $sum: "$finalPayable" } // Sum of weekly finalized payouts
+          total: { $sum: "$finalPayable" } // Weekly grand total generator-la vara final amount
         }
       }
     ]);
 
-    // Live Balance = Current Week Delivered Items + Past Paid Settlements
-    const liveNetRevenue = (pendingRevenue[0]?.total || 0) + (paidRevenue[0]?.total || 0);
+    // Sum calculation with safety check
+    const totalRevenue = paidRevenue.length > 0 ? paidRevenue[0].total : 0;
 
     res.json({
       success: true,
       data: {
         seller,
         stats,
-        revenue: liveNetRevenue, // 💰 This will now show only Seller's Share, NOT 4,600
+        revenue: totalRevenue.toFixed(2), // 💰 Weekly generate aana amount mattum dhaan inga varum
         newOrdersCount: stats.Placed || 0
       }
     });
 
   } catch (err) {
-    console.error("Dashboard Final Sync Error:", err.message);
+    console.error("Dashboard Simplified Sync Error:", err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 };
-
 
 exports.getSellerNewOrders = async (req, res) => {
   try {
