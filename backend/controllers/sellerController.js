@@ -207,31 +207,40 @@ exports.getSellerNewOrders = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
-
-// 🌟 1. Seller-ae thon kyc-ah paathuttu eppo venumnalum update pannalam
+// 🌟 1. Seller & Admin View/Update KYC Documents
 exports.getAndUpdateMyKyc = async (req, res) => {
     try {
-        const sellerId = req.user.id; // From JWT
-        const seller = await Seller.findById(sellerId);
+        // 🌟 THE FIX: URL-la query params (?id=...) moolama ID fetch panrom
+        // JWT req.user dependency-ah thookittaen un preference-padi
+        const sellerId = req.query.id || req.body.sellerId || req.params.id;
 
+        if (!sellerId) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Seller ID is missing. Please provide ?id=YOUR_ID in URL." 
+            });
+        }
+
+        const seller = await Seller.findById(sellerId);
         if (!seller) return res.status(404).json({ success: false, message: "Seller not found" });
 
-        // Method: GET - Just view documents
+        // logic A: GET Method (Just for View)
         if (req.method === "GET") {
             return res.json({ 
                 success: true, 
-                kycDocuments: seller.kycDocuments,
-                kycStatus: seller.kycStatus,
-                numbers: {
-                    pan: seller.panNumber,
-                    gst: seller.gstNumber,
-                    fssai: seller.fssaiNumber,
-                    msme: seller.msmeNumber
+                data: {
+                    shopName: seller.shopName,
+                    kycStatus: seller.kycStatus,
+                    panNumber: seller.panNumber,
+                    gstNumber: seller.gstNumber,
+                    fssaiNumber: seller.fssaiNumber,
+                    msmeNumber: seller.msmeNumber,
+                    kycDocuments: seller.kycDocuments // Contains File URLs
                 }
             });
         }
 
-        // Method: PUT/POST - Update documents
+        // logic B: PUT/POST Method (For Update)
         const { panNumber, gstNumber, fssaiNumber, msmeNumber } = req.body;
 
         if (panNumber) seller.panNumber = panNumber;
@@ -239,24 +248,30 @@ exports.getAndUpdateMyKyc = async (req, res) => {
         if (fssaiNumber) seller.fssaiNumber = fssaiNumber;
         if (msmeNumber) seller.msmeNumber = msmeNumber;
 
-        // File Update logic (S3 path or Local path based on your config)
+        // 🌟 Multi-file handling strictly
         if (req.files) {
-            if (req.files.pan_doc) seller.kycDocuments.panDoc = { fileName: req.files.pan_doc[0].filename, fileUrl: `uploads/kyc/${req.files.pan_doc[0].filename}` };
-            if (req.files.gst_doc) seller.kycDocuments.gstDoc = { fileName: req.files.gst_doc[0].filename, fileUrl: `uploads/kyc/${req.files.gst_doc[0].filename}` };
-            if (req.files.fssai_doc) seller.kycDocuments.fssaiDoc = { fileName: req.files.fssai_doc[0].filename, fileUrl: `uploads/kyc/${req.files.fssai_doc[0].filename}` };
-            if (req.files.msme_doc) seller.kycDocuments.msmeDoc = { fileName: req.files.msme_doc[0].filename, fileUrl: `uploads/kyc/${req.files.msme_doc[0].filename}` };
+            const uploadPath = "uploads/kyc/";
+            if (req.files.pan_doc) seller.kycDocuments.panDoc = { fileName: req.files.pan_doc[0].filename, fileUrl: uploadPath + req.files.pan_doc[0].filename };
+            if (req.files.gst_doc) seller.kycDocuments.gstDoc = { fileName: req.files.gst_doc[0].filename, fileUrl: uploadPath + req.files.gst_doc[0].filename };
+            if (req.files.fssai_doc) seller.kycDocuments.fssaiDoc = { fileName: req.files.fssai_doc[0].filename, fileUrl: uploadPath + req.files.fssai_doc[0].filename };
+            if (req.files.msme_doc) seller.kycDocuments.msmeDoc = { fileName: req.files.msme_doc[0].filename, fileUrl: uploadPath + req.files.msme_doc[0].filename };
         }
 
-        seller.kycStatus = "pending"; // Resubmit panna status pending-ku maaridum
+        // KYC resubmit panna status 'pending'-ku thalliduvom strictly
+        seller.kycStatus = "pending";
         await seller.save();
 
-        res.json({ success: true, message: "KYC Documents updated and sent for verification!", data: seller.kycDocuments });
+        res.json({ 
+            success: true, 
+            message: "KYC Documents updated successfully! Admin will re-verify.", 
+            data: seller.kycDocuments 
+        });
 
     } catch (err) {
+        console.error("KYC Logic Error:", err.message);
         res.status(500).json({ success: false, error: err.message });
     }
 };
-
 exports.updateSellerOrderStatus = async (req, res) => {
   try {
     const { orderId, status } = req.body; 
