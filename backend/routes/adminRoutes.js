@@ -64,6 +64,7 @@ const {
     getSellerSettlements,
     getPendingDailyOrders,
     getSellerLedger,
+    getSellerKycForAdmin,
     getAllLedgerEntries
 } = require("../controllers/adminController"); 
 const { protect } = require('../middleware/authMiddleware');
@@ -106,7 +107,7 @@ router.post('/logistics-settlement', protect, generateGlobalLogisticsSettlement)
 // 🚀 41. New GET Routes for Auto-Sync (Add these in adminRoutes.js)
 router.get('/finance/settlements/:sellerId', protect, getSellerSettlements); // Add this function in controller
 router.get('/ledger/:sellerId', protect, getSellerLedger); // Add this function in controller
-
+router.get("/seller-kyc/:sellerId", protect, getSellerKycForAdmin);
 
 
 router.get('/ledger/all', protect, getAllLedgerEntries);
