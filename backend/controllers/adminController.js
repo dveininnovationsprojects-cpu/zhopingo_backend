@@ -293,145 +293,134 @@ exports.updateFinanceSettings = async (req, res) => {
   }
 };
 exports.generateWeeklySettlement = async (req, res) => {
-  try {
-    const { sellerId, startDate, endDate } = req.body;
-    const filterStart = new Date(startDate);
-    const filterEnd = new Date(endDate);
-    filterEnd.setHours(23, 59, 59, 999);
+    try {
+        const { sellerId, startDate, endDate } = req.body;
+        const filterStart = new Date(startDate);
+        const filterEnd = new Date(endDate);
+        filterEnd.setHours(23, 59, 59, 999);
 
-    const sellerObjectId = new mongoose.Types.ObjectId(sellerId);
+        const sellerObjectId = new mongoose.Types.ObjectId(sellerId);
 
-    // 🛡️ logic 1: PREVENT DUPLICATES (Strict check for same week)
-    const existingSettlement = await Settlement.findOne({
-      sellerId: sellerObjectId,
-      weekRange: `${startDate} to ${endDate}`
-    });
+        // 🛡️ logic 1: PREVENT DUPLICATES (Strict check for same week)
+        const existingSettlement = await Settlement.findOne({
+            sellerId: sellerObjectId,
+            weekRange: `${startDate} to ${endDate}`
+        });
 
-    if (existingSettlement) {
-      return res.status(400).json({ 
-        success: false, 
-        message: `Settlement already exists for this cycle (Status: ${existingSettlement.status}).` 
-      });
-    }
-
-    // Fetch live finance rules
-    const settings = (await FinanceSettings.findOne()) || {
-      commissionPercent: 10,
-      gstOnCommissionPercent: 18,
-      tdsPercent: 2,
-    };
-
-    // 🛡️ logic 2: NESTED DATE QUERY (Image 64 Sync)
-    // isSettled: { $ne: true } is the core safety lock
-    const orders = await Order.find({
-      isSettled: { $ne: true }, 
-      sellerSplitData: {
-        $elemMatch: {
-          sellerId: sellerObjectId,
-          $or: [
-            { packageStatus: "Delivered", deliveredDate: { $gte: filterStart, $lte: filterEnd } },
-            { packageStatus: "Returned", returnDate: { $gte: filterStart, $lte: filterEnd } }
-          ]
+        if (existingSettlement) {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Settlement already exists for this cycle (Status: ${existingSettlement.status}).` 
+            });
         }
-      }
-    });
 
-    if (!orders || orders.length === 0) {
-      return res.status(404).json({ success: false, message: "No eligible orders found for this specific week cycle." });
-    }
+        const settings = (await FinanceSettings.findOne()) || {
+            commissionPercent: 10,
+            gstOnCommissionPercent: 18,
+            tdsPercent: 2,
+        };
 
-    let payoutRows = [];
-    let summary = { sales: 0, comm: 0, gst: 0, tds: 0, delivery: 0, final: 0, count: 0 };
+        // 🛡️ logic 2: NESTED DATE QUERY (Image 64 Sync)
+        const orders = await Order.find({
+            isSettled: { $ne: true }, 
+            sellerSplitData: {
+                $elemMatch: {
+                    sellerId: sellerObjectId,
+                    $or: [
+                        { packageStatus: "Delivered", deliveredDate: { $gte: filterStart, $lte: filterEnd } },
+                        { packageStatus: "Returned", returnDate: { $gte: filterStart, $lte: filterEnd } }
+                    ]
+                }
+            }
+        });
 
-    orders.forEach((order) => {
-      const split = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId);
-      if (split) {
-        summary.count++;
-        // Status from nested split data (Image 64 standard)
-        const currentStatus = split.packageStatus || order.status;
-        const isReturned = currentStatus === "Returned" || currentStatus === "Return Requested";
-
-        const totalPaidByCustomer = order.billDetails?.totalAmount || order.totalAmount || split.sellerSubtotal || 0;
-        const productAmount = split.sellerSubtotal || 0;
-        const deliveryDeduction = totalPaidByCustomer > productAmount ? totalPaidByCustomer - productAmount : 0;
-
-        if (isReturned) {
-          // 🚚 RETURN LOGIC (From Image 64: Comm=0, NetShare = -(TotalPaid + Delivery))
-          const returnFinalShare = -(totalPaidByCustomer + deliveryDeduction);
-          
-          summary.sales -= totalPaidByCustomer;
-          summary.delivery += deliveryDeduction;
-          summary.final += returnFinalShare;
-
-          payoutRows.push({
-            orderId: order._id,
-            date: split.returnDate || order.updatedAt,
-            type: "RETURN",
-            amount: -totalPaidByCustomer,
-            comm_gst_tds: 0,
-            delivery_status: `+ ₹${deliveryDeduction}`,
-            net_payable: returnFinalShare,
-          });
-        } else {
-          // 💰 SALE LOGIC (From Image 64: Strict Deductions)
-          const platformComm = productAmount * (Number(settings.commissionPercent) / 100);
-          const gstOnComm = platformComm * (Number(settings.gstOnCommissionPercent) / 100);
-          const tdsOnComm = platformComm * (Number(settings.tdsPercent) / 100);
-          
-          const totalFees = platformComm + gstOnComm + tdsOnComm;
-          const saleFinalShare = totalPaidByCustomer - (totalFees + deliveryDeduction);
-
-          summary.sales += totalPaidByCustomer;
-          summary.comm += platformComm;
-          summary.gst += gstOnComm;
-          summary.tds += tdsOnComm;
-          summary.delivery += deliveryDeduction;
-          summary.final += saleFinalShare;
-
-          payoutRows.push({
-            orderId: order._id,
-            date: split.deliveredDate || order.updatedAt,
-            type: "SALE",
-            amount: totalPaidByCustomer,
-            comm_gst_tds: totalFees,
-            delivery_status: `- ₹${deliveryDeduction}`,
-            net_payable: saleFinalShare,
-          });
+        if (!orders || orders.length === 0) {
+            return res.status(404).json({ success: false, message: "No eligible orders found for this specific week cycle." });
         }
-      }
-    });
 
-    const newSettlement = new Settlement({
-      sellerId,
-      weekRange: `${startDate} to ${endDate}`,
-      payoutBreakdown: payoutRows,
-      orderCount: summary.count,
-      totalSales: Number(summary.sales.toFixed(3)),
-      commissionTotal: Number(summary.comm.toFixed(3)),
-      gstTotal: Number(summary.gst.toFixed(3)),
-      tdsTotal: Number(summary.tds.toFixed(3)),
-      deliveryTotal: Number(summary.delivery.toFixed(3)),
-      finalPayable: Number(summary.final.toFixed(3)), // 💰 Exact Sync with ₹5,264.755
-      status: "Pending",
-    });
+        let payoutRows = []; 
+        let summary = { sales: 0, comm: 0, gst: 0, tds: 0, delivery: 0, final: 0, count: 0 };
 
-    await newSettlement.save();
+        orders.forEach(order => {
+            const split = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId);
+            if (split) {
+                summary.count++;
+                const isReturned = split.packageStatus === 'Returned' || order.status === 'Returned';
+                
+                // 🌟 FIX: Getting total paid strictly from split data OR billDetails
+                const productAmount = split.sellerSubtotal || 0;
+                const totalPaidByCustomer = order.billDetails?.totalAmount || order.totalAmount || productAmount; 
+                
+                const deliveryDeduction = totalPaidByCustomer > productAmount ? (totalPaidByCustomer - productAmount) : 0;
 
-    // 🌟 THE LOCK: Mark these orders as Settled
-    const orderIds = orders.map((o) => o._id);
-    await Order.updateMany(
-        { _id: { $in: orderIds } },
-        { $set: { isSettled: true } }
-    );
+                if (isReturned) {
+                    // RETURN LOGIC: Mirrored from UI Image 64
+                    const returnFinalShare = -(productAmount + deliveryDeduction);
+                    
+                    summary.sales -= productAmount;
+                    summary.delivery += deliveryDeduction;
+                    summary.final += returnFinalShare;
 
-    res.json({
-      success: true,
-      message: "Weekly Settlement Generated! ✅",
-      data: newSettlement,
-    });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
+                    payoutRows.push({
+                        orderId: order._id,
+                        type: 'RETURN',
+                        amount: -productAmount,
+                        comm_gst_tds: 0,
+                        delivery_status: `+ ₹${deliveryDeduction}`,
+                        net_payable: returnFinalShare
+                    });
+                } else {
+                    // SALE LOGIC: Strictly Following Frontend Sequences
+                    const platformComm = (productAmount * (Number(settings.commissionPercent) / 100));
+                    const gstOnComm = (platformComm * (Number(settings.gstOnCommissionPercent) / 100));
+                    const tdsOnComm = (platformComm * (Number(settings.tdsPercent) / 100));
+                    
+                    const totalFees = platformComm + gstOnComm + tdsOnComm;
+                    const saleFinalShare = totalPaidByCustomer - (totalFees + deliveryDeduction);
+
+                    summary.sales += productAmount;
+                    summary.comm += platformComm;
+                    summary.gst += gstOnComm;
+                    summary.tds += tdsOnComm;
+                    summary.delivery += deliveryDeduction;
+                    summary.final += saleFinalShare;
+
+                    payoutRows.push({
+                        orderId: order._id,
+                        type: 'SALE',
+                        amount: totalPaidByCustomer,
+                        comm_gst_tds: totalFees,
+                        delivery_status: `- ₹${deliveryDeduction}`,
+                        net_payable: saleFinalShare
+                    });
+                }
+            }
+        });
+
+        const newSettlement = new Settlement({
+            sellerId,
+            weekRange: `${startDate} to ${endDate}`,
+            payoutBreakdown: payoutRows,
+            orderCount: summary.count,
+            totalSales: Number(summary.sales.toFixed(3)),
+            commissionTotal: Number(summary.comm.toFixed(3)),
+            gstTotal: Number(summary.gst.toFixed(3)),
+            tdsTotal: Number(summary.tds.toFixed(3)),
+            deliveryTotal: Number(summary.delivery.toFixed(3)),
+            finalPayable: Number(summary.final.toFixed(3)), 
+            status: 'Pending'
+        });
+
+        await newSettlement.save();
+
+        const orderIds = orders.map(o => o._id);
+        await Order.updateMany({ _id: { $in: orderIds } }, { $set: { isSettled: true } });
+
+        res.json({ success: true, message: "Weekly Settlement Generated! ✅", data: newSettlement });
+
+    } catch (err) { 
+        res.status(500).json({ success: false, error: err.message }); 
+    }
 };
 // 3. Mark as Paid (🌟 Strictly Button Click - No Body Needed)
 exports.markSettlementAsPaid = async (req, res) => {
