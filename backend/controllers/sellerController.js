@@ -272,53 +272,55 @@ exports.getAndUpdateMyKyc = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
-// 🌟 THE FINAL FIX: Nested Date Persistence
+// 🌟 THE UNBREAKABLE FIX: Positional Operator for Nested Date
 exports.updateSellerOrderStatus = async (req, res) => {
   try {
     const { orderId, sellerId, status } = req.body;
     
-    // Find the order
-    const order = await Order.findById(orderId);
-    if (!order) return res.status(404).json({ success: false, message: "Order not found" });
-
-    // 1. Correct Seller Split-ah kandupidi
-    const splitIndex = order.sellerSplitData.findIndex(
-      (s) => (s.sellerId._id || s.sellerId).toString() === sellerId
-    );
+    // 1. Current timestamp
+    const now = new Date();
     
-    if (splitIndex !== -1) {
-      // 2. Status update
-      order.sellerSplitData[splitIndex].packageStatus = status;
-      
-      // 3. Date update logic strictly
-      const now = new Date();
-      if (status === 'Delivered') {
-        order.sellerSplitData[splitIndex].deliveredDate = now;
-      } else if (status === 'Returned' || status === 'Return Requested') {
-        order.sellerSplitData[splitIndex].returnDate = now;
-      }
+    // 2. Logic to determine which date field to update strictly
+    let updateFields = {
+        "sellerSplitData.$.packageStatus": status,
+        "status": status // Overall order status update
+    };
 
-      // 🌟 IMPORTANT: Mongoose-ku nested array modify aayiduchunu "alert" panrom
-      order.markModified('sellerSplitData'); 
+    if (status === 'Delivered') {
+        updateFields["sellerSplitData.$.deliveredDate"] = now;
+    } else if (status === 'Returned' || status === 'Return Requested') {
+        updateFields["sellerSplitData.$.returnDate"] = now;
     }
 
-    // 4. Overall status update (for tracking)
-    order.status = status; 
-    
-    // 5. Save strictly
-    const updatedOrder = await order.save();
+    // 🚀 3. THE ATOMIC UPDATE: positional operator ($) targets the specific seller in array
+    const updatedOrder = await Order.findOneAndUpdate(
+      { 
+        _id: orderId, 
+        "sellerSplitData.sellerId": new mongoose.Types.ObjectId(sellerId) 
+      },
+      { $set: updateFields },
+      { new: true } // Returns the updated document strictly
+    );
+
+    if (!updatedOrder) {
+        return res.status(404).json({ 
+            success: false, 
+            message: "Order or Seller Split not found in database." 
+        });
+    }
 
     res.json({ 
       success: true, 
-      message: `Status updated to ${status} with Date! ✅`, 
+      message: `Status & Date Synced to DB! ✅`, 
       data: updatedOrder 
     });
 
   } catch (err) {
-    console.error("Status Update Error:", err.message);
+    console.error("Critical Persistence Error:", err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 };
+
 
 
 exports.logoutSeller = async (req, res) => {
