@@ -210,19 +210,37 @@ exports.getSellerNewOrders = async (req, res) => {
 // 🌟 1. Seller & Admin View/Update KYC Documents
 exports.getAndUpdateMyKyc = async (req, res) => {
     try {
-        // 🌟 THE FIX: URL-la query params (?id=...) moolama ID fetch panrom
-        // JWT req.user dependency-ah thookittaen un preference-padi
         const sellerId = req.query.id || req.body.sellerId || req.params.id;
 
         if (!sellerId) {
             return res.status(400).json({ 
                 success: false, 
-                message: "Seller ID is missing. Please provide ?id=YOUR_ID in URL." 
+                message: "Seller ID is missing." 
             });
         }
 
         const seller = await Seller.findById(sellerId);
         if (!seller) return res.status(404).json({ success: false, message: "Seller not found" });
+
+        // 🚀 CloudFront URL construct panrom (Image 67 fix)
+        const CLOUDFRONT_BASE = "https://d1utzn73483swp.cloudfront.net/";
+
+        // Documents array-ah format panni full URL sethu anuppuvom
+        const formattedDocs = {};
+        if (seller.kycDocuments) {
+            const docs = ['panDoc', 'gstDoc', 'fssaiDoc', 'msmeDoc'];
+            docs.forEach(docKey => {
+                if (seller.kycDocuments[docKey] && seller.kycDocuments[docKey].fileUrl) {
+                    formattedDocs[docKey] = {
+                        ...seller.kycDocuments[docKey].toObject(),
+                        // 🌟 Database-la irukkura path-oda base URL sethukkurom
+                        fullUrl: seller.kycDocuments[docKey].fileUrl.startsWith('http') 
+                                 ? seller.kycDocuments[docKey].fileUrl 
+                                 : `${CLOUDFRONT_BASE}${seller.kycDocuments[docKey].fileUrl}`
+                    };
+                }
+            });
+        }
 
         // logic A: GET Method (Just for View)
         if (req.method === "GET") {
@@ -235,7 +253,7 @@ exports.getAndUpdateMyKyc = async (req, res) => {
                     gstNumber: seller.gstNumber,
                     fssaiNumber: seller.fssaiNumber,
                     msmeNumber: seller.msmeNumber,
-                    kycDocuments: seller.kycDocuments // Contains File URLs
+                    kycDocuments: formattedDocs // 🔥 Ippo indha fullUrl frontend-la varum
                 }
             });
         }
@@ -248,22 +266,20 @@ exports.getAndUpdateMyKyc = async (req, res) => {
         if (fssaiNumber) seller.fssaiNumber = fssaiNumber;
         if (msmeNumber) seller.msmeNumber = msmeNumber;
 
-        // 🌟 Multi-file handling strictly
         if (req.files) {
-            const uploadPath = "uploads/kyc/";
-            if (req.files.pan_doc) seller.kycDocuments.panDoc = { fileName: req.files.pan_doc[0].filename, fileUrl: uploadPath + req.files.pan_doc[0].filename };
-            if (req.files.gst_doc) seller.kycDocuments.gstDoc = { fileName: req.files.gst_doc[0].filename, fileUrl: uploadPath + req.files.gst_doc[0].filename };
-            if (req.files.fssai_doc) seller.kycDocuments.fssaiDoc = { fileName: req.files.fssai_doc[0].filename, fileUrl: uploadPath + req.files.fssai_doc[0].filename };
-            if (req.files.msme_doc) seller.kycDocuments.msmeDoc = { fileName: req.files.msme_doc[0].filename, fileUrl: uploadPath + req.files.msme_doc[0].filename };
+            // Un multer logic-padi folders-ah strictly mapping panrom
+            if (req.files.pan_doc) seller.kycDocuments.panDoc = { fileName: req.files.pan_doc[0].key.split('/').pop(), fileUrl: req.files.pan_doc[0].key };
+            if (req.files.gst_doc) seller.kycDocuments.gstDoc = { fileName: req.files.gst_doc[0].key.split('/').pop(), fileUrl: req.files.gst_doc[0].key };
+            if (req.files.fssai_doc) seller.kycDocuments.fssaiDoc = { fileName: req.files.fssai_doc[0].key.split('/').pop(), fileUrl: req.files.fssai_doc[0].key };
+            if (req.files.msme_doc) seller.kycDocuments.msmeDoc = { fileName: req.files.msme_doc[0].key.split('/').pop(), fileUrl: req.files.msme_doc[0].key };
         }
 
-        // KYC resubmit panna status 'pending'-ku thalliduvom strictly
         seller.kycStatus = "pending";
         await seller.save();
 
         res.json({ 
             success: true, 
-            message: "KYC Documents updated successfully! Admin will re-verify.", 
+            message: "KYC Documents updated successfully!", 
             data: seller.kycDocuments 
         });
 
