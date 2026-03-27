@@ -50,7 +50,6 @@ exports.registerSeller = async (req, res) => {
     return res.status(500).json({ success: false, error: err.message });
   }
 };
-
 /* ================= 2. UPLOAD KYC (Using Email to find Seller) ================= */
 exports.uploadKyc = async (req, res) => {
   try {
@@ -101,17 +100,6 @@ exports.uploadKyc = async (req, res) => {
     await seller.save();
 
     res.json({ success: true, message: "KYC submitted successfully! Admin will verify. ✅" });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-};
-
-    seller.kycStatus = "pending";
-    await seller.save();
-
-    await sendAdminNotification(seller, "KYC Submission");
-
-    res.json({ success: true, message: "KYC submitted. Admin will verify shortly." });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
