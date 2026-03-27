@@ -56,14 +56,11 @@ exports.uploadKyc = async (req, res) => {
   try {
     const { email, panNumber, gstNumber, fssaiNumber, msmeNumber } = req.body;
     
-    // 🌟 மின்னஞ்சல் மூலம் செல்லரைக் கண்டுபிடித்தல்
     const seller = await Seller.findOne({ email });
-
     if (!seller) return res.status(404).json({ success: false, message: "Seller with this email not found" });
 
-    // 🌟 PAN மற்றும் GST ஆவணங்கள் + எண்கள் கட்டாயம்
-    if (!panNumber || !gstNumber || !req.files?.pan_doc || !req.files?.gst_doc || !req.files?.msme_doc) {
-      return res.status(400).json({ success: false, message: "PAN, GST and MSME documents are required" });
+    if (!panNumber || !gstNumber) {
+      return res.status(400).json({ success: false, message: "PAN and GST numbers are required" });
     }
 
     seller.panNumber = panNumber;
@@ -71,33 +68,43 @@ exports.uploadKyc = async (req, res) => {
     if (fssaiNumber) seller.fssaiNumber = fssaiNumber;
     if (msmeNumber) seller.msmeNumber = msmeNumber;
 
-    // 🌟 கட்டாய ஆவணப் பதிவேற்றம்
-    if (req.files.pan_doc) {
-      seller.kycDocuments.panDoc = {
-        fileName: req.files.pan_doc[0].filename,
-        fileUrl: `uploads/kyc/${req.files.pan_doc[0].filename}`
-      };
-    }
-    if (req.files.gst_doc) {
-      seller.kycDocuments.gstDoc = {
-        fileName: req.files.gst_doc[0].filename,
-        fileUrl: `uploads/kyc/${req.files.gst_doc[0].filename}`
-      };
-    }
-   
-    if (req.files.msme_doc) {
-      seller.kycDocuments.msmeDoc = {
-        fileName: req.files.msme_doc[0].filename,
-        fileUrl: `uploads/kyc/${req.files.msme_doc[0].filename}`
-      };
+    // 🌟 THE FIX: Accessing S3 'key' instead of just filename
+    // S3 storage use pannumbothu file info 'key' field-la dhaan irukkum
+    if (req.files) {
+        if (req.files.pan_doc) {
+            seller.kycDocuments.panDoc = { 
+                fileName: req.files.pan_doc[0].key.split('/').pop(), 
+                fileUrl: req.files.pan_doc[0].key 
+            };
+        }
+        if (req.files.gst_doc) {
+            seller.kycDocuments.gstDoc = { 
+                fileName: req.files.gst_doc[0].key.split('/').pop(), 
+                fileUrl: req.files.gst_doc[0].key 
+            };
+        }
+        if (req.files.msme_doc) {
+            seller.kycDocuments.msmeDoc = { 
+                fileName: req.files.msme_doc[0].key.split('/').pop(), 
+                fileUrl: req.files.msme_doc[0].key 
+            };
+        }
+        if (req.files.fssai_doc) {
+            seller.kycDocuments.fssaiDoc = { 
+                fileName: req.files.fssai_doc[0].key.split('/').pop(), 
+                fileUrl: req.files.fssai_doc[0].key 
+            };
+        }
     }
 
-     if (req.files.fssai_doc) {
-  seller.kycDocuments.fssaiDoc = {
-    fileName: req.files.fssai_doc[0].filename,
-    fileUrl: `uploads/kyc/${req.files.fssai_doc[0].filename}`
-  };
-}
+    seller.kycStatus = "pending";
+    await seller.save();
+
+    res.json({ success: true, message: "KYC submitted successfully! Admin will verify. ✅" });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
 
     seller.kycStatus = "pending";
     await seller.save();
