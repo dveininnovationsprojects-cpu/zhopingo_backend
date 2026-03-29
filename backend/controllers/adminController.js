@@ -440,6 +440,7 @@ exports.updateFinanceSettings = async (req, res) => {
 //     res.status(500).json({ success: false, error: err.message });
 //   }
 // };
+
 exports.generateWeeklySettlement = async (req, res) => {
     try {
         const { sellerId, startDate, endDate } = req.body;
@@ -447,21 +448,27 @@ exports.generateWeeklySettlement = async (req, res) => {
         const filterEnd = new Date(endDate);
         filterEnd.setHours(23, 59, 59, 999);
 
-        // 🌟 Fetch Finance Settings
-        const settings = await FinanceSettings.findOne();
-        if (!settings) {
-            return res.status(500).json({ success: false, message: "Finance Settings not found." });
-        }
+        // 🌟 100% DYNAMIC: FinanceSettings DB settings only
+        const settings = (await FinanceSettings.findOne()) || {
+            commissionPercent: 10,
+            gstOnCommissionPercent: 18,
+            tdsPercent: 2,
+        };
 
-        // 🌟 Fetching orders with Product details populated
         const orders = await Order.find({
             "sellerSplitData.sellerId": new mongoose.Types.ObjectId(sellerId),
             isSettled: { $ne: true },
             $or: [
-                { status: "Delivered", updatedAt: { $gte: filterStart, $lte: filterEnd } },
-                { status: "Returned", updatedAt: { $gte: filterStart, $lte: filterEnd } },
+                {
+                    status: "Delivered",
+                    updatedAt: { $gte: filterStart, $lte: filterEnd },
+                },
+                {
+                    status: "Returned",
+                    updatedAt: { $gte: filterStart, $lte: filterEnd },
+                },
             ],
-        }).populate('items.productId'); // 👈 Product info drill-down-kaga populate panrom
+        }).populate('items.productId'); 
 
         if (!orders || orders.length === 0) {
             return res.status(404).json({ success: false, message: "No eligible orders found." });
@@ -480,80 +487,83 @@ exports.generateWeeklySettlement = async (req, res) => {
 
         orders.forEach((order) => {
             const split = order.sellerSplitData.find(
-                (s) => s.sellerId.toString() === sellerId
+                (s) => s.sellerId.toString() === sellerId,
             );
-
             if (split) {
                 summary.count++;
                 const isReturned = order.status === "Returned";
 
-                // Filter ONLY this seller's products from the main items array
-                const sellerSpecificProducts = order.items.filter(
-                    item => item.sellerId.toString() === sellerId
-                );
+                const totalPaidByCustomer = order.billDetails?.totalAmount || order.totalAmount || split.sellerSubtotal || 0;
+                const productAmount = split.sellerSubtotal || 0;
 
-                const totalPaidByCustomer = order.billDetails?.totalAmount || order.totalAmount || 0;
-                const productSubtotal = split.sellerSubtotal || 0;
-                const deliveryCharge = order.billDetails?.deliveryCharge || 0;
+                // Delivery Deduction calculation
+                const deliveryDeduction = totalPaidByCustomer > productAmount ? totalPaidByCustomer - productAmount : 0;
 
-                let rowData = {
-                    orderId: order._id,
-                    orderDate: order.createdAt,
-                    statusDate: order.updatedAt,
-                    // 🌟 INTHA LINE THAN UNAKKU VENUM: Mapping product info
-                    products: sellerSpecificProducts.map(p => ({
+                // 🌟 DRILL-DOWN: Mapping items for this specific seller in the order
+                const sellerItemsInfo = order.items
+                    .filter(item => item.sellerId.toString() === sellerId)
+                    .map(p => ({
                         name: p.name || p.productId?.name,
                         price: p.price,
                         quantity: p.quantity,
                         image: p.image || p.productId?.image
-                    })),
-                    totalItems: sellerSpecificProducts.length
-                };
+                    }));
 
                 if (isReturned) {
-                    const returnNetPayable = -(totalPaidByCustomer); 
+                    // 🌟 RETURN LOGIC FIX: Strictly reversing only the product paid amount. 
+                    // No commission/GST/TDS reduction to avoid double losses.
+                    const returnFinalShare = -(totalPaidByCustomer); 
+
                     summary.sales -= totalPaidByCustomer;
-                    summary.final += returnNetPayable;
+                    summary.final += returnFinalShare;
 
                     payoutRows.push({
-                        ...rowData,
+                        orderId: order._id,
+                        orderDate: order.createdAt,    // Table Column 1
+                        statusDate: order.updatedAt,   // Table Column 2
                         type: "RETURN",
                         amount: -totalPaidByCustomer,
-                        comm_gst_tds: 0,
+                        comm_gst_tds: 0,               // Zero fees on returns
                         delivery_status: `₹0`,
-                        net_payable: returnNetPayable,
+                        net_payable: returnFinalShare,
+                        items: sellerItemsInfo         // Drill-down info
                     });
                 } else {
-                    const platformComm = productSubtotal * (Number(settings.commissionPercent) / 100);
+                    // SALE LOGIC: Strictly following DB sequences
+                    const platformComm = productAmount * (Number(settings.commissionPercent) / 100);
                     const gstOnComm = platformComm * (Number(settings.gstOnCommissionPercent) / 100);
-                    const tdsOnProduct = productSubtotal * (Number(settings.tdsPercent) / 100);
+                    const tdsOnProduct = productAmount * (Number(settings.tdsPercent) / 100);
 
                     const totalFees = platformComm + gstOnComm + tdsOnProduct;
-                    const saleFinalShare = totalPaidByCustomer - (totalFees + deliveryCharge);
+                    const saleFinalShare = totalPaidByCustomer - (totalFees + deliveryDeduction);
 
                     summary.sales += totalPaidByCustomer;
                     summary.comm += platformComm;
                     summary.gst += gstOnComm;
                     summary.tds += tdsOnProduct;
-                    summary.delivery += deliveryCharge;
+                    summary.delivery += deliveryDeduction;
                     summary.final += saleFinalShare;
 
                     payoutRows.push({
-                        ...rowData,
+                        orderId: order._id,
+                        orderDate: order.createdAt,
+                        statusDate: order.updatedAt,
                         type: "SALE",
                         amount: totalPaidByCustomer,
                         comm_gst_tds: totalFees.toFixed(2),
-                        delivery_status: `- ₹${deliveryCharge}`,
+                        delivery_status: `- ₹${deliveryDeduction}`,
                         net_payable: Number(saleFinalShare.toFixed(2)),
+                        items: sellerItemsInfo
                     });
                 }
             }
         });
 
+        // 🌟 FINAL SYNC
         const newSettlement = new Settlement({
             sellerId,
             weekRange: `${startDate} to ${endDate}`,
-            payoutBreakdown: payoutRows, // 👈 Ippo ithukkulla individual products details sethu irukkum
+            payoutBreakdown: payoutRows,
             orderCount: summary.count,
             totalSales: Number(summary.sales.toFixed(2)),
             commissionTotal: Number(summary.comm.toFixed(2)),
@@ -569,7 +579,7 @@ exports.generateWeeklySettlement = async (req, res) => {
         const orderIds = orders.map((o) => o._id);
         await Order.updateMany(
             { _id: { $in: orderIds } },
-            { $set: { isSettled: true } }
+            { $set: { isSettled: true } },
         );
 
         res.json({
@@ -581,7 +591,6 @@ exports.generateWeeklySettlement = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
-
 // 3. Mark as Paid (🌟 Strictly Button Click - No Body Needed)
 exports.markSettlementAsPaid = async (req, res) => {
   try {
@@ -808,17 +817,13 @@ exports.createLedgerEntryForPayout = async (sellerId, amount) => {
   }
 };
 
-// 2. GET SETTLEMENTS (Frontend-la display panna)
+// 🌟 41. Fetch specific seller settlements for auto-sync logic
 exports.getSellerSettlements = async (req, res) => {
   try {
-    const { sellerId } = req.params;
-    const settlements = await Settlement.find({ sellerId })
-      .sort({ createdAt: -1 });
-
-    res.json({
-      success: true,
-      data: settlements
+    const data = await Settlement.find({ sellerId: req.params.sellerId }).sort({
+      createdAt: -1,
     });
+    res.json({ success: true, data });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
