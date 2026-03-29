@@ -440,7 +440,6 @@ exports.updateFinanceSettings = async (req, res) => {
 //     res.status(500).json({ success: false, error: err.message });
 //   }
 // };
-
 exports.generateWeeklySettlement = async (req, res) => {
     try {
         const { sellerId, startDate, endDate } = req.body;
@@ -448,12 +447,13 @@ exports.generateWeeklySettlement = async (req, res) => {
         const filterEnd = new Date(endDate);
         filterEnd.setHours(23, 59, 59, 999);
 
-        // 🌟 100% DYNAMIC: Fetching from FinanceSettings DB only
+        // 🌟 Fetch Finance Settings
         const settings = await FinanceSettings.findOne();
         if (!settings) {
-            return res.status(500).json({ success: false, message: "Finance Settings not found. Please configure commission/GST in Admin." });
+            return res.status(500).json({ success: false, message: "Finance Settings not found." });
         }
 
+        // 🌟 Fetching orders with Product details populated
         const orders = await Order.find({
             "sellerSplitData.sellerId": new mongoose.Types.ObjectId(sellerId),
             isSettled: { $ne: true },
@@ -461,10 +461,10 @@ exports.generateWeeklySettlement = async (req, res) => {
                 { status: "Delivered", updatedAt: { $gte: filterStart, $lte: filterEnd } },
                 { status: "Returned", updatedAt: { $gte: filterStart, $lte: filterEnd } },
             ],
-        });
+        }).populate('items.productId'); // 👈 Product info drill-down-kaga populate panrom
 
         if (!orders || orders.length === 0) {
-            return res.status(404).json({ success: false, message: "No eligible orders found for this period." });
+            return res.status(404).json({ success: false, message: "No eligible orders found." });
         }
 
         let payoutRows = [];
@@ -479,7 +479,6 @@ exports.generateWeeklySettlement = async (req, res) => {
         };
 
         orders.forEach((order) => {
-            // Finding the specific seller's data from the split array
             const split = order.sellerSplitData.find(
                 (s) => s.sellerId.toString() === sellerId
             );
@@ -488,35 +487,43 @@ exports.generateWeeklySettlement = async (req, res) => {
                 summary.count++;
                 const isReturned = order.status === "Returned";
 
-                // Getting amounts strictly from order data
+                // Filter ONLY this seller's products from the main items array
+                const sellerSpecificProducts = order.items.filter(
+                    item => item.sellerId.toString() === sellerId
+                );
+
                 const totalPaidByCustomer = order.billDetails?.totalAmount || order.totalAmount || 0;
                 const productSubtotal = split.sellerSubtotal || 0;
                 const deliveryCharge = order.billDetails?.deliveryCharge || 0;
 
-                if (isReturned) {
-                    /* 🌟 RETURN LOGIC: 
-                       Only the total paid amount is reversed. 
-                       Comm, GST, TDS are NOT calculated for returns to avoid double deduction.
-                    */
-                    const returnNetPayable = -(totalPaidByCustomer); 
+                let rowData = {
+                    orderId: order._id,
+                    orderDate: order.createdAt,
+                    statusDate: order.updatedAt,
+                    // 🌟 INTHA LINE THAN UNAKKU VENUM: Mapping product info
+                    products: sellerSpecificProducts.map(p => ({
+                        name: p.name || p.productId?.name,
+                        price: p.price,
+                        quantity: p.quantity,
+                        image: p.image || p.productId?.image
+                    })),
+                    totalItems: sellerSpecificProducts.length
+                };
 
+                if (isReturned) {
+                    const returnNetPayable = -(totalPaidByCustomer); 
                     summary.sales -= totalPaidByCustomer;
                     summary.final += returnNetPayable;
 
                     payoutRows.push({
-                        orderId: order._id,
-                        orderDate: order.createdAt,
-                        statusDate: order.updatedAt,
+                        ...rowData,
                         type: "RETURN",
                         amount: -totalPaidByCustomer,
-                        comm_gst_tds: 0, // No fees on returns
+                        comm_gst_tds: 0,
                         delivery_status: `₹0`,
                         net_payable: returnNetPayable,
                     });
                 } else {
-                    /* 🌟 SALE LOGIC: 
-                       Strictly using FinanceSettings from DB.
-                    */
                     const platformComm = productSubtotal * (Number(settings.commissionPercent) / 100);
                     const gstOnComm = platformComm * (Number(settings.gstOnCommissionPercent) / 100);
                     const tdsOnProduct = productSubtotal * (Number(settings.tdsPercent) / 100);
@@ -532,9 +539,7 @@ exports.generateWeeklySettlement = async (req, res) => {
                     summary.final += saleFinalShare;
 
                     payoutRows.push({
-                        orderId: order._id,
-                        orderDate: order.createdAt,
-                        statusDate: order.updatedAt,
+                        ...rowData,
                         type: "SALE",
                         amount: totalPaidByCustomer,
                         comm_gst_tds: totalFees.toFixed(2),
@@ -548,7 +553,7 @@ exports.generateWeeklySettlement = async (req, res) => {
         const newSettlement = new Settlement({
             sellerId,
             weekRange: `${startDate} to ${endDate}`,
-            payoutBreakdown: payoutRows,
+            payoutBreakdown: payoutRows, // 👈 Ippo ithukkulla individual products details sethu irukkum
             orderCount: summary.count,
             totalSales: Number(summary.sales.toFixed(2)),
             commissionTotal: Number(summary.comm.toFixed(2)),
@@ -561,7 +566,6 @@ exports.generateWeeklySettlement = async (req, res) => {
 
         await newSettlement.save();
 
-        // Marking orders as settled so they don't appear in next week's list
         const orderIds = orders.map((o) => o._id);
         await Order.updateMany(
             { _id: { $in: orderIds } },
@@ -577,7 +581,6 @@ exports.generateWeeklySettlement = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
-
 
 // 3. Mark as Paid (🌟 Strictly Button Click - No Body Needed)
 exports.markSettlementAsPaid = async (req, res) => {
