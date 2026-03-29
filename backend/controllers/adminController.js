@@ -292,152 +292,293 @@ exports.updateFinanceSettings = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+
+
+// exports.generateWeeklySettlement = async (req, res) => {
+//   try {
+//     const { sellerId, startDate, endDate } = req.body;
+//     const filterStart = new Date(startDate);
+//     const filterEnd = new Date(endDate);
+//     filterEnd.setHours(23, 59, 59, 999);
+
+//     const settings = (await FinanceSettings.findOne()) || {
+//       commissionPercent: 10,
+//       gstOnCommissionPercent: 18,
+//       tdsPercent: 2,
+//     };
+
+//     const orders = await Order.find({
+//       "sellerSplitData.sellerId": new mongoose.Types.ObjectId(sellerId),
+//       isSettled: { $ne: true },
+//       $or: [
+//         {
+//           status: "Delivered",
+//           updatedAt: { $gte: filterStart, $lte: filterEnd },
+//         },
+//         {
+//           status: "Returned",
+//           updatedAt: { $gte: filterStart, $lte: filterEnd },
+//         },
+//       ],
+//     });
+
+//     if (!orders || orders.length === 0) {
+//       return res
+//         .status(404)
+//         .json({ success: false, message: "No eligible orders found." });
+//     }
+
+//     let payoutRows = [];
+//     let summary = {
+//       sales: 0,
+//       comm: 0,
+//       gst: 0,
+//       tds: 0,
+//       delivery: 0,
+//       final: 0,
+//       count: 0,
+//     };
+
+//     orders.forEach((order) => {
+//       const split = order.sellerSplitData.find(
+//         (s) => s.sellerId.toString() === sellerId,
+//       );
+//       if (split) {
+//         summary.count++;
+//         const isReturned = order.status === "Returned";
+
+//         // 🌟 FIX: Getting total paid strictly from billDetails OR fallback to split amount
+//         const totalPaidByCustomer =
+//           order.billDetails?.totalAmount ||
+//           order.totalAmount ||
+//           split.sellerSubtotal ||
+//           0;
+//         const productAmount = split.sellerSubtotal || 0;
+
+//         // Delivery Deduction calculation
+//         const deliveryDeduction =
+//           totalPaidByCustomer > productAmount
+//             ? totalPaidByCustomer - productAmount
+//             : 0;
+
+//         if (isReturned) {
+//           // RETURN LOGIC: Mirrored from UI Image 64
+//           const returnFinalShare = -(totalPaidByCustomer + deliveryDeduction);
+
+//           summary.sales -= totalPaidByCustomer;
+//           summary.delivery += deliveryDeduction;
+//           summary.final += returnFinalShare;
+
+//           payoutRows.push({
+//             orderId: order._id,
+//             type: "RETURN",
+//             amount: -totalPaidByCustomer,
+//             comm_gst_tds: 0,
+//             delivery_status: `+ ₹${deliveryDeduction}`,
+//             net_payable: returnFinalShare,
+//           });
+//         } else {
+//           // SALE LOGIC: Strictly Following Frontend Sequences
+//           const platformComm =
+//             productAmount * (Number(settings.commissionPercent) / 100);
+//           const gstOnComm =
+//             platformComm * (Number(settings.gstOnCommissionPercent) / 100);
+//           const tdsOnComm = platformComm * (Number(settings.tdsPercent) / 100);
+
+//           const totalFees = platformComm + gstOnComm + tdsOnComm;
+//           const saleFinalShare =
+//             totalPaidByCustomer - (totalFees + deliveryDeduction);
+
+//           summary.sales += totalPaidByCustomer;
+//           summary.comm += platformComm;
+//           summary.gst += gstOnComm;
+//           summary.tds += tdsOnComm;
+//           summary.delivery += deliveryDeduction;
+//           summary.final += saleFinalShare;
+
+//           payoutRows.push({
+//             orderId: order._id,
+//             type: "SALE",
+//             amount: totalPaidByCustomer,
+//             comm_gst_tds: totalFees,
+//             delivery_status: `- ₹${deliveryDeduction}`,
+//             net_payable: saleFinalShare,
+//           });
+//         }
+//       }
+//     });
+
+//     // 🌟 FINAL SYNC: Mapping calculated summary to Settlement fields
+//     const newSettlement = new Settlement({
+//       sellerId,
+//       weekRange: `${startDate} to ${endDate}`,
+//       payoutBreakdown: payoutRows,
+//       orderCount: summary.count,
+//       totalSales: Number(summary.sales.toFixed(2)),
+//       commissionTotal: Number(summary.comm.toFixed(2)),
+//       gstTotal: Number(summary.gst.toFixed(2)),
+//       tdsTotal: Number(summary.tds.toFixed(2)),
+//       deliveryTotal: Number(summary.delivery.toFixed(2)),
+//       finalPayable: Number(summary.final.toFixed(2)), // 💰 Ippo 3907.80-nu katchithama varum
+//       status: "Pending",
+//     });
+
+//     await newSettlement.save();
+
+//     const orderIds = orders.map((o) => o._id);
+//     await Order.updateMany(
+//       { _id: { $in: orderIds } },
+//       { $set: { isSettled: true } },
+//     );
+
+//     res.json({
+//       success: true,
+//       message: "Weekly Settlement Generated! ✅",
+//       data: newSettlement,
+//     });
+//   } catch (err) {
+//     res.status(500).json({ success: false, error: err.message });
+//   }
+// };
+
 exports.generateWeeklySettlement = async (req, res) => {
-  try {
-    const { sellerId, startDate, endDate } = req.body;
-    const filterStart = new Date(startDate);
-    const filterEnd = new Date(endDate);
-    filterEnd.setHours(23, 59, 59, 999);
+    try {
+        const { sellerId, startDate, endDate } = req.body;
+        const filterStart = new Date(startDate);
+        const filterEnd = new Date(endDate);
+        filterEnd.setHours(23, 59, 59, 999);
 
-    const settings = (await FinanceSettings.findOne()) || {
-      commissionPercent: 10,
-      gstOnCommissionPercent: 18,
-      tdsPercent: 2,
-    };
-
-    const orders = await Order.find({
-      "sellerSplitData.sellerId": new mongoose.Types.ObjectId(sellerId),
-      isSettled: { $ne: true },
-      $or: [
-        {
-          status: "Delivered",
-          updatedAt: { $gte: filterStart, $lte: filterEnd },
-        },
-        {
-          status: "Returned",
-          updatedAt: { $gte: filterStart, $lte: filterEnd },
-        },
-      ],
-    });
-
-    if (!orders || orders.length === 0) {
-      return res
-        .status(404)
-        .json({ success: false, message: "No eligible orders found." });
-    }
-
-    let payoutRows = [];
-    let summary = {
-      sales: 0,
-      comm: 0,
-      gst: 0,
-      tds: 0,
-      delivery: 0,
-      final: 0,
-      count: 0,
-    };
-
-    orders.forEach((order) => {
-      const split = order.sellerSplitData.find(
-        (s) => s.sellerId.toString() === sellerId,
-      );
-      if (split) {
-        summary.count++;
-        const isReturned = order.status === "Returned";
-
-        // 🌟 FIX: Getting total paid strictly from billDetails OR fallback to split amount
-        const totalPaidByCustomer =
-          order.billDetails?.totalAmount ||
-          order.totalAmount ||
-          split.sellerSubtotal ||
-          0;
-        const productAmount = split.sellerSubtotal || 0;
-
-        // Delivery Deduction calculation
-        const deliveryDeduction =
-          totalPaidByCustomer > productAmount
-            ? totalPaidByCustomer - productAmount
-            : 0;
-
-        if (isReturned) {
-          // RETURN LOGIC: Mirrored from UI Image 64
-          const returnFinalShare = -(totalPaidByCustomer + deliveryDeduction);
-
-          summary.sales -= totalPaidByCustomer;
-          summary.delivery += deliveryDeduction;
-          summary.final += returnFinalShare;
-
-          payoutRows.push({
-            orderId: order._id,
-            type: "RETURN",
-            amount: -totalPaidByCustomer,
-            comm_gst_tds: 0,
-            delivery_status: `+ ₹${deliveryDeduction}`,
-            net_payable: returnFinalShare,
-          });
-        } else {
-          // SALE LOGIC: Strictly Following Frontend Sequences
-          const platformComm =
-            productAmount * (Number(settings.commissionPercent) / 100);
-          const gstOnComm =
-            platformComm * (Number(settings.gstOnCommissionPercent) / 100);
-          const tdsOnComm = platformComm * (Number(settings.tdsPercent) / 100);
-
-          const totalFees = platformComm + gstOnComm + tdsOnComm;
-          const saleFinalShare =
-            totalPaidByCustomer - (totalFees + deliveryDeduction);
-
-          summary.sales += totalPaidByCustomer;
-          summary.comm += platformComm;
-          summary.gst += gstOnComm;
-          summary.tds += tdsOnComm;
-          summary.delivery += deliveryDeduction;
-          summary.final += saleFinalShare;
-
-          payoutRows.push({
-            orderId: order._id,
-            type: "SALE",
-            amount: totalPaidByCustomer,
-            comm_gst_tds: totalFees,
-            delivery_status: `- ₹${deliveryDeduction}`,
-            net_payable: saleFinalShare,
-          });
+        // 🌟 100% DYNAMIC: Fetching from FinanceSettings DB only
+        const settings = await FinanceSettings.findOne();
+        if (!settings) {
+            return res.status(500).json({ success: false, message: "Finance Settings not found. Please configure commission/GST in Admin." });
         }
-      }
-    });
 
-    // 🌟 FINAL SYNC: Mapping calculated summary to Settlement fields
-    const newSettlement = new Settlement({
-      sellerId,
-      weekRange: `${startDate} to ${endDate}`,
-      payoutBreakdown: payoutRows,
-      orderCount: summary.count,
-      totalSales: Number(summary.sales.toFixed(2)),
-      commissionTotal: Number(summary.comm.toFixed(2)),
-      gstTotal: Number(summary.gst.toFixed(2)),
-      tdsTotal: Number(summary.tds.toFixed(2)),
-      deliveryTotal: Number(summary.delivery.toFixed(2)),
-      finalPayable: Number(summary.final.toFixed(2)), // 💰 Ippo 3907.80-nu katchithama varum
-      status: "Pending",
-    });
+        const orders = await Order.find({
+            "sellerSplitData.sellerId": new mongoose.Types.ObjectId(sellerId),
+            isSettled: { $ne: true },
+            $or: [
+                { status: "Delivered", updatedAt: { $gte: filterStart, $lte: filterEnd } },
+                { status: "Returned", updatedAt: { $gte: filterStart, $lte: filterEnd } },
+            ],
+        });
 
-    await newSettlement.save();
+        if (!orders || orders.length === 0) {
+            return res.status(404).json({ success: false, message: "No eligible orders found for this period." });
+        }
 
-    const orderIds = orders.map((o) => o._id);
-    await Order.updateMany(
-      { _id: { $in: orderIds } },
-      { $set: { isSettled: true } },
-    );
+        let payoutRows = [];
+        let summary = {
+            sales: 0,
+            comm: 0,
+            gst: 0,
+            tds: 0,
+            delivery: 0,
+            final: 0,
+            count: 0,
+        };
 
-    res.json({
-      success: true,
-      message: "Weekly Settlement Generated! ✅",
-      data: newSettlement,
-    });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
+        orders.forEach((order) => {
+            // Finding the specific seller's data from the split array
+            const split = order.sellerSplitData.find(
+                (s) => s.sellerId.toString() === sellerId
+            );
+
+            if (split) {
+                summary.count++;
+                const isReturned = order.status === "Returned";
+
+                // Getting amounts strictly from order data
+                const totalPaidByCustomer = order.billDetails?.totalAmount || order.totalAmount || 0;
+                const productSubtotal = split.sellerSubtotal || 0;
+                const deliveryCharge = order.billDetails?.deliveryCharge || 0;
+
+                if (isReturned) {
+                    /* 🌟 RETURN LOGIC: 
+                       Only the total paid amount is reversed. 
+                       Comm, GST, TDS are NOT calculated for returns to avoid double deduction.
+                    */
+                    const returnNetPayable = -(totalPaidByCustomer); 
+
+                    summary.sales -= totalPaidByCustomer;
+                    summary.final += returnNetPayable;
+
+                    payoutRows.push({
+                        orderId: order._id,
+                        orderDate: order.createdAt,
+                        statusDate: order.updatedAt,
+                        type: "RETURN",
+                        amount: -totalPaidByCustomer,
+                        comm_gst_tds: 0, // No fees on returns
+                        delivery_status: `₹0`,
+                        net_payable: returnNetPayable,
+                    });
+                } else {
+                    /* 🌟 SALE LOGIC: 
+                       Strictly using FinanceSettings from DB.
+                    */
+                    const platformComm = productSubtotal * (Number(settings.commissionPercent) / 100);
+                    const gstOnComm = platformComm * (Number(settings.gstOnCommissionPercent) / 100);
+                    const tdsOnProduct = productSubtotal * (Number(settings.tdsPercent) / 100);
+
+                    const totalFees = platformComm + gstOnComm + tdsOnProduct;
+                    const saleFinalShare = totalPaidByCustomer - (totalFees + deliveryCharge);
+
+                    summary.sales += totalPaidByCustomer;
+                    summary.comm += platformComm;
+                    summary.gst += gstOnComm;
+                    summary.tds += tdsOnProduct;
+                    summary.delivery += deliveryCharge;
+                    summary.final += saleFinalShare;
+
+                    payoutRows.push({
+                        orderId: order._id,
+                        orderDate: order.createdAt,
+                        statusDate: order.updatedAt,
+                        type: "SALE",
+                        amount: totalPaidByCustomer,
+                        comm_gst_tds: totalFees.toFixed(2),
+                        delivery_status: `- ₹${deliveryCharge}`,
+                        net_payable: Number(saleFinalShare.toFixed(2)),
+                    });
+                }
+            }
+        });
+
+        const newSettlement = new Settlement({
+            sellerId,
+            weekRange: `${startDate} to ${endDate}`,
+            payoutBreakdown: payoutRows,
+            orderCount: summary.count,
+            totalSales: Number(summary.sales.toFixed(2)),
+            commissionTotal: Number(summary.comm.toFixed(2)),
+            gstTotal: Number(summary.gst.toFixed(2)),
+            tdsTotal: Number(summary.tds.toFixed(2)),
+            deliveryTotal: Number(summary.delivery.toFixed(2)),
+            finalPayable: Number(summary.final.toFixed(2)),
+            status: "Pending",
+        });
+
+        await newSettlement.save();
+
+        // Marking orders as settled so they don't appear in next week's list
+        const orderIds = orders.map((o) => o._id);
+        await Order.updateMany(
+            { _id: { $in: orderIds } },
+            { $set: { isSettled: true } }
+        );
+
+        res.json({
+            success: true,
+            message: "Weekly Settlement Generated! ✅",
+            data: newSettlement,
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
 };
+
+
 // 3. Mark as Paid (🌟 Strictly Button Click - No Body Needed)
 exports.markSettlementAsPaid = async (req, res) => {
   try {
@@ -664,13 +805,17 @@ exports.createLedgerEntryForPayout = async (sellerId, amount) => {
   }
 };
 
-// 🌟 41. Fetch specific seller settlements for auto-sync logic
+// 2. GET SETTLEMENTS (Frontend-la display panna)
 exports.getSellerSettlements = async (req, res) => {
   try {
-    const data = await Settlement.find({ sellerId: req.params.sellerId }).sort({
-      createdAt: -1,
+    const { sellerId } = req.params;
+    const settlements = await Settlement.find({ sellerId })
+      .sort({ createdAt: -1 });
+
+    res.json({
+      success: true,
+      data: settlements
     });
-    res.json({ success: true, data });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

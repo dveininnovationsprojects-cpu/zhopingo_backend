@@ -81,6 +81,7 @@ router.post("/verify-seller", verifySellerStatus);
 router.get('/customers', getAllCustomers);
 router.put("/sellers/toggle-brand/:id", toggleBrandStatus);
 router.put('/sellers/:id', protect, updateSellerStatus);
+router.get('/seller/:sellerId', getSellerSettlements);
 
 
 router.get('/finance-settings', protect, getFinanceSettings);

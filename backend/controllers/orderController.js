@@ -549,48 +549,54 @@ const FinanceSettings = require('../models/FinanceSettings');
 const axios = require('axios');
 const mongoose = require('mongoose');
 
-const DELHI_TOKEN = "9b44fee45422e3fe8073dee9cfe7d51f9fff7629";
-const ADMIN_MARGIN = 40;
+const IS_PROD = process.env.NODE_ENV === "production";
+const DELHI_TOKEN = process.env.DELHIVERY_TOKEN || "9b44fee45422e3fe8073dee9cfe7d51f9fff7629";
+const DELHI_URL = IS_PROD 
+    ? "https://track.delhivery.com" 
+    : "https://staging-express.delhivery.com";
 
 /* =====================================================
-    ⚖️ UNIVERSAL UNIT CONVERTER
+    ⚖️ UNIVERSAL UNIT CONVERTER (Strict Metric Sync)
+    Handles: kg, Kg, KG, g, gram, Gram, ML, ml etc.
 ===================================================== */
-const universalWeightSync = (value, unit) => {
+const getWeightInKg = (value, unit) => {
     const val = Number(value) || 0;
-    const unitLower = unit?.toLowerCase() || 'g';
-    if (['kg', 'l', 'liter', 'kilogram'].includes(unitLower)) return val;
-    if (['g', 'gram', 'ml', 'milliliter'].includes(unitLower)) return val / 1000;
-    return val > 0 ? val / 1000 : 0.2; 
+    const u = unit?.toLowerCase().trim() || 'g';
+
+    // 🌟 Normalize to Kilograms for Delhivery API
+    if (['kg', 'kilogram', 'l', 'liter'].includes(u)) return val;
+    if (['g', 'gram', 'ml', 'milliliter'].includes(u)) return val / 1000;
+    
+    // Industrial Standard: If no unit provided, assume grams if value is high
+    return val >= 10 ? val / 1000 : val; 
 };
 
 /* =====================================================
-    🚚 HELPER: DYNAMIC SHIPPING RATE (Pure API Cost Only)
+    🚚 HELPER: DYNAMIC SHIPPING RATE (Real-World standard)
 ===================================================== */
-const getLiveShippingRate = async (destPincode, weightValue, unit, sellerPincode, paymentMode) => {
+const getLiveShippingRate = async (destPincode, weightKg, originPincode, paymentMode) => {
     try {
-        const weightInKg = universalWeightSync(weightValue, unit).toFixed(2);
-        const response = await axios.get("https://staging-express.delhivery.com/api/kinko/v1/invoice/charges/.json", {
+        const response = await axios.get(`${DELHI_URL}/api/kinko/v1/invoice/charges/.json`, {
             params: { 
                 ss: "R", 
                 pt: paymentMode === "COD" ? "Cash" : "Pre-paid", 
-                o_pin: sellerPincode, 
+                o_pin: originPincode, 
                 d_pin: destPincode, 
-                weight: weightInKg 
+                weight: weightKg.toFixed(3) // Precise to grams
             },
             headers: { 'Authorization': `Token ${DELHI_TOKEN}` }
         });
 
-        // 🌟 Pure API Cost Mattum Edukkuroam (No hidden margins here)
+        // 🌟 Blinkit Standard: Pure API Cost (Inclusive of all taxes & fuel surcharges)
         const apiRate = response.data?.[0]?.total_amount || response.data?.[0]?.gross_amount || 0;
-        return Math.ceil(apiRate);
+        return Math.ceil(Number(apiRate));
     } catch (error) {
-        return 0; // If API fails
+        console.error("❌ Delhivery API Error:", error.message);
+        return 0; 
     }
 };
-
 /* =====================================================
     🚚 MASTER CONTROLLER: calculateLiveDeliveryRate 
-    (Strict Product-Wise Free/Paid Split Logic)
 ===================================================== */
 exports.calculateLiveDeliveryRate = async (req, res) => {
     try {
@@ -600,87 +606,64 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
             return res.status(400).json({ success: false, message: "Cart items are required" });
         }
 
-        // 1️⃣ Unique Sellers-ah split panroam
         const uniqueSellers = [...new Set(items.map(item => item.sellerId?._id || item.sellerId))];
         
         let totalCustomerGrandTotal = 0;
-        let totalActualLogisticsCost = 0;
-        let sellerWiseBreakdown = [];
+        let breakdown = [];
 
-        // 2️⃣ Seller-wise loop starts
         for (const sId of uniqueSellers) {
             const sellerItems = items.filter(item => (item.sellerId?._id || item.sellerId) === sId);
             
-            // 🌟 THE CORE LOGIC: Find ONLY the paid products in this seller's list
+            // 🌟 Logic: Check strictly for PAID products in this seller's package
             const paidProducts = sellerItems.filter(item => 
-                item.isFreeDelivery === false || 
-                item.productId?.isFreeDelivery === false ||
-                item.isFreeDelivery === "false"
+                String(item.isFreeDelivery) === "false" || 
+                String(item.productId?.isFreeDelivery) === "false"
             );
 
-            // Case A: Intha seller kitta ellame FREE products mattum dhaan irukku
             if (paidProducts.length === 0) {
-                sellerWiseBreakdown.push({
-                    sellerId: sId,
-                    charge: 0,
-                    status: "FREE PACKAGE (All items free)",
-                    paidWeight: "0g"
-                });
-                console.log(`✅ Seller ${sId} is fully FREE`);
-            } 
-            // Case B: Intha seller kitta PAID products irukku
-            else {
-                // ⚖️ STRICT WEIGHT CALCULATION: Sum ONLY the weight of Paid Products
-                const totalPaidWeight = paidProducts.reduce((sum, it) => {
-                    const rawW = it.weightValue || it.weight || 500;
-                    const numW = Number(String(rawW).replace(/[^0-9.]/g, '')) || 500;
-                    return sum + (numW * it.quantity);
+                breakdown.push({ sellerId: sId, charge: 0, status: "FREE DELIVERY" });
+            } else {
+                // ⚖️ STRICT WEIGHT CALCULATION
+                const packageWeightKg = paidProducts.reduce((sum, it) => {
+                    const wValue = it.weightValue || it.weight || 0;
+                    const wUnit = it.unit || 'g';
+                    return sum + (getWeightInKg(wValue, wUnit) * it.quantity);
                 }, 0);
 
-                const origin = sellerItems[0]?.sellerId?.pincode || "600001";
+                const sellerDoc = await Seller.findById(sId);
+                const originPincode = sellerDoc?.shopAddress?.pincode || sellerDoc?.pincode || "600001";
 
-                // 📡 Get Rate from Delhivery ONLY for the paid products' weight
-                let apiCost = await getLiveShippingRate(pincode, totalPaidWeight, 'g', origin, paymentMode);
-                
-                // Fallback Manual Calculation (If API returns 0)
-                if (apiCost === 0) {
-                    const kg = universalWeightSync(totalPaidWeight, 'g');
-                    // Manual slab logic: 500g -> 40rs base, extra 500g -> +15rs
-                    apiCost = 40 + (Math.max(0, Math.ceil((kg - 0.5) / 0.5)) * 15);
+                // 📡 REAL-TIME API FETCH
+                const apiCharge = await getLiveShippingRate(pincode, packageWeightKg, originPincode, paymentMode);
+
+                if (apiCharge === 0 && IS_PROD) {
+                     // Production-la API fail aana guesswork panna koodathu (Security rule)
+                    throw new Error(`Shipping calculation unavailable for pincode ${pincode}`);
                 }
 
-                // Strictly ₹80 minimum for any paid seller package
-                const customerPayable = Math.max(80, apiCost);
-                
-                totalCustomerGrandTotal += customerPayable;
-                totalActualLogisticsCost += apiCost;
+                // 🌟 Use fallback ONLY in Sandbox, Production-la strictly API value
+                const finalSellerCharge = (apiCharge === 0 && !IS_PROD) ? 80 : apiCharge;
 
-                sellerWiseBreakdown.push({
+                totalCustomerGrandTotal += finalSellerCharge;
+                breakdown.push({
                     sellerId: sId,
-                    charge: customerPayable,
-                    actualCost: apiCost,
-                    calculatedWeight: totalPaidWeight + "g",
-                    status: "PAID PACKAGE"
+                    charge: finalSellerCharge,
+                    weight: packageWeightKg.toFixed(2) + "kg",
+                    status: "PAID"
                 });
-                console.log(`🚚 Seller ${sId} Paid Weight: ${totalPaidWeight}g | Charge: ₹${customerPayable}`);
             }
         }
 
-        // 🌟 FINAL RESPONSE: Total customer grand total sum
         res.json({ 
             success: true, 
             finalCharge: totalCustomerGrandTotal, 
-            actualLogisticsCost: totalActualLogisticsCost,
-            adminLogisticsProfit: totalCustomerGrandTotal - totalActualLogisticsCost,
-            breakdown: sellerWiseBreakdown
+            breakdown: breakdown 
         });
 
     } catch (err) {
-        console.error("Rate API Error:", err.message);
-        res.status(500).json({ success: false, finalCharge: 80 });
+        res.status(500).json({ success: false, message: err.message || "Logistics calculation failed" });
     }
 };
-
 
 /* =====================================================
     🌟 MASTER CREATE ORDER (Direct Payload Sync Fix)
