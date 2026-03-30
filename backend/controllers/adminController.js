@@ -440,12 +440,10 @@ exports.updateFinanceSettings = async (req, res) => {
 //     res.status(500).json({ success: false, error: err.message });
 //   }
 // };
-
 exports.generateWeeklySettlement = async (req, res) => {
     try {
         const { sellerId, startDate, endDate } = req.body;
         
-        // 🕒 Strict Time Formatting: Start (00:00:00) to End (23:59:59)
         const filterStart = new Date(startDate);
         filterStart.setHours(0, 0, 0, 0);
         
@@ -458,25 +456,24 @@ exports.generateWeeklySettlement = async (req, res) => {
             tdsPercent: 2,
         };
 
-        // 🔍 Fetching Delivered/Returned orders within the STRICT date range
         const orders = await Order.find({
             "sellerSplitData.sellerId": new mongoose.Types.ObjectId(sellerId),
-            isSettled: { $ne: true }, // Skip already settled orders
+            isSettled: { $ne: true },
             $or: [
                 { status: "Delivered", updatedAt: { $gte: filterStart, $lte: filterEnd } },
                 { status: "Returned", updatedAt: { $gte: filterStart, $lte: filterEnd } },
             ],
         }).populate('items.productId');
 
+        // 🛡️ Logic: Pudhu order illana, old settlement-ah view panra maari return panrom
         if (!orders || orders.length === 0) {
-            // Check if a settlement already exists for this week to show old data
             const existing = await Settlement.findOne({ sellerId, weekRange: `${startDate} to ${endDate}` })
                 .populate('sellerId', 'shopName email');
             
             if (existing) {
-                return res.json({ success: true, message: "Viewing existing settlement data.", data: existing });
+                return res.json({ success: true, message: "Existing settlement data retrieved.", data: existing });
             }
-            return res.status(404).json({ success: false, message: "No new orders to settle for this period." });
+            return res.status(404).json({ success: false, message: "No orders found to settle." });
         }
 
         let newPayoutRows = [];
@@ -501,7 +498,6 @@ exports.generateWeeklySettlement = async (req, res) => {
                         image: p.image || p.productId?.image
                     }));
 
-                // Logic: Sale or Return breakdown
                 const platformComm = isReturned ? 0 : productSubtotal * (Number(settings.commissionPercent) / 100);
                 const gstOnComm = isReturned ? 0 : platformComm * (Number(settings.gstOnCommissionPercent) / 100);
                 const tdsOnProduct = isReturned ? 0 : productSubtotal * (Number(settings.tdsPercent) / 100);
@@ -530,11 +526,15 @@ exports.generateWeeklySettlement = async (req, res) => {
             }
         });
 
-        // 🌟 ATOMIC SYNC LOGIC: Find existing settlement for the week or create new
+        // 🌟 THE FIX: Atomic Upsert Logic
         let settlement = await Settlement.findOne({ sellerId, weekRange: `${startDate} to ${endDate}` });
 
         if (settlement) {
-            // Update existing week record by adding new orders
+            // 🛡️ Safety Check: PayoutBreakdown array illana initialize panrom
+            if (!settlement.payoutBreakdown) {
+                settlement.payoutBreakdown = [];
+            }
+            
             settlement.payoutBreakdown.push(...newPayoutRows);
             settlement.orderCount += runningSummary.count;
             settlement.totalSales += Number(runningSummary.sales.toFixed(2));
@@ -544,7 +544,6 @@ exports.generateWeeklySettlement = async (req, res) => {
             settlement.deliveryTotal += Number(runningSummary.delivery.toFixed(2));
             settlement.finalPayable += Number(runningSummary.final.toFixed(2));
         } else {
-            // Create fresh record for the week
             settlement = new Settlement({
                 sellerId,
                 weekRange: `${startDate} to ${endDate}`,
@@ -562,7 +561,6 @@ exports.generateWeeklySettlement = async (req, res) => {
 
         await settlement.save();
 
-        // Mark these orders as settled so they don't get picked up again
         const orderIds = orders.map((o) => o._id);
         await Order.updateMany({ _id: { $in: orderIds } }, { $set: { isSettled: true } });
 
@@ -570,11 +568,12 @@ exports.generateWeeklySettlement = async (req, res) => {
 
         res.json({
             success: true,
-            message: "Settlement synced with individual order details! ✅",
+            message: "Settlement synced successfully! ✅",
             data: populatedData,
         });
 
     } catch (err) {
+        console.error("Critical Error:", err);
         res.status(500).json({ success: false, error: err.message });
     }
 };
