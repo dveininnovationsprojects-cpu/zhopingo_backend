@@ -6,6 +6,10 @@ const logisticsController = require('../controllers/logisticsController');
     🚚 ZHOPINGO LOGISTICS & TRACKING ROUTES
 ===================================================== */
 
+// 📍 LIVE RATE CALCULATION (Frontend Cart Screen call panradhu idhu dhaan)
+// Route: /api/v1/logistics/calculate-shipping
+router.post('/calculate-shipping', logisticsController.calculateLiveDeliveryRate);
+
 // 📍 SERVICEABILITY
 // Check if Delhivery delivers to this pincode (Hits Delhivery API)
 router.get('/check-serviceability', logisticsController.checkServiceability);

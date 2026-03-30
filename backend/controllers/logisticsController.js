@@ -55,6 +55,56 @@ exports.getRealTimeRateInternal = async (pincode, weightKg, originPincode, payme
 };
 
 /* =====================================================
+    🌟 7. PUBLIC RATE CALCULATION (For Frontend Cart)
+    Logic: Connects Frontend Request to Internal API Logic
+===================================================== */
+exports.calculateLiveDeliveryRate = async (req, res) => {
+    try {
+        const { pincode, items, paymentMode } = req.body;
+
+        if (!pincode || !items || items.length === 0) {
+            return res.status(400).json({ success: false, message: "Missing pincode or items" });
+        }
+
+        // 🛡️ 1. Check if any item has Free Delivery
+        const hasFreeDeliveryItem = items.some(item => item.isFreeDelivery === true);
+        if (hasFreeDeliveryItem) {
+            return res.json({ success: true, finalCharge: 0, type: "FREE" });
+        }
+
+        // ⚖️ 2. Total Weight Calculation
+        let totalWeightKg = items.reduce((sum, item) => {
+            const kg = getWeightInKg(item.weightValue || item.weight, item.unit || 'g');
+            return sum + (kg * item.quantity);
+        }, 0);
+
+        // 🚚 3. Get Seller Origin (Usually first seller or default)
+        const firstSellerId = items[0].sellerId;
+        const sellerDoc = await Seller.findById(firstSellerId);
+        const originPin = sellerDoc?.shopAddress?.pincode || "600001";
+
+        // 📡 4. Call our Internal API function
+        const liveRate = await exports.getRealTimeRateInternal(
+            pincode, 
+            totalWeightKg, 
+            originPin, 
+            paymentMode || "Pre-paid"
+        );
+
+        res.json({ 
+            success: true, 
+            finalCharge: liveRate, 
+            type: "PAID",
+            weight: totalWeightKg.toFixed(3)
+        });
+
+    } catch (err) {
+        console.error("Cart Rate Error:", err.message);
+        res.status(500).json({ success: false, finalCharge: 80, message: "Fallback applied" });
+    }
+};
+
+/* =====================================================
     🌟 2. CREATE SHIPMENT (AWB Generation + DB Auto-Save)
     Logic: Automatically links AWB to Order & Seller Split.
 ===================================================== */
