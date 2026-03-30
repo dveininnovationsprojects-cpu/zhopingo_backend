@@ -312,47 +312,54 @@ exports.logout = async (req, res) => {
   res.json({ success: true });
 };
 
-
 /* =====================================================
-    📍 2. UPDATE USER ADDRESS (Specific Address Sync)
+    📍 UPDATE USER ADDRESS DETAILS (Edit Mode)
 ===================================================== */
 exports.updateUserAddress = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { addressId } = req.params; // URL-la irundhu address ID varanum
-    const updateData = req.body;
+    const { addressId } = req.params; // URL: /auth/address/update/:addressId
+    const { receiverName, flatNo, area, pincode, addressType, phone, isDefault } = req.body;
 
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-    // 🌟 FIND & UPDATE: Address Book-la irukkura specific address-ah target panrom
+    // 1. Address book-la irundhu specific address index-ah kandupidikirom
     const addressIndex = user.addressBook.findIndex(addr => addr._id.toString() === addressId);
 
     if (addressIndex === -1) {
       return res.status(404).json({ success: false, message: "Address not found in your book" });
     }
 
-    // Default setting logic: Ippo update panra address-ah default-ah mathuna, mathadhai disable pannanum
-    if (updateData.isDefault === true) {
+    // 2. Default Toggle Logic (Oru address-ah default-ah mathuna, mathadhai false aakanum)
+    if (isDefault === true) {
       user.addressBook.forEach(addr => addr.isDefault = false);
     }
 
-    // Existing data-oda new data-ah merge panrom (Atomic Update)
+    // 3. ATOMIC UPDATE: Puthiya details-ah mattum update panrom
+    // Existing fields fallback kuduthurukaen so data loss aagaadhu
     user.addressBook[addressIndex] = {
       ...user.addressBook[addressIndex].toObject(),
-      ...updateData
+      receiverName: receiverName || user.addressBook[addressIndex].receiverName,
+      flatNo: flatNo || user.addressBook[addressIndex].flatNo,
+      area: area || user.addressBook[addressIndex].area,
+      pincode: pincode || user.addressBook[addressIndex].pincode,
+      addressType: addressType || user.addressBook[addressIndex].addressType,
+      phone: phone || user.addressBook[addressIndex].phone,
+      isDefault: isDefault !== undefined ? isDefault : user.addressBook[addressIndex].isDefault
     };
 
+    // 4. Save to DB
     await user.save();
 
     res.json({
       success: true,
-      message: "Address updated successfully ✅",
-      addressBook: user.addressBook
+      message: "Address details updated successfully ✅",
+      addressBook: user.addressBook // Frontend sync-kaga full book-ah anupurom
     });
 
   } catch (err) {
-    console.error("Address Update Error:", err.message);
+    console.error("Address Edit Error:", err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 };
