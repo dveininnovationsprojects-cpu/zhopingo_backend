@@ -311,3 +311,48 @@ exports.getWishlist = async (req, res) => {
 exports.logout = async (req, res) => {
   res.json({ success: true });
 };
+
+
+/* =====================================================
+    📍 2. UPDATE USER ADDRESS (Specific Address Sync)
+===================================================== */
+exports.updateUserAddress = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { addressId } = req.params; // URL-la irundhu address ID varanum
+    const updateData = req.body;
+
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+    // 🌟 FIND & UPDATE: Address Book-la irukkura specific address-ah target panrom
+    const addressIndex = user.addressBook.findIndex(addr => addr._id.toString() === addressId);
+
+    if (addressIndex === -1) {
+      return res.status(404).json({ success: false, message: "Address not found in your book" });
+    }
+
+    // Default setting logic: Ippo update panra address-ah default-ah mathuna, mathadhai disable pannanum
+    if (updateData.isDefault === true) {
+      user.addressBook.forEach(addr => addr.isDefault = false);
+    }
+
+    // Existing data-oda new data-ah merge panrom (Atomic Update)
+    user.addressBook[addressIndex] = {
+      ...user.addressBook[addressIndex].toObject(),
+      ...updateData
+    };
+
+    await user.save();
+
+    res.json({
+      success: true,
+      message: "Address updated successfully ✅",
+      addressBook: user.addressBook
+    });
+
+  } catch (err) {
+    console.error("Address Update Error:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+};

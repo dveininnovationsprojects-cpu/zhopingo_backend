@@ -10,6 +10,7 @@ const {
   addUserAddress,
   toggleWishlist,
   getWishlist,
+  updateUserAddress,
   logout
 } = require('../controllers/authController');
 
@@ -24,5 +25,6 @@ router.get('/wishlist/all', protect, getWishlist);
 router.put('/add-address/:userId', protect, addUserAddress);
 router.put('/update-profile', protect, updateProfile);
 router.post('/logout', logout);
+router.put('/address/update/:addressId', protect, updateUserAddress);
 
 module.exports = router;
