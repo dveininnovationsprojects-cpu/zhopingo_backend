@@ -441,6 +441,7 @@ exports.updateFinanceSettings = async (req, res) => {
 //   }
 // };
 // 🌟 1. GENERATE WEEKLY SETTLEMENT (Detailed Breakdown Sync)
+
 exports.generateWeeklySettlement = async (req, res) => {
     try {
         const { sellerId, startDate, endDate } = req.body;
@@ -466,124 +467,132 @@ exports.generateWeeklySettlement = async (req, res) => {
         }
 
         let newPayoutRows = [];
-        let batchStats = { sales: 0, comm: 0, gst: 0, tds: 0, delivDed: 0, partnerBill: 0, adminProf: 0, final: 0, count: 0 };
+        let batchSummary = { sales: 0, comm: 0, gst: 0, tds: 0, delivery: 0, partnerShare: 0, adminProfit: 0, final: 0, count: 0 };
 
         orders.forEach((order) => {
             const split = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId);
             if (split) {
                 const isReturned = order.status === "Returned";
                 
-                // 🚚 Logistics Calculation Engine
-                const totalBillByCustomer = order.billDetails?.totalAmount || 0;
-                const totalItemsRevenue = order.items.reduce((sum, i) => sum + (i.price * i.quantity), 0);
-                const actualShippingPaidByCustomer = totalBillByCustomer - totalItemsRevenue;
-                const isFreeDelivery = actualShippingPaidByCustomer <= 0;
-
-                // Partner gets ₹40 flat for delivery (Admin choice)
-                const partnerFee = 40; 
+                // 🚀 INDUSTRY LOGIC: 
+                // Customer shipping charge pay pannirundha (> 0), seller-ku deduction 0.
+                const totalShippingPaidByCustomer = order.billDetails?.deliveryCharge || 0;
 
                 order.items.filter(item => item.sellerId.toString() === sellerId).forEach(p => {
                     const prodName = p.name || p.productId?.name || "Product";
                     
+                    // 🎯 Check if this SPECIFIC product has free delivery set by seller
+                    const isProductFreeDelivery = p.productId?.isFreeDelivery === true;
+
                     const alreadyPresent = settlement?.payoutBreakdown?.some(row => 
                         row.orderId.toString() === order._id.toString() && row.productName === prodName
                     );
 
                     if (!alreadyPresent) {
-                        const productPrice = p.price * p.quantity;
-                        let cAmt = 0, gAmt = 0, tAmt = 0, sDed = 0, adminShipProf = 0, net = 0;
-                        const partnerSharePerItem = partnerFee / order.items.length;
+                        const itemPrice = p.price * p.quantity;
+                        let cAmt = 0, gAmt = 0, tAmt = 0, sDeduction = 0, shipProfit = 0, partnerCost = 40, net = 0;
 
                         if (order.status === "Delivered") {
-                            cAmt = productPrice * (settings.commissionPercent / 100);
+                            cAmt = itemPrice * (settings.commissionPercent / 100);
                             gAmt = cAmt * (settings.gstOnCommissionPercent / 100);
-                            tAmt = productPrice * (settings.tdsPercent / 100);
+                            tAmt = itemPrice * (settings.tdsPercent / 100);
 
-                            if (!isFreeDelivery) {
-                                sDed = 0; // Customer paid ₹80, seller pays 0.
-                                adminShipProf = (actualShippingPaidByCustomer / order.items.length) - partnerSharePerItem;
+                            // 🚚 LOGISTICS SYNC
+                            if (totalShippingPaidByCustomer > 0) {
+                                // CASE: PAID DELIVERY
+                                sDeduction = 0; 
+                                // Admin gets the collected shipping (Example split: Collected - Partner Cost)
+                                shipProfit = (totalShippingPaidByCustomer / order.items.length) - partnerCost;
+                            } else if (isProductFreeDelivery) {
+                                // CASE: FREE DELIVERY (Seller pays)
+                                sDeduction = 45; // Flat fee from seller
+                                shipProfit = sDeduction - partnerCost;
                             } else {
-                                sDed = 45 / order.items.length; // Seller pays ₹45.
-                                adminShipProf = sDed - partnerSharePerItem;
+                                // DEFAULT: Standard process
+                                sDeduction = 0;
+                                shipProfit = 0;
+                                partnerCost = 0;
                             }
 
-                            net = productPrice - (cAmt + gAmt + tAmt + sDed);
+                            net = itemPrice - (cAmt + gAmt + tAmt + sDeduction);
 
-                            // 📊 Update Batch Summary
-                            batchStats.sales += productPrice;
-                            batchStats.comm += cAmt;
-                            batchStats.gst += gAmt;
-                            batchStats.tds += tAmt;
-                            batchStats.delivDed += sDed;
-                            batchStats.partnerBill += partnerSharePerItem;
-                            batchStats.adminProf += adminShipProf;
-                            batchStats.final += net;
+                            batchSummary.sales += itemPrice;
+                            batchSummary.comm += cAmt;
+                            batchSummary.gst += gAmt;
+                            batchSummary.tds += tAmt;
+                            batchSummary.delivery += sDeduction;
+                            batchSummary.partnerShare += partnerCost;
+                            batchSummary.adminProfit += shipProfit;
+                            batchSummary.final += net;
                         } else {
-                            net = -productPrice;
-                            batchStats.sales -= productPrice;
-                            batchStats.final -= productPrice;
+                            net = -itemPrice;
+                            batchSummary.sales -= itemPrice;
+                            batchSummary.final -= itemPrice;
                         }
 
-                        batchStats.count++;
+                        batchSummary.count++;
 
                         newPayoutRows.push({
                             orderId: order._id,
-                            productName: prodName,
-                            type: order.status.toUpperCase(),
-                            customerPaidTotal: Number((productPrice + (actualShippingPaidByCustomer / order.items.length)).toFixed(2)),
-                            productPriceOnly: productPrice,
-                            platformCommission: Number(cAmt.toFixed(2)),
-                            gstOnCommission: Number(gAmt.toFixed(2)),
-                            tdsDeduction: Number(tAmt.toFixed(2)),
-                            shippingType: isFreeDelivery ? "FREE" : "PAID",
-                            customerPaidShipping: Number((actualShippingPaidByCustomer / order.items.length).toFixed(2)),
-                            sellerShippingDeduction: Number(sDed.toFixed(2)),
-                            logisticsPartnerCost: Number(partnerSharePerItem.toFixed(2)),
-                            adminShippingProfit: Number(adminShipProf.toFixed(2)),
-                            netPayableToSeller: Number(net.toFixed(2)),
+                            orderDate: order.createdAt,
                             statusDate: order.updatedAt,
                             deliveryDate: order.status === "Delivered" ? order.updatedAt : null,
                             returnDate: isReturned ? order.updatedAt : null,
+                            type: order.status.toUpperCase(),
+                            productName: prodName,
+                            quantity: p.quantity,
+                            amount: isReturned ? -itemPrice : itemPrice,
+                            commissionAmount: Number(cAmt.toFixed(2)),
+                            gstAmount: Number(gAmt.toFixed(2)),
+                            tdsAmount: Number(tAmt.toFixed(2)),
+                            
+                            deliveryType: totalShippingPaidByCustomer > 0 ? "PAID" : "FREE",
+                            customerPaidShipping: Number((totalShippingPaidByCustomer / order.items.length).toFixed(2)),
+                            sellerDeduction: Number(sDeduction.toFixed(2)),
+                            logisticsPartnerCost: Number(partnerCost.toFixed(2)),
+                            adminProfitOnShipping: Number(shipProfit.toFixed(2)),
+                            
+                            netPayable: Number(net.toFixed(2))
                         });
                     }
                 });
             }
         });
 
-        // Atomic DB Update
+        // Save & Mark settled logic...
         if (newPayoutRows.length > 0) {
             if (settlement) {
                 settlement.payoutBreakdown.push(...newPayoutRows);
-                settlement.totalOrderCount += batchStats.count;
-                settlement.totalSalesRevenue = Number((settlement.totalSalesRevenue + batchStats.sales).toFixed(2));
-                settlement.totalPlatformCommission = Number((settlement.totalPlatformCommission + batchStats.comm).toFixed(2));
-                settlement.totalGstOnCommission = Number((settlement.totalGstOnCommission + batchStats.gst).toFixed(2));
-                settlement.totalTdsDeduction = Number((settlement.totalTdsDeduction + batchStats.tds).toFixed(2));
-                settlement.totalSellerDeliveryDeduction = Number((settlement.totalSellerDeliveryDeduction + batchStats.delivDed).toFixed(2));
-                settlement.totalLogisticsPartnerBill = Number((settlement.totalLogisticsPartnerBill + batchStats.partnerBill).toFixed(2));
-                settlement.totalAdminDeliveryProfit = Number((settlement.totalAdminDeliveryProfit + batchStats.adminProf).toFixed(2));
-                settlement.finalSettlementAmount = Number((settlement.finalSettlementAmount + batchStats.final).toFixed(2));
+                settlement.orderCount += batchSummary.count;
+                settlement.totalSales = Number((settlement.totalSales + batchSummary.sales).toFixed(2));
+                settlement.commissionTotal = Number((settlement.commissionTotal + batchSummary.comm).toFixed(2));
+                settlement.gstTotal = Number((settlement.gstTotal + batchSummary.gst).toFixed(2));
+                settlement.tdsTotal = Number((settlement.tdsTotal + batchSummary.tds).toFixed(2));
+                settlement.deliveryTotal = Number((settlement.deliveryTotal + batchSummary.delivery).toFixed(2));
+                settlement.logisticsPartnerShare = Number((settlement.logisticsPartnerShare + batchSummary.partnerShare).toFixed(2));
+                settlement.adminLogisticsProfit = Number((settlement.adminLogisticsProfit + batchSummary.adminProfit).toFixed(2));
+                settlement.finalPayable = Number((settlement.finalPayable + batchSummary.final).toFixed(2));
             } else {
                 settlement = new Settlement({
                     sellerId, weekRange: `${startDate} to ${endDate}`,
                     payoutBreakdown: newPayoutRows,
-                    totalOrderCount: batchStats.count,
-                    totalSalesRevenue: Number(batchStats.sales.toFixed(2)),
-                    totalPlatformCommission: Number(batchStats.comm.toFixed(2)),
-                    totalGstOnCommission: Number(batchStats.gst.toFixed(2)),
-                    totalTdsDeduction: Number(batchStats.tds.toFixed(2)),
-                    totalSellerDeliveryDeduction: Number(batchStats.delivDed.toFixed(2)),
-                    totalLogisticsPartnerBill: Number(batchStats.partnerBill.toFixed(2)),
-                    totalAdminDeliveryProfit: Number(batchStats.adminProf.toFixed(2)),
-                    finalSettlementAmount: Number(batchStats.final.toFixed(2))
+                    orderCount: batchSummary.count,
+                    totalSales: Number(batchSummary.sales.toFixed(2)),
+                    commissionTotal: Number(batchSummary.comm.toFixed(2)),
+                    gstTotal: Number(batchSummary.gst.toFixed(2)),
+                    tdsTotal: Number(batchSummary.tds.toFixed(2)),
+                    deliveryTotal: Number(batchSummary.delivery.toFixed(2)),
+                    logisticsPartnerShare: Number(batchSummary.partnerShare.toFixed(2)),
+                    adminLogisticsProfit: Number(batchSummary.adminProfit.toFixed(2)),
+                    finalPayable: Number(batchSummary.final.toFixed(2))
                 });
             }
             await settlement.save();
             await Order.updateMany({ _id: { $in: orders.map(o => o._id) } }, { $set: { isSettled: true } });
         }
 
-        const finalData = await Settlement.findById(settlement._id).populate('sellerId', 'shopName email');
-        res.json({ success: true, message: "Sync Success with Full Transparency! ✅", data: finalData });
+        const finalData = await Settlement.findById(settlement?._id || settlement).populate('sellerId', 'shopName email');
+        res.json({ success: true, message: "Payout Calculated Strictly! ✅", data: finalData });
 
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
