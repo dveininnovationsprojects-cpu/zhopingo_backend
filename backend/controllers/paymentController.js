@@ -236,8 +236,6 @@
 //   }
 // };
 
-
-
 const { StandardCheckoutClient, Env, StandardCheckoutPayRequest } = require("pg-sdk-node");
 const Order = require("../models/Order");
 const User = require("../models/User");
@@ -248,13 +246,23 @@ const crypto = require("crypto");
 // 🛠️ ENVIRONMENT TOGGLE
 const IS_PROD = process.env.NODE_ENV === "production";
 
-// 🔑 PHONEPE SDK INITIALIZATION (Auto-Switch)
-const client = StandardCheckoutClient.getInstance(
-    process.env.PHONEPE_CLIENT_ID,
-    process.env.PHONEPE_CLIENT_SECRET,
-    parseInt(process.env.PHONEPE_CLIENT_VERSION),
-    IS_PROD ? Env.PRODUCTION : Env.SANDBOX
-);
+/* =====================================================
+    🔑 PHONEPE SDK INITIALIZATION (The Critical Fix)
+    Singleton logic: Thidhirunu multiple times trigger aagadha maari check panrom.
+===================================================== */
+let phonePeClient = null;
+
+const getPhonePeClient = () => {
+    if (!phonePeClient) {
+        phonePeClient = StandardCheckoutClient.getInstance(
+            process.env.PHONEPE_CLIENT_ID,
+            process.env.PHONEPE_CLIENT_SECRET,
+            parseInt(process.env.PHONEPE_CLIENT_VERSION) || 1,
+            IS_PROD ? Env.PRODUCTION : Env.SANDBOX
+        );
+    }
+    return phonePeClient;
+};
 
 /* =====================================================
     🚚 MULTI-SELLER SHIPMENT ENGINE (The Blinkit Standard)
@@ -364,6 +372,7 @@ const updateOrderSuccess = async (orderId) => {
 ===================================================== */
 exports.createSession = async (req, res) => {
     try {
+        const client = getPhonePeClient(); // 👈 Safe Initialization Call
         const { orderId } = req.body;
         const order = await Order.findById(orderId);
         if (!order) return res.status(404).json({ success: false, message: "Order not found" });
@@ -386,6 +395,7 @@ exports.createSession = async (req, res) => {
 
 exports.verifyPayment = async (req, res) => {
     try {
+        const client = getPhonePeClient(); // 👈 Safe Initialization Call
         const { orderId } = req.params;
         // 🛡️ SECURITY: Server-side API check (Not just client redirect)
         const response = await client.getOrderStatus(orderId);
@@ -436,6 +446,7 @@ exports.webhook = async (req, res) => {
 
 exports.phonepeReturn = async (req, res) => {
     try {
+        const client = getPhonePeClient(); // 👈 Safe Initialization Call
         const { orderId } = req.params;
         const response = await client.getOrderStatus(orderId);
 
