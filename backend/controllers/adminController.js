@@ -445,6 +445,7 @@ exports.generateWeeklySettlement = async (req, res) => {
     try {
         const { sellerId, startDate, endDate } = req.body;
         
+        // 🕒 Strict Time formatting (00:00:00 to 23:59:59)
         const filterStart = new Date(startDate);
         filterStart.setHours(0, 0, 0, 0);
         const filterEnd = new Date(endDate);
@@ -456,22 +457,23 @@ exports.generateWeeklySettlement = async (req, res) => {
             tdsPercent: 2,
         };
 
-        // 🔍 QUERY: Fetch only Delivered/Returned orders strictly within the range and NOT settled
+        // 🔍 QUERY: Strictly fetch only Delivered or Returned orders that are NOT settled
         const orders = await Order.find({
             "sellerSplitData.sellerId": new mongoose.Types.ObjectId(sellerId),
-            isSettled: { $ne: true }, 
-            status: { $in: ["Delivered", "Returned"] }, // 🎯 Strictly these two
+            isSettled: { $ne: true },
+            status: { $in: ["Delivered", "Returned"] }, // 🎯 STRICT STATUS FILTER
             updatedAt: { $gte: filterStart, $lte: filterEnd }
         }).populate('items.productId');
 
-        // Fetch existing settlement to check for duplicates
+        // Fetch existing settlement for this week range
         let settlement = await Settlement.findOne({ sellerId, weekRange: `${startDate} to ${endDate}` });
 
+        // 🛡️ Logic: No NEW eligible orders found
         if (!orders || orders.length === 0) {
             if (settlement) {
                 return res.json({ success: true, message: "Existing settlement data retrieved.", data: settlement });
             }
-            return res.status(404).json({ success: false, message: "No new Delivered/Returned orders found." });
+            return res.status(404).json({ success: false, message: "No Delivered or Returned orders found for this period." });
         }
 
         let newPayoutRows = [];
@@ -484,12 +486,14 @@ exports.generateWeeklySettlement = async (req, res) => {
                 const isReturned = order.status === "Returned";
                 const isDelivered = order.status === "Delivered";
 
+                // 📦 Double Check Eligibility before processing
                 if (isDelivered || isReturned) {
                     order.items.filter(item => item.sellerId.toString() === sellerId).forEach(p => {
-                        
+                        const prodName = p.name || p.productId?.name || "Product";
+
                         // 🛑 DUPLICATE GUARD: Breakdown-la intha product already irukkanu check panrom
                         const alreadyExists = settlement?.payoutBreakdown?.some(row => 
-                            row.orderId.toString() === order._id.toString() && row.productName === (p.name || p.productId?.name)
+                            row.orderId.toString() === order._id.toString() && row.productName === prodName
                         );
 
                         if (!alreadyExists) {
@@ -498,12 +502,15 @@ exports.generateWeeklySettlement = async (req, res) => {
                             let platformComm = 0, gstAmt = 0, tdsAmt = 0, itemDeliveryShare = 0, netPayable = 0;
 
                             if (!isReturned) {
+                                // 📈 SALE LOGIC: Strictly for Delivered items
                                 platformComm = itemTotal * (Number(settings.commissionPercent) / 100);
                                 gstAmt = platformComm * (Number(settings.gstOnCommissionPercent) / 100);
                                 tdsAmt = itemTotal * (Number(settings.tdsPercent) / 100);
                                 itemDeliveryShare = (order.billDetails?.deliveryCharge / order.items.length) || 0;
+                                
                                 netPayable = itemTotal - (platformComm + gstAmt + tdsAmt + itemDeliveryShare);
 
+                                // 📊 Add to Summary Runners
                                 summary.sales += itemTotal;
                                 summary.comm += platformComm;
                                 summary.gst += gstAmt;
@@ -511,8 +518,11 @@ exports.generateWeeklySettlement = async (req, res) => {
                                 summary.delivery += itemDeliveryShare;
                                 summary.final += netPayable;
                             } else {
-                                // RETURN: Deduct product price only (Admin keeps commission)
+                                // 📉 RETURN LOGIC: Strictly Product Price only
+                                // Delivery/Commission/GST/TDS namma count-la varaathu
                                 netPayable = -itemTotal; 
+                                
+                                // 📊 Deduct from Summary Runners
                                 summary.sales -= itemTotal;
                                 summary.final -= itemTotal;
                             }
@@ -524,7 +534,7 @@ exports.generateWeeklySettlement = async (req, res) => {
                                 deliveryDate: isDelivered ? order.updatedAt : null,
                                 returnDate: isReturned ? order.updatedAt : null,
                                 type: isReturned ? "RETURN" : "SALE",
-                                productName: p.name || p.productId?.name || "Product",
+                                productName: prodName,
                                 quantity: p.quantity,
                                 amount: isReturned ? -itemTotal : itemTotal,
                                 commissionPercent: isReturned ? 0 : Number(settings.commissionPercent),
@@ -540,11 +550,15 @@ exports.generateWeeklySettlement = async (req, res) => {
             }
         });
 
+        // Skip saving if no new rows were actually processed (all were duplicates)
         if (newPayoutRows.length === 0 && settlement) {
              return res.json({ success: true, data: settlement });
         }
 
+        // 🌟 ATOMIC SYNC: Update or Create Settlement
         if (settlement) {
+            if (!settlement.payoutBreakdown) settlement.payoutBreakdown = [];
+            
             settlement.payoutBreakdown.push(...newPayoutRows);
             settlement.orderCount += summary.count;
             settlement.totalSales = Number((settlement.totalSales + summary.sales).toFixed(2));
@@ -555,7 +569,8 @@ exports.generateWeeklySettlement = async (req, res) => {
             settlement.finalPayable = Number((settlement.finalPayable + summary.final).toFixed(2));
         } else {
             settlement = new Settlement({
-                sellerId, weekRange: `${startDate} to ${endDate}`,
+                sellerId,
+                weekRange: `${startDate} to ${endDate}`,
                 payoutBreakdown: newPayoutRows,
                 orderCount: summary.count,
                 totalSales: Number(summary.sales.toFixed(2)),
@@ -563,21 +578,27 @@ exports.generateWeeklySettlement = async (req, res) => {
                 gstTotal: Number(summary.gst.toFixed(2)),
                 tdsTotal: Number(summary.tds.toFixed(2)),
                 deliveryTotal: Number(summary.delivery.toFixed(2)),
-                finalPayable: Number(summary.final.toFixed(2))
+                finalPayable: Number(summary.final.toFixed(2)),
+                status: "Pending",
             });
         }
 
         await settlement.save();
 
-        // 🛡️ CRITICAL FIX: Explicitly mark orders as settled
-        const settledOrderIds = orders.map(o => o._id);
+        // 🛡️ Final Cut-off: Mark orders as settled strictly
+        const settledOrderIds = orders.map((o) => o._id);
         await Order.updateMany({ _id: { $in: settledOrderIds } }, { $set: { isSettled: true } });
 
         const finalData = await Settlement.findById(settlement._id).populate('sellerId', 'shopName email');
-        res.json({ success: true, message: "Payout Calculated Strictly on Delivered/Returned items. ✅", data: finalData });
+
+        res.json({
+            success: true,
+            message: "Payout Calculated Strictly on Delivered/Returned items. ✅",
+            data: finalData,
+        });
 
     } catch (err) {
-        console.error("Payout Sync Error:", err);
+        console.error("Payout Logic Error:", err);
         res.status(500).json({ success: false, error: err.message });
     }
 };
