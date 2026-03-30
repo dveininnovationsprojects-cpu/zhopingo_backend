@@ -2,11 +2,7 @@ const mongoose = require("mongoose");
 
 const SettlementSchema = new mongoose.Schema(
   {
-    sellerId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Seller",
-      required: true,
-    },
+    sellerId: { type: mongoose.Schema.Types.ObjectId, ref: "Seller", required: true },
     weekRange: { type: String, required: true },
     totalSales: { type: Number, default: 0 },
     orderCount: { type: Number, default: 0 },
@@ -16,29 +12,28 @@ const SettlementSchema = new mongoose.Schema(
     deliveryTotal: { type: Number, default: 0 },
     finalPayable: { type: Number, required: true },
     status: { type: String, enum: ["Pending", "Paid"], default: "Pending" },
-    utrNumber: { type: String },
-    // models/Settlement.js (Fields add panniko)
-    logisticsShare: { type: Number, default: 0 }, // Delhivery-ku pogum share
-    adminLogisticsProfit: { type: Number, default: 0 }, // Delivery-la Admin-ku kedacha profit
-    paymentDate: { type: Date },
+    
+    // 🌟 THE FIX: PayoutBreakdown must be an Array of Objects (NOT Strings)
     payoutBreakdown: [{
-    orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order' },
-    orderDate: Date,
-    statusDate: Date,
-    type: String, // SALE or RETURN
-    productName: String, // 🌟 Strictly added
-    quantity: Number,
-    amount: Number,
-    commissionPercent: Number, // 🌟 Strictly added
-    commissionAmount: Number,
-    gstAmount: Number,
-    tdsAmount: Number,
-    deliveryDeduction: Number,
-    netPayable: Number
-}]
-  },
-  { timestamps: true },
-);
+      orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order' },
+      orderDate: { type: Date },
+      statusDate: { type: Date },
+      type: { type: String }, // SALE or RETURN
+      productName: { type: String }, 
+      quantity: { type: Number },
+      amount: { type: Number },
+      commissionPercent: { type: Number },
+      commissionAmount: { type: Number },
+      gstAmount: { type: Number },
+      tdsAmount: { type: Number },
+      deliveryDeduction: { type: Number },
+      netPayable: { type: Number }
+    }],
 
+    paymentDate: { type: Date },
+    utrNumber: { type: String }
+  },
+  { timestamps: true }
+);
 
 module.exports = mongoose.model("Settlement", SettlementSchema);
