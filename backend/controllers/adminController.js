@@ -441,6 +441,7 @@ exports.updateFinanceSettings = async (req, res) => {
 //   }
 // };
 // 🌟 1. GENERATE WEEKLY SETTLEMENT (Detailed Breakdown Sync)
+
 exports.generateWeeklySettlement = async (req, res) => {
     try {
         const { sellerId, startDate, endDate } = req.body;
@@ -462,26 +463,29 @@ exports.generateWeeklySettlement = async (req, res) => {
 
         if (!orders || orders.length === 0) {
             if (settlement) return res.json({ success: true, data: settlement });
-            return res.status(404).json({ success: false, message: "No new Delivered/Returned orders found." });
+            return res.status(404).json({ success: false, message: "No Delivered/Returned orders found." });
         }
 
         let newPayoutRows = [];
         let batchSummary = { sales: 0, comm: 0, gst: 0, tds: 0, delivery: 0, partnerShare: 0, adminProfit: 0, final: 0, count: 0 };
 
         orders.forEach((order) => {
-            // Find this specific seller's split to see if THEY charged shipping
             const split = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId);
             
             if (split) {
                 const isReturned = order.status === "Returned";
                 const isDelivered = order.status === "Delivered";
 
-                // 🚚 LOGISTICS DETECTOR (Industry Standard)
-                // DB-la seller charged shipping 0-ku mela irundha, it's PAID delivery.
-                const shippingPaidByCustomer = Number(split.customerChargedShipping || 0);
-                const isFreeDeliveryForCustomer = shippingPaidByCustomer <= 0;
+                // 🚚 LOGISTICS ENGINE (Dynamic detection from Order DB)
+                const totalBill = order.billDetails?.totalAmount || 0;
+                // Total Items Revenue = Order-la irukura ella product price * qty sum
+                const totalItemsRevenueInOrder = order.items.reduce((acc, curr) => acc + (curr.price * curr.quantity), 0);
+                
+                // Difference is what customer paid for shipping (e.g. 180 - 100 = 80)
+                const customerPaidShippingTotal = totalBill - totalItemsRevenueInOrder;
+                const isFreeDeliveryForCustomer = customerPaidShippingTotal <= 0;
 
-                // Logistics Partner Charge (Unga Actual Cost - e.g. ₹40)
+                // Actual amount to pay delivery team (Flat partner cost example)
                 const partnerCostPerItem = 40; 
 
                 order.items.filter(item => item.sellerId.toString() === sellerId).forEach(p => {
@@ -492,28 +496,30 @@ exports.generateWeeklySettlement = async (req, res) => {
                     );
 
                     if (!alreadyPresent) {
-                        const itemRevenue = p.price * p.quantity;
+                        const itemPrice = p.price * p.quantity;
                         let cAmt = 0, gAmt = 0, tAmt = 0, sDeduction = 0, shipProfit = 0, net = 0;
 
                         if (isDelivered) {
-                            cAmt = itemRevenue * (settings.commissionPercent / 100);
+                            cAmt = itemPrice * (settings.commissionPercent / 100);
                             gAmt = cAmt * (settings.gstOnCommissionPercent / 100);
-                            tAmt = itemRevenue * (settings.tdsPercent / 100);
+                            tAmt = itemPrice * (settings.tdsPercent / 100);
 
                             if (!isFreeDeliveryForCustomer) {
-                                // ✅ PAID DELIVERY: Customer already paid shipping (e.g. 80)
-                                sDeduction = 0; // Seller doesn't pay.
-                                // Admin Profit = Shipping collected - Partner cost
-                                shipProfit = shippingPaidByCustomer - partnerCostPerItem;
+                                // ✅ PAID DELIVERY: Customer paid shipping (e.g., 80)
+                                sDeduction = 0; // Seller pay panna maataaru
+                                // Admin Profit per item = (Total Collected / item count) - partner cost
+                                shipProfit = (customerPaidShippingTotal / order.items.length) - partnerCostPerItem;
                             } else {
-                                // 🎁 FREE DELIVERY: Seller has to cover the cost
+                                // 🎁 FREE DELIVERY: Seller pays logistics cost (Deduct from seller)
                                 sDeduction = 45 / order.items.filter(i => i.sellerId.toString() === sellerId).length;
+                                // Admin Profit = Seller pay panna 45 - partner-ku pōra 40 = 5 Profit
                                 shipProfit = sDeduction - partnerCostPerItem;
                             }
 
-                            net = itemRevenue - (cAmt + gAmt + tAmt + sDeduction);
+                            net = itemPrice - (cAmt + gAmt + tAmt + sDeduction);
 
-                            batchSummary.sales += itemRevenue;
+                            // 📊 Update Summary
+                            batchSummary.sales += itemPrice;
                             batchSummary.comm += cAmt;
                             batchSummary.gst += gAmt;
                             batchSummary.tds += tAmt;
@@ -522,10 +528,10 @@ exports.generateWeeklySettlement = async (req, res) => {
                             batchSummary.adminProfit += shipProfit;
                             batchSummary.final += net;
                         } else {
-                            // 📉 RETURN logic
-                            net = -itemRevenue;
-                            batchSummary.sales -= itemRevenue;
-                            batchSummary.final -= itemRevenue;
+                            // 📉 RETURN logic (Product Only Minus)
+                            net = -itemPrice;
+                            batchSummary.sales -= itemPrice;
+                            batchSummary.final -= itemPrice;
                         }
 
                         batchSummary.count++;
@@ -539,14 +545,14 @@ exports.generateWeeklySettlement = async (req, res) => {
                             type: order.status.toUpperCase(),
                             productName: prodName,
                             quantity: p.quantity,
-                            amount: isReturned ? -itemRevenue : itemRevenue,
+                            amount: isReturned ? -itemPrice : itemPrice,
                             commissionAmount: Number(cAmt.toFixed(2)),
                             gstAmount: Number(gAmt.toFixed(2)),
                             tdsAmount: Number(tAmt.toFixed(2)),
                             
-                            // 🚚 Breakdown Logistics Transparency
+                            // 🚀 Full Logistics Transparency
                             deliveryType: isFreeDeliveryForCustomer ? "FREE" : "PAID",
-                            customerPaidShipping: Number(shippingPaidByCustomer.toFixed(2)),
+                            customerPaidShipping: Number((customerPaidShippingTotal / order.items.length).toFixed(2)),
                             sellerDeduction: Number(sDeduction.toFixed(2)),
                             logisticsPartnerCost: Number(partnerCostPerItem.toFixed(2)),
                             adminProfitOnShipping: Number(shipProfit.toFixed(2)),
@@ -558,6 +564,7 @@ exports.generateWeeklySettlement = async (req, res) => {
             }
         });
 
+        // Sync to DB logic...
         if (newPayoutRows.length > 0) {
             if (settlement) {
                 settlement.payoutBreakdown.push(...newPayoutRows);
@@ -586,12 +593,11 @@ exports.generateWeeklySettlement = async (req, res) => {
                 });
             }
             await settlement.save();
-            const orderIds = orders.map(o => o._id);
-            await Order.updateMany({ _id: { $in: orderIds } }, { $set: { isSettled: true } });
+            await Order.updateMany({ _id: { $in: orders.map(o => o._id) } }, { $set: { isSettled: true } });
         }
 
         const finalData = await Settlement.findById(settlement?._id || settlement).populate('sellerId', 'shopName email');
-        res.json({ success: true, message: "Detailed Payout Sync Success! ✅", data: finalData });
+        res.json({ success: true, message: "Detailed Payout Calculated Strictly! ✅", data: finalData });
 
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
