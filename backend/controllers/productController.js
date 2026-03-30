@@ -115,7 +115,9 @@ exports.getAllProducts = async (req, res) => {
   try {
     const { category, subCategory, search, page = 1, limit = 50 } = req.query;
 
-    let query = {};
+    // 🌟 THE CRITICAL FILTER: Product strictly active-ah irukkanum
+    // Seller 'active' status populate 'match'-la handle aagudhu
+    let query = { status: "active" }; 
 
     if (category) query.category = category;
     if (subCategory) query.subCategory = subCategory;
@@ -135,32 +137,82 @@ exports.getAllProducts = async (req, res) => {
       .limit(parseInt(limit))
       .lean();
 
+    // 🛡️ Filter: Seller inactive-na populate 'null' varum, so andha products-ah remove panrom
     const filteredProducts = products.filter((p) => p.seller !== null);
+    
     const data = filteredProducts.map((p) => ({
       ...formatProductMedia(p),
       stock: p.stock !== undefined ? p.stock : 0,
       price: p.price || 99,
       mrp: p.mrp || 150,
-      availability: "Available",
+      // 📉 Dynamic Availability: Stock illana "Out of Stock" nu varum
+      availability: p.stock > 0 ? "Available" : "Out of Stock",
       ratingCount: Math.floor(Math.random() * 100) + 10,
     }));
 
+    // Single Clean Response (No Duplicates)
     res.status(200).json({
       success: true,
       count: data.length,
+      total_found_in_db: products.length, // Unnoda original metric preserved
       data,
     });
 
-    res.status(200).json({
-      success: true,
-      count: data.length,
-      total_found_in_db: products.length,
-      data,
-    });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 };
+
+// exports.getAllProducts = async (req, res) => {
+//   try {
+//     const { category, subCategory, search, page = 1, limit = 50 } = req.query;
+
+//     let query = {};
+
+//     if (category) query.category = category;
+//     if (subCategory) query.subCategory = subCategory;
+//     if (search) query.name = { $regex: search, $options: "i" };
+
+//     const skip = (parseInt(page) - 1) * parseInt(limit);
+
+//     const products = await Product.find(query)
+//       .populate("category subCategory", "name image")
+//       .populate({
+//         path: "seller",
+//         match: { status: "active" }, // Only active sellers
+//         select: "shopName name address status",
+//       })
+//       .sort({ createdAt: -1 })
+//       .skip(skip)
+//       .limit(parseInt(limit))
+//       .lean();
+
+//     const filteredProducts = products.filter((p) => p.seller !== null);
+//     const data = filteredProducts.map((p) => ({
+//       ...formatProductMedia(p),
+//       stock: p.stock !== undefined ? p.stock : 0,
+//       price: p.price || 99,
+//       mrp: p.mrp || 150,
+//       availability: "Available",
+//       ratingCount: Math.floor(Math.random() * 100) + 10,
+//     }));
+
+//     res.status(200).json({
+//       success: true,
+//       count: data.length,
+//       data,
+//     });
+
+//     res.status(200).json({
+//       success: true,
+//       count: data.length,
+//       total_found_in_db: products.length,
+//       data,
+//     });
+//   } catch (err) {
+//     res.status(500).json({ success: false, error: err.message });
+//   }
+// };
 exports.updateProduct = async (req, res) => {
   try {
     const productId = req.params.id;
@@ -325,24 +377,27 @@ exports.getMyProducts = async (req, res) => {
   }
 };
 
-// 🌟 8. GET SIMILAR PRODUCTS
+// 🌟 8. GET SIMILAR PRODUCTS (Strictly Active Only)
 exports.getSimilarProducts = async (req, res) => {
   try {
     const { category } = req.query;
     const products = await Product.find({
       category,
-      _id: { $ne: req.params.id },
+      _id: { $ne: req.params.id }, // Current product-ah exclude pannurom
+      status: "active",            // 🌟 THE FIX: Strictly active products only
       isArchived: { $ne: true },
       isMaster: false,
     })
       .limit(6)
       .lean();
+
     res.json({
       success: true,
-      data: products.map((p) => formatProductMedia(p)),
+      data: products.map((p) => formatProductMedia(p)), // Formattingpreserved
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    // Safety check for error key consistency
+    res.status(500).json({ success: false, error: err.message });
   }
 };
 
@@ -356,6 +411,30 @@ exports.getMasterListBySubCategory = async (req, res) => {
       .populate("hsnMasterId")
       .lean(); // Added populate here for frontend convenience
     res.json({ success: true, data: list });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+// 🌟 TOGGLE PRODUCT STATUS (Active/Inactive)
+exports.toggleProductStatus = async (req, res) => {
+  try {
+    const productId = req.params.id;
+    const sellerId = req.user?.id;
+
+    const product = await Product.findOne({ _id: productId, seller: sellerId });
+    if (!product) {
+      return res.status(404).json({ success: false, message: "Product not found" });
+    }
+
+    // Toggle logic
+    product.status = product.status === "active" ? "inactive" : "active";
+    await product.save();
+
+    res.json({
+      success: true,
+      message: `Product is now ${product.status}`,
+      status: product.status
+    });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

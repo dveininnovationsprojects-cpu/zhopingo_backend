@@ -116,6 +116,12 @@ router.put('/update/:id',
     processImages,
     productCtrl.updateProduct
 );
+router.patch(
+    '/toggle-status/:id', 
+    protect, 
+    productCtrl.toggleProductStatus
+);
+
 router.delete('/delete/:id', protect, productCtrl.deleteProduct);
 
 module.exports = router;
