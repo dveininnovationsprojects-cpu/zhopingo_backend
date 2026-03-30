@@ -456,11 +456,10 @@ exports.generateWeeklySettlement = async (req, res) => {
             tdsPercent: 2,
         };
 
-        // 🔍 QUERY: Strictly Delivered/Returned + NOT settled yet
         const orders = await Order.find({
             "sellerSplitData.sellerId": new mongoose.Types.ObjectId(sellerId),
-            isSettled: { $ne: true }, 
-            status: { $in: ["Delivered", "Returned"] }, // 🎯 STRICT STATUS FILTER
+            isSettled: { $ne: true },
+            status: { $in: ["Delivered", "Returned"] },
             updatedAt: { $gte: filterStart, $lte: filterEnd }
         }).populate('items.productId');
 
@@ -468,12 +467,11 @@ exports.generateWeeklySettlement = async (req, res) => {
 
         if (!orders || orders.length === 0) {
             if (settlement) return res.json({ success: true, data: settlement });
-            return res.status(404).json({ success: false, message: "No eligible orders (Delivered/Returned) found." });
+            return res.status(404).json({ success: false, message: "No Delivered/Returned orders found." });
         }
 
         let newPayoutRows = [];
-        // 📊 Intha cycle-la mattum process aagura summary
-        let runningSummary = { sales: 0, comm: 0, gst: 0, tds: 0, delivery: 0, final: 0, count: 0 };
+        let currentBatchSummary = { sales: 0, comm: 0, gst: 0, tds: 0, delivery: 0, final: 0, count: 0 };
 
         orders.forEach((order) => {
             const split = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId);
@@ -481,45 +479,51 @@ exports.generateWeeklySettlement = async (req, res) => {
             if (split) {
                 const isReturned = order.status === "Returned";
                 const isDelivered = order.status === "Delivered";
+                
+                // 🌟 THE FIX: Checking if delivery is FREE for customer
+                // Customer pay panna delivery charge > 0 na, namma seller kitta pudikka koodathu.
+                const customerPaidDelivery = order.billDetails?.deliveryCharge || 0;
+                const isFreeDeliveryForCustomer = customerPaidDelivery === 0;
 
                 order.items.filter(item => item.sellerId.toString() === sellerId).forEach(p => {
                     const prodName = p.name || p.productId?.name || "Product";
 
-                    // 🛑 ATOMIC DUPLICATE CHECK: 
-                    // Record already iruntha, breakdown array-la intha combination check panrom
-                    const alreadyExists = settlement?.payoutBreakdown?.some(row => 
+                    const alreadyPresent = settlement?.payoutBreakdown?.some(row => 
                         row.orderId.toString() === order._id.toString() && row.productName === prodName
                     );
 
-                    if (!alreadyExists) {
-                        const itemTotal = p.price * p.quantity;
-                        let commAmt = 0, gstAmt = 0, tdsAmt = 0, itemDeliv = 0, net = 0;
+                    if (!alreadyPresent) {
+                        const itemPriceTotal = p.price * p.quantity; // 🎯 Base Product Price (Revenue)
+                        let cAmt = 0, gAmt = 0, tAmt = 0, dDeduction = 0, net = 0;
 
                         if (isDelivered) {
-                            // 📈 SALE CALCULATION
-                            commAmt = itemTotal * (Number(settings.commissionPercent) / 100);
-                            gstAmt = commAmt * (Number(settings.gstOnCommissionPercent) / 100);
-                            tdsAmt = itemTotal * (Number(settings.tdsPercent) / 100);
-                            itemDeliv = (order.billDetails?.deliveryCharge / order.items.length) || 0;
-                            net = itemTotal - (commAmt + gstAmt + tdsAmt + itemDeliv);
+                            cAmt = itemPriceTotal * (Number(settings.commissionPercent) / 100);
+                            gAmt = cAmt * (Number(settings.gstOnCommissionPercent) / 100);
+                            tAmt = itemPriceTotal * (Number(settings.tdsPercent) / 100);
+                            
+                            // 🌟 DEDUCTION LOGIC: Only if delivery is FREE for customer, charge the seller.
+                            // Otherwise, customer paid for it, so seller deduction is 0.
+                            if (isFreeDeliveryForCustomer) {
+                                dDeduction = 45 / order.items.length; // Flat 45 example split
+                            }
 
-                            // 📊 Update Running Summary (Sales only)
-                            runningSummary.sales += itemTotal;
-                            runningSummary.comm += commAmt;
-                            runningSummary.gst += gstAmt;
-                            runningSummary.tds += tdsAmt;
-                            runningSummary.delivery += itemDeliv;
-                            runningSummary.final += net;
-                            runningSummary.count++;
-                        } else if (isReturned) {
-                            // 📉 RETURN CALCULATION (Strictly Item Price Only)
-                            net = -itemTotal; 
-                            runningSummary.sales -= itemTotal;
-                            runningSummary.final -= itemTotal;
-                            runningSummary.count++;
+                            net = itemPriceTotal - (cAmt + gAmt + tAmt + dDeduction);
+
+                            currentBatchSummary.sales += itemPriceTotal;
+                            currentBatchSummary.comm += cAmt;
+                            currentBatchSummary.gst += gAmt;
+                            currentBatchSummary.tds += tAmt;
+                            currentBatchSummary.delivery += dDeduction;
+                            currentBatchSummary.final += net;
+                        } else {
+                            // RETURN: Only item price minus
+                            net = -itemPriceTotal; 
+                            currentBatchSummary.sales -= itemPriceTotal;
+                            currentBatchSummary.final -= itemPriceTotal;
                         }
 
-                        // Push only if it's a valid row
+                        currentBatchSummary.count++;
+
                         newPayoutRows.push({
                             orderId: order._id,
                             orderDate: order.createdAt,
@@ -529,12 +533,12 @@ exports.generateWeeklySettlement = async (req, res) => {
                             type: order.status.toUpperCase(),
                             productName: prodName,
                             quantity: p.quantity,
-                            amount: isReturned ? -itemTotal : itemTotal,
+                            amount: isReturned ? -itemPriceTotal : itemPriceTotal,
                             commissionPercent: isReturned ? 0 : Number(settings.commissionPercent),
-                            commissionAmount: Number(commAmt.toFixed(2)),
-                            gstAmount: Number(gstAmt.toFixed(2)),
-                            tdsAmount: Number(tdsAmt.toFixed(2)),
-                            deliveryDeduction: Number(itemDeliv.toFixed(2)),
+                            commissionAmount: Number(cAmt.toFixed(2)),
+                            gstAmount: Number(gAmt.toFixed(2)),
+                            tdsAmount: Number(tAmt.toFixed(2)),
+                            deliveryDeduction: Number(dDeduction.toFixed(2)), // 🎯 Ippo strictly correct-ah varum
                             netPayable: Number(net.toFixed(2))
                         });
                     }
@@ -542,47 +546,38 @@ exports.generateWeeklySettlement = async (req, res) => {
             }
         });
 
-        // 🛑 Final Guard: If no new unique items found, just return existing
-        if (newPayoutRows.length === 0 && settlement) {
-            return res.json({ success: true, data: settlement });
-        }
+        if (newPayoutRows.length === 0 && settlement) return res.json({ success: true, data: settlement });
 
-        // 🌟 DATABASE SYNC (Atomic Upsert)
         if (settlement) {
-            if (!settlement.payoutBreakdown) settlement.payoutBreakdown = [];
             settlement.payoutBreakdown.push(...newPayoutRows);
-            settlement.orderCount += runningSummary.count;
-            settlement.totalSales = Number((settlement.totalSales + runningSummary.sales).toFixed(2));
-            settlement.commissionTotal = Number((settlement.commissionTotal + runningSummary.comm).toFixed(2));
-            settlement.gstTotal = Number((settlement.gstTotal + runningSummary.gst).toFixed(2));
-            settlement.tdsTotal = Number((settlement.tdsTotal + runningSummary.tds).toFixed(2));
-            settlement.deliveryTotal = Number((settlement.deliveryTotal + runningSummary.delivery).toFixed(2));
-            settlement.finalPayable = Number((settlement.finalPayable + runningSummary.final).toFixed(2));
+            settlement.orderCount += currentBatchSummary.count;
+            settlement.totalSales = Number((settlement.totalSales + currentBatchSummary.sales).toFixed(2));
+            settlement.commissionTotal = Number((settlement.commissionTotal + currentBatchSummary.comm).toFixed(2));
+            settlement.gstTotal = Number((settlement.gstTotal + currentBatchSummary.gst).toFixed(2));
+            settlement.tdsTotal = Number((settlement.tdsTotal + currentBatchSummary.tds).toFixed(2));
+            settlement.deliveryTotal = Number((settlement.deliveryTotal + currentBatchSummary.delivery).toFixed(2));
+            settlement.finalPayable = Number((settlement.finalPayable + currentBatchSummary.final).toFixed(2));
         } else {
             settlement = new Settlement({
                 sellerId, weekRange: `${startDate} to ${endDate}`,
                 payoutBreakdown: newPayoutRows,
-                orderCount: runningSummary.count,
-                totalSales: Number(runningSummary.sales.toFixed(2)),
-                commissionTotal: Number(runningSummary.comm.toFixed(2)),
-                gstTotal: Number(runningSummary.gst.toFixed(2)),
-                tdsTotal: Number(runningSummary.tds.toFixed(2)),
-                deliveryTotal: Number(runningSummary.delivery.toFixed(2)),
-                finalPayable: Number(runningSummary.final.toFixed(2))
+                orderCount: currentBatchSummary.count,
+                totalSales: Number(currentBatchSummary.sales.toFixed(2)),
+                commissionTotal: Number(currentBatchSummary.comm.toFixed(2)),
+                gstTotal: Number(currentBatchSummary.gst.toFixed(2)),
+                tdsTotal: Number(currentBatchSummary.tds.toFixed(2)),
+                deliveryTotal: Number(currentBatchSummary.delivery.toFixed(2)),
+                finalPayable: Number(currentBatchSummary.final.toFixed(2))
             });
         }
 
         await settlement.save();
+        await Order.updateMany({ _id: { $in: orders.map(o => o._id) } }, { $set: { isSettled: true } });
 
-        // 🛡️ MARK PROCESSED ORDERS
-        const processedIds = orders.map(o => o._id);
-        await Order.updateMany({ _id: { $in: processedIds } }, { $set: { isSettled: true } });
-
-        const populatedData = await Settlement.findById(settlement._id).populate('sellerId', 'shopName email');
-        res.json({ success: true, message: "Payout Sync Finalized. ✅", data: populatedData });
+        const finalData = await Settlement.findById(settlement._id).populate('sellerId', 'shopName email');
+        res.json({ success: true, message: "Payout Finalized with Proper Delivery Logic! ✅", data: finalData });
 
     } catch (err) {
-        console.error("Payout Logic Error:", err);
         res.status(500).json({ success: false, error: err.message });
     }
 };
