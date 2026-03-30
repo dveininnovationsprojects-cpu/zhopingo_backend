@@ -473,17 +473,17 @@ exports.generateWeeklySettlement = async (req, res) => {
             if (split) {
                 const isReturned = order.status === "Returned";
                 
-                // 🚚 LOGISTICS CALCULATION ENGINE
+                // 🌟 DYNAMIC SHIPPING DETECTOR (Atomic Sync)
                 const totalBill = order.billDetails?.totalAmount || 0;
-                // Important: Oru order-la pala sellers irukkalaam, so motha sellers-oda subtotal edukrom
-                const totalSellersRevenue = order.sellerSplitData.reduce((acc, curr) => acc + (curr.sellerSubtotal || 0), 0);
                 
-                // Actual shipping customer kitta irundhu vandhadhu (180 - 100 = 80)
-                let actualCustomerPaidShipping = totalBill - totalSellersRevenue;
-                if (actualCustomerPaidShipping < 0) actualCustomerPaidShipping = 0; // Safety guard
+                // Fix: Oru order-la irukura ELLA product-oda price-aiyum kooturom (Regardless of seller)
+                // Appo dhaan Bill Total - Item Total panna correct-ana Shipping charge kedaikkum
+                const totalItemsPriceInOrder = order.items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+                
+                const actualCustomerPaidShipping = totalBill - totalItemsPriceInOrder;
+                const isFreeDeliveryForCustomer = actualCustomerPaidShipping <= 0;
 
-                const isFreeDeliveryForCustomer = actualCustomerPaidShipping === 0;
-                const partnerCostPerItem = 40; // Indha order-la partner-ku namma thara vendiya flat cost
+                const partnerCostPerItem = 40; 
 
                 order.items.filter(item => item.sellerId.toString() === sellerId).forEach(p => {
                     const prodName = p.name || p.productId?.name || "Product";
@@ -501,12 +501,11 @@ exports.generateWeeklySettlement = async (req, res) => {
                             tAmt = itemPrice * (settings.tdsPercent / 100);
                             
                             if (!isFreeDeliveryForCustomer) {
-                                // 💸 PAID DELIVERY: Customer paid shipping.
-                                sDeduction = 0; // Seller doesn't pay.
-                                // Total Shipping Admin-ku pōgum, adhu summary-la admin profit-ah track aagum
+                                // 💸 PAID: Customer paid (180 - 100 = 80). Seller pays 0.
+                                sDeduction = 0; 
                                 adminShipProfit = (actualCustomerPaidShipping / order.items.length) - partnerCostPerItem;
                             } else {
-                                // 🎁 FREE DELIVERY: Seller pays logistics cost.
+                                // 🎁 FREE: Customer paid 0. Seller pays flat fee (e.g. 45).
                                 sDeduction = 45 / order.items.length; 
                                 adminShipProfit = sDeduction - partnerCostPerItem;
                             }
@@ -522,7 +521,6 @@ exports.generateWeeklySettlement = async (req, res) => {
                             batchSummary.adminProfit += adminShipProfit;
                             batchSummary.final += net;
                         } else {
-                            // RETURN LOGIC: Strictly item price minus
                             net = -itemPrice;
                             batchSummary.sales -= itemPrice;
                             batchSummary.final -= itemPrice;
@@ -544,7 +542,6 @@ exports.generateWeeklySettlement = async (req, res) => {
                             gstAmount: Number(gAmt.toFixed(2)),
                             tdsAmount: Number(tAmt.toFixed(2)),
                             
-                            // 🚚 Transparency fields
                             deliveryType: isFreeDeliveryForCustomer ? "FREE" : "PAID",
                             customerPaidShipping: Number((actualCustomerPaidShipping / order.items.length).toFixed(2)),
                             sellerDeduction: Number(sDeduction.toFixed(2)),
@@ -591,7 +588,7 @@ exports.generateWeeklySettlement = async (req, res) => {
         await Order.updateMany({ _id: { $in: orders.map(o => o._id) } }, { $set: { isSettled: true } });
 
         const finalData = await Settlement.findById(settlement._id).populate('sellerId', 'shopName email');
-        res.json({ success: true, message: "Payout Success with Zero Glitches! ✅", data: finalData });
+        res.json({ success: true, message: "Detailed Payout Calculated Successfully! ✅", data: finalData });
 
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
