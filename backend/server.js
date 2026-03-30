@@ -231,6 +231,7 @@ app.use("/api/v1/payments", require("./routes/paymentRoutes"));
 app.use("/api/v1/reels", require("./routes/reelRoutes"));
 app.use("/api/v1/seller", require("./routes/sellerRoutes"));
 app.use("/api/v1/admin", require("./routes/adminRoutes"));
+app.use("/api/v1/logistics",require("./routes/logisticsRoutes"))
 
 app.get("/", (req, res) => {
   res.send("🚀 Zhopingo Backend is running");
