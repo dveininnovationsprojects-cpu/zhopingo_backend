@@ -21,7 +21,21 @@ const SettlementSchema = new mongoose.Schema(
     logisticsShare: { type: Number, default: 0 }, // Delhivery-ku pogum share
     adminLogisticsProfit: { type: Number, default: 0 }, // Delivery-la Admin-ku kedacha profit
     paymentDate: { type: Date },
-    
+    payoutBreakdown: [{
+    orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order' },
+    orderDate: Date,
+    statusDate: Date,
+    type: String, // SALE or RETURN
+    productName: String, // 🌟 Strictly added
+    quantity: Number,
+    amount: Number,
+    commissionPercent: Number, // 🌟 Strictly added
+    commissionAmount: Number,
+    gstAmount: Number,
+    tdsAmount: Number,
+    deliveryDeduction: Number,
+    netPayable: Number
+}]
   },
   { timestamps: true },
 );
