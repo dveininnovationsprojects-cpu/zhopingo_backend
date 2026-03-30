@@ -465,7 +465,6 @@ exports.generateWeeklySettlement = async (req, res) => {
             ],
         }).populate('items.productId');
 
-        // 🛡️ Logic: Pudhu order illana, old settlement-ah view panra maari return panrom
         if (!orders || orders.length === 0) {
             const existing = await Settlement.findOne({ sellerId, weekRange: `${startDate} to ${endDate}` })
                 .populate('sellerId', 'shopName email');
@@ -483,57 +482,55 @@ exports.generateWeeklySettlement = async (req, res) => {
             const split = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId);
             
             if (split) {
-                runningSummary.count++;
                 const isReturned = order.status === "Returned";
-                const totalPaidByCustomer = order.billDetails?.totalAmount || order.totalAmount || 0;
-                const productSubtotal = split.sellerSubtotal || 0;
                 const deliveryCharge = order.billDetails?.deliveryCharge || 0;
 
-                const sellerItemsInfo = order.items
-                    .filter(item => item.sellerId.toString() === sellerId)
-                    .map(p => ({
-                        name: p.name || p.productId?.name,
-                        price: p.price,
+                // 🌟 Individual Product Breakdown Sync
+                order.items.filter(item => item.sellerId.toString() === sellerId).forEach(p => {
+                    runningSummary.count++;
+                    const itemTotal = p.price * p.quantity;
+
+                    // 🧮 Individual Calculations
+                    const platformComm = isReturned ? 0 : itemTotal * (Number(settings.commissionPercent) / 100);
+                    const gstOnComm = isReturned ? 0 : platformComm * (Number(settings.gstOnCommissionPercent) / 100);
+                    const tdsOnProduct = isReturned ? 0 : itemTotal * (Number(settings.tdsPercent) / 100);
+                    
+                    // Order-la iruka delivery charge-ah items-ku divide panrom (Fair Share)
+                    const itemDeliveryShare = isReturned ? 0 : (deliveryCharge / order.items.length);
+                    const netPayable = isReturned ? -itemTotal : (itemTotal - (platformComm + gstOnComm + tdsOnProduct + itemDeliveryShare));
+
+                    runningSummary.sales += isReturned ? -itemTotal : itemTotal;
+                    runningSummary.comm += platformComm;
+                    runningSummary.gst += gstOnComm;
+                    runningSummary.tds += tdsOnProduct;
+                    runningSummary.delivery += itemDeliveryShare;
+                    runningSummary.final += netPayable;
+
+                    // 🌟 SYNCING WITH SCHEMA FIELDS
+                    newPayoutRows.push({
+                        orderId: order._id,
+                        orderDate: order.createdAt,
+                        statusDate: order.updatedAt,
+                        type: isReturned ? "RETURN" : "SALE",
+                        productName: p.name || p.productId?.name,
                         quantity: p.quantity,
-                        image: p.image || p.productId?.image
-                    }));
-
-                const platformComm = isReturned ? 0 : productSubtotal * (Number(settings.commissionPercent) / 100);
-                const gstOnComm = isReturned ? 0 : platformComm * (Number(settings.gstOnCommissionPercent) / 100);
-                const tdsOnProduct = isReturned ? 0 : productSubtotal * (Number(settings.tdsPercent) / 100);
-                const totalFees = platformComm + gstOnComm + tdsOnProduct;
-                
-                const netPayable = isReturned ? -totalPaidByCustomer : (totalPaidByCustomer - (totalFees + deliveryCharge));
-
-                runningSummary.sales += isReturned ? -totalPaidByCustomer : totalPaidByCustomer;
-                runningSummary.comm += platformComm;
-                runningSummary.gst += gstOnComm;
-                runningSummary.tds += tdsOnProduct;
-                runningSummary.delivery += isReturned ? 0 : deliveryCharge;
-                runningSummary.final += netPayable;
-
-                newPayoutRows.push({
-                    orderId: order._id,
-                    orderDate: order.createdAt,
-                    statusDate: order.updatedAt,
-                    type: isReturned ? "RETURN" : "SALE",
-                    amount: isReturned ? -totalPaidByCustomer : totalPaidByCustomer,
-                    comm_gst_tds: Number(totalFees.toFixed(2)),
-                    delivery_status: isReturned ? `₹0` : `- ₹${deliveryCharge}`,
-                    net_payable: Number(netPayable.toFixed(2)),
-                    items: sellerItemsInfo
+                        amount: isReturned ? -itemTotal : itemTotal,
+                        commissionPercent: Number(settings.commissionPercent),
+                        commissionAmount: Number(platformComm.toFixed(2)),
+                        gstAmount: Number(gstOnComm.toFixed(2)),
+                        tdsAmount: Number(tdsOnProduct.toFixed(2)),
+                        deliveryDeduction: Number(itemDeliveryShare.toFixed(2)),
+                        netPayable: Number(netPayable.toFixed(2))
+                    });
                 });
             }
         });
 
-        // 🌟 THE FIX: Atomic Upsert Logic
+        // 🌟 ATOMIC SYNC LOGIC
         let settlement = await Settlement.findOne({ sellerId, weekRange: `${startDate} to ${endDate}` });
 
         if (settlement) {
-            // 🛡️ Safety Check: PayoutBreakdown array illana initialize panrom
-            if (!settlement.payoutBreakdown) {
-                settlement.payoutBreakdown = [];
-            }
+            if (!settlement.payoutBreakdown) settlement.payoutBreakdown = [];
             
             settlement.payoutBreakdown.push(...newPayoutRows);
             settlement.orderCount += runningSummary.count;
@@ -568,7 +565,7 @@ exports.generateWeeklySettlement = async (req, res) => {
 
         res.json({
             success: true,
-            message: "Settlement synced successfully! ✅",
+            message: "Detailed Settlement Synced! ✅",
             data: populatedData,
         });
 
