@@ -665,8 +665,102 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
     }
 };
 
+// /* =====================================================
+//     🌟 MASTER CREATE ORDER (Direct Payload Sync Fix)
+// ===================================================== */
+// exports.createOrder = async (req, res) => {
+//     try {
+//         // 🌟 THE MASTER SYNC: Frontend payload-la irundhu values-ah direct-ah edukkuroam
+//         const { items, customerId, shippingAddress, paymentMethod, deliveryCharge } = req.body;
+        
+//         const user = await User.findById(customerId);
+//         if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+//         const settings = await FinanceSettings.findOne() || { 
+//             commissionPercent: 10, 
+//             gstOnCommissionPercent: 18, 
+//             tdsPercent: 2 
+//         };
+
+//         let totalItemTotal = 0;
+//         let sellerWiseSplit = {};
+//         const processedItems = [];
+
+//         // Step 1: Process Items & Calculate Item Subtotal
+//         for (const item of items) {
+//             const productDoc = await Product.findById(item.productId || item._id);
+//             const sellerDoc = await Seller.findById(productDoc?.seller || item.sellerId);
+//             if (!productDoc || !sellerDoc) continue;
+
+//             const qty = Number(item.quantity);
+//             const subtotal = Number(item.price) * qty;
+//             totalItemTotal += subtotal;
+
+//             const sIdStr = sellerDoc._id.toString();
+//             if (!sellerWiseSplit[sIdStr]) {
+//                 sellerWiseSplit[sIdStr] = {
+//                     sellerId: sellerDoc._id,
+//                     shopName: sellerDoc.shopName,
+//                     sellerSubtotal: 0,
+//                 };
+//             }
+//             sellerWiseSplit[sIdStr].sellerSubtotal += subtotal;
+
+//             processedItems.push({
+//                 productId: productDoc._id, name: item.name, quantity: qty,
+//                 price: item.price, mrp: item.mrp || item.price, sellerId: sellerDoc._id,
+//                 hsnCode: productDoc.hsnCode || "0000", image: item.image || ""
+//             });
+//         }
+
+//         // 🌟 THE CRITICAL SYNC: 
+//         // Frontend anuppuna deliveryCharge-ah Number-ah maathi use panrom. 
+//         // Backend ippo thirumba API call pannaathu, margin logic check pannaathu.
+//         const frontendDeliveryAmount = Number(deliveryCharge) || 0;
+//         const finalGrandTotal = totalItemTotal + frontendDeliveryAmount;
+
+//         const finalSellerSplitData = Object.values(sellerWiseSplit).map((split) => {
+//             const comm = (split.sellerSubtotal * settings.commissionPercent) / 100;
+//             const gst = (comm * settings.gstOnCommissionPercent) / 100;
+//             const tds = (split.sellerSubtotal * settings.tdsPercent) / 100;
+
+//             return {
+//                 sellerId: split.sellerId,
+//                 shopName: split.shopName,
+//                 sellerSubtotal: split.sellerSubtotal,
+//                 commissionTotal: comm,
+//                 gstTotal: gst,
+//                 tdsTotal: tds,
+//                 finalPayable: split.sellerSubtotal - (comm + gst + tds),
+//                 status: 'Pending'
+//             };
+//         });
+
+//         const newOrder = new Order({
+//             customerId: user._id,
+//             items: processedItems,
+//             sellerSplitData: finalSellerSplitData,
+//             billDetails: { 
+//                 itemTotal: totalItemTotal, 
+//                 deliveryCharge: frontendDeliveryAmount, // 👈 Ippo katchithama ₹160 vizhum
+//                 totalAmount: finalGrandTotal 
+//             },
+//             totalAmount: finalGrandTotal, // 🌟 PhonePe will now read correctly (₹1380)
+//             paymentMethod,
+//             shippingAddress,
+//             status: "Pending", 
+//             paymentStatus: "Pending"
+//         });
+
+//         await newOrder.save();
+//         res.status(201).json({ success: true, order: newOrder });
+
+//     } catch (err) { 
+//         res.status(500).json({ success: false, error: err.message }); 
+//     }
+// };
 /* =====================================================
-    🌟 MASTER CREATE ORDER (Direct Payload Sync Fix)
+    🌟 MASTER CREATE ORDER (Direct Payload Sync Fix + Stock Sync)
 ===================================================== */
 exports.createOrder = async (req, res) => {
     try {
@@ -686,13 +780,32 @@ exports.createOrder = async (req, res) => {
         let sellerWiseSplit = {};
         const processedItems = [];
 
-        // Step 1: Process Items & Calculate Item Subtotal
+        // Step 1: Process Items & Calculate Item Subtotal & UPDATE STOCK
         for (const item of items) {
             const productDoc = await Product.findById(item.productId || item._id);
             const sellerDoc = await Seller.findById(productDoc?.seller || item.sellerId);
             if (!productDoc || !sellerDoc) continue;
 
             const qty = Number(item.quantity);
+
+            // 🛡️ STOCK CHECK: Quantity irukka nu check panroam
+            if (productDoc.stock < qty) {
+                return res.status(400).json({ 
+                    success: false, 
+                    message: `Insufficient stock for ${productDoc.name}. Only ${productDoc.stock} left.` 
+                });
+            }
+
+            // 📉 STOCK REDUCTION: Atomic-ah minus panroam
+            productDoc.stock -= qty;
+
+            // 🛡️ AUTO-INACTIVE: Stock 0 aana udane product-ah inactive aakki buyers-ku hide panroam
+            if (productDoc.stock <= 0) {
+                productDoc.stock = 0;
+                productDoc.status = "inactive";
+            }
+            await productDoc.save();
+
             const subtotal = Number(item.price) * qty;
             totalItemTotal += subtotal;
 
@@ -715,7 +828,6 @@ exports.createOrder = async (req, res) => {
 
         // 🌟 THE CRITICAL SYNC: 
         // Frontend anuppuna deliveryCharge-ah Number-ah maathi use panrom. 
-        // Backend ippo thirumba API call pannaathu, margin logic check pannaathu.
         const frontendDeliveryAmount = Number(deliveryCharge) || 0;
         const finalGrandTotal = totalItemTotal + frontendDeliveryAmount;
 
@@ -759,7 +871,6 @@ exports.createOrder = async (req, res) => {
         res.status(500).json({ success: false, error: err.message }); 
     }
 };
-
 
 // 1. User Orders (OrderAgain matrum User Screen-ku)
 exports.getMyOrders = async (req, res) => {
