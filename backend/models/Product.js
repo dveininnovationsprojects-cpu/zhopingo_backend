@@ -188,7 +188,12 @@ const productSchema = new mongoose.Schema({
   }],
   averageRating: { type: Number, default: 0 },
   tags: [{ type: String }],
-  isArchived: { type: Boolean, default: false }
+  isArchived: { type: Boolean, default: false },
+  status: {
+    type: String,
+    enum: ['active', 'inactive'],
+    default: 'active'
+}
 }, { timestamps: true });
 
 module.exports = mongoose.model('Product', productSchema);

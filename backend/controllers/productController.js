@@ -415,38 +415,40 @@ exports.getMasterListBySubCategory = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
-// 🌟 TOGGLE PRODUCT STATUS (Active/Inactive)
+// 🌟 TOGGLE PRODUCT STATUS (Handles missing fields automatically)
 exports.toggleProductStatus = async (req, res) => {
   try {
     const productId = req.params.id;
     const sellerId = req.user?.id;
 
-    // 1. Find product and ensure it belongs to the logged-in seller
+    // 1. Find product
     const product = await Product.findOne({ _id: productId, seller: sellerId });
     
     if (!product) {
-      return res.status(404).json({ success: false, message: "Product not found or unauthorized" });
+      return res.status(404).json({ success: false, message: "Product not found" });
     }
 
-    // 2. Strict Toggle Logic
-    // String comparison-la thappu varaama irukka trim and lowercase panrom
-    const currentStatus = product.status ? product.status.toLowerCase().trim() : "active";
-    
-    if (currentStatus === "active") {
-        product.status = "inactive";
-    } else {
-        product.status = "active";
-    }
+    /**
+     * 🌟 THE LOGIC FIX:
+     * Check current status. If field doesn't exist OR it is "active", 
+     * then set to "inactive". Else set to "active".
+     */
+    const currentStatus = product.status || "active"; 
+    const newStatus = (currentStatus === "active") ? "inactive" : "active";
 
-    // 3. Save with validation
-    await product.save();
+    // 2. Direct DB Update ($set will create the field if it's missing)
+    const updatedProduct = await Product.findOneAndUpdate(
+      { _id: productId, seller: sellerId },
+      { $set: { status: newStatus } },
+      { new: true, select: "status name" }
+    );
 
-    console.log(`✅ Product ${productId} status changed to: ${product.status}`);
+    console.log(`🚀 Field Sync: ${productId} status is now ${updatedProduct.status}`);
 
     res.json({
       success: true,
-      message: `Product is now ${product.status.toUpperCase()}`,
-      status: product.status // 👈 Ippo active/inactive katchithama thirumba varum
+      message: `Product is now ${updatedProduct.status.toUpperCase()}`,
+      status: updatedProduct.status 
     });
 
   } catch (err) {
