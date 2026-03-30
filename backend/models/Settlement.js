@@ -27,7 +27,9 @@ const SettlementSchema = new mongoose.Schema(
       gstAmount: { type: Number },
       tdsAmount: { type: Number },
       deliveryDeduction: { type: Number },
-      netPayable: { type: Number }
+      netPayable: { type: Number },
+      deliveryDate: { type: Date }, // 🌟 Strictly Added
+      returnDate: { type: Date },
     }],
 
     paymentDate: { type: Date },
