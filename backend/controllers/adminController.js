@@ -469,61 +469,69 @@ exports.generateWeeklySettlement = async (req, res) => {
         let batchSummary = { sales: 0, comm: 0, gst: 0, tds: 0, delivery: 0, partnerShare: 0, adminProfit: 0, final: 0, count: 0 };
 
         orders.forEach((order) => {
+            // 🎯 This specific seller's split data from the order
             const split = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId);
+            
             if (split) {
                 const isReturned = order.status === "Returned";
-                
-                // 🌟 DYNAMIC SHIPPING DETECTOR (Atomic Sync)
+                const isDelivered = order.status === "Delivered";
+
+                // 🚚 LOGISTICS ENGINE (Based on DB response provided)
+                // totalAmount (180) - sellerSubtotal (100) = 80 (Shipping)
                 const totalBill = order.billDetails?.totalAmount || 0;
                 
-                // Fix: Oru order-la irukura ELLA product-oda price-aiyum kooturom (Regardless of seller)
-                // Appo dhaan Bill Total - Item Total panna correct-ana Shipping charge kedaikkum
-                const totalItemsPriceInOrder = order.items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+                // Order-la irukura ella sellers-oda subtotal-aiyum kootuna dhaan shipping katchithama theriyum
+                const totalItemsRevenueInOrder = order.sellerSplitData.reduce((acc, curr) => acc + (curr.sellerSubtotal || 0), 0);
                 
-                const actualCustomerPaidShipping = totalBill - totalItemsPriceInOrder;
-                const isFreeDeliveryForCustomer = actualCustomerPaidShipping <= 0;
+                const actualShippingPaidByCustomer = totalBill - totalItemsRevenueInOrder;
+                const isFreeDeliveryForCustomer = actualShippingPaidByCustomer <= 0;
 
+                // Logistics partner cost (API call amount or flat 40)
                 const partnerCostPerItem = 40; 
 
                 order.items.filter(item => item.sellerId.toString() === sellerId).forEach(p => {
                     const prodName = p.name || p.productId?.name || "Product";
+                    
                     const alreadyPresent = settlement?.payoutBreakdown?.some(row => 
                         row.orderId.toString() === order._id.toString() && row.productName === prodName
                     );
 
                     if (!alreadyPresent) {
-                        const itemPrice = p.price * p.quantity;
-                        let cAmt = 0, gAmt = 0, tAmt = 0, sDeduction = 0, adminShipProfit = 0, net = 0;
+                        const itemPriceRevenue = p.price * p.quantity;
+                        let cAmt = 0, gAmt = 0, tAmt = 0, sDeduction = 0, shipProfit = 0, net = 0;
 
-                        if (order.status === "Delivered") {
-                            cAmt = itemPrice * (settings.commissionPercent / 100);
+                        if (isDelivered) {
+                            cAmt = itemPriceRevenue * (settings.commissionPercent / 100);
                             gAmt = cAmt * (settings.gstOnCommissionPercent / 100);
-                            tAmt = itemPrice * (settings.tdsPercent / 100);
-                            
+                            tAmt = itemPriceRevenue * (settings.tdsPercent / 100);
+
                             if (!isFreeDeliveryForCustomer) {
-                                // 💸 PAID: Customer paid (180 - 100 = 80). Seller pays 0.
-                                sDeduction = 0; 
-                                adminShipProfit = (actualCustomerPaidShipping / order.items.length) - partnerCostPerItem;
+                                // ✅ Case: PAID DELIVERY (Customer paid 80)
+                                sDeduction = 0; // Seller pays nothing
+                                // Admin Profit = 80 (from customer) - 40 (to partner) = 40
+                                shipProfit = (actualShippingPaidByCustomer / order.items.length) - partnerCostPerItem;
                             } else {
-                                // 🎁 FREE: Customer paid 0. Seller pays flat fee (e.g. 45).
-                                sDeduction = 45 / order.items.length; 
-                                adminShipProfit = sDeduction - partnerCostPerItem;
+                                // 🎁 Case: FREE DELIVERY (Customer paid 0)
+                                sDeduction = 45 / order.items.length; // Seller pays flat fee
+                                // Admin Profit = 45 (from seller) - 40 (to partner) = 5
+                                shipProfit = sDeduction - partnerCostPerItem;
                             }
 
-                            net = itemPrice - (cAmt + gAmt + tAmt + sDeduction);
+                            net = itemPriceRevenue - (cAmt + gAmt + tAmt + sDeduction);
 
-                            batchSummary.sales += itemPrice;
+                            batchSummary.sales += itemPriceRevenue;
                             batchSummary.comm += cAmt;
                             batchSummary.gst += gAmt;
                             batchSummary.tds += tAmt;
                             batchSummary.delivery += sDeduction;
                             batchSummary.partnerShare += partnerCostPerItem;
-                            batchSummary.adminProfit += adminShipProfit;
+                            batchSummary.adminProfit += shipProfit;
                             batchSummary.final += net;
                         } else {
-                            net = -itemPrice;
-                            batchSummary.sales -= itemPrice;
-                            batchSummary.final -= itemPrice;
+                            // 📉 RETURN LOGIC
+                            net = -itemPriceRevenue;
+                            batchSummary.sales -= itemPriceRevenue;
+                            batchSummary.final -= itemPriceRevenue;
                         }
 
                         batchSummary.count++;
@@ -532,21 +540,22 @@ exports.generateWeeklySettlement = async (req, res) => {
                             orderId: order._id,
                             orderDate: order.createdAt,
                             statusDate: order.updatedAt,
-                            deliveryDate: order.status === "Delivered" ? order.updatedAt : null,
+                            deliveryDate: isDelivered ? order.updatedAt : null,
                             returnDate: isReturned ? order.updatedAt : null,
                             type: order.status.toUpperCase(),
                             productName: prodName,
                             quantity: p.quantity,
-                            amount: isReturned ? -itemPrice : itemPrice,
+                            amount: isReturned ? -itemPriceRevenue : itemPriceRevenue,
                             commissionAmount: Number(cAmt.toFixed(2)),
                             gstAmount: Number(gAmt.toFixed(2)),
                             tdsAmount: Number(tAmt.toFixed(2)),
                             
+                            // 🚚 Breakdown Logistics Transparency
                             deliveryType: isFreeDeliveryForCustomer ? "FREE" : "PAID",
-                            customerPaidShipping: Number((actualCustomerPaidShipping / order.items.length).toFixed(2)),
+                            customerPaidShipping: Number((actualShippingPaidByCustomer / order.items.length).toFixed(2)),
                             sellerDeduction: Number(sDeduction.toFixed(2)),
                             logisticsPartnerCost: Number(partnerCostPerItem.toFixed(2)),
-                            adminProfitOnShipping: Number(adminShipProfit.toFixed(2)),
+                            adminProfitOnShipping: Number(shipProfit.toFixed(2)),
                             
                             netPayable: Number(net.toFixed(2))
                         });
@@ -555,40 +564,40 @@ exports.generateWeeklySettlement = async (req, res) => {
             }
         });
 
-        if (newPayoutRows.length === 0 && settlement) return res.json({ success: true, data: settlement });
-
-        if (settlement) {
-            settlement.payoutBreakdown.push(...newPayoutRows);
-            settlement.orderCount += batchSummary.count;
-            settlement.totalSales = Number((settlement.totalSales + batchSummary.sales).toFixed(2));
-            settlement.commissionTotal = Number((settlement.commissionTotal + batchSummary.comm).toFixed(2));
-            settlement.gstTotal = Number((settlement.gstTotal + batchSummary.gst).toFixed(2));
-            settlement.tdsTotal = Number((settlement.tdsTotal + batchSummary.tds).toFixed(2));
-            settlement.deliveryTotal = Number((settlement.deliveryTotal + batchSummary.delivery).toFixed(2));
-            settlement.logisticsPartnerShare = Number((settlement.logisticsPartnerShare + batchSummary.partnerShare).toFixed(2));
-            settlement.adminLogisticsProfit = Number((settlement.adminLogisticsProfit + batchSummary.adminProfit).toFixed(2));
-            settlement.finalPayable = Number((settlement.finalPayable + batchSummary.final).toFixed(2));
-        } else {
-            settlement = new Settlement({
-                sellerId, weekRange: `${startDate} to ${endDate}`,
-                payoutBreakdown: newPayoutRows,
-                orderCount: batchSummary.count,
-                totalSales: Number(batchSummary.sales.toFixed(2)),
-                commissionTotal: Number(batchSummary.comm.toFixed(2)),
-                gstTotal: Number(batchSummary.gst.toFixed(2)),
-                tdsTotal: Number(batchSummary.tds.toFixed(2)),
-                deliveryTotal: Number(batchSummary.delivery.toFixed(2)),
-                logisticsPartnerShare: Number(batchSummary.partnerShare.toFixed(2)),
-                adminLogisticsProfit: Number(batchSummary.adminProfit.toFixed(2)),
-                finalPayable: Number(batchSummary.final.toFixed(2))
-            });
+        // 🌟 FINAL ATOMIC UPSERT
+        if (newPayoutRows.length > 0) {
+            if (settlement) {
+                settlement.payoutBreakdown.push(...newPayoutRows);
+                settlement.orderCount += batchSummary.count;
+                settlement.totalSales = Number((settlement.totalSales + batchSummary.sales).toFixed(2));
+                settlement.commissionTotal = Number((settlement.commissionTotal + batchSummary.comm).toFixed(2));
+                settlement.gstTotal = Number((settlement.gstTotal + batchSummary.gst).toFixed(2));
+                settlement.tdsTotal = Number((settlement.tdsTotal + batchSummary.tds).toFixed(2));
+                settlement.deliveryTotal = Number((settlement.deliveryTotal + batchSummary.delivery).toFixed(2));
+                settlement.logisticsPartnerShare = Number((settlement.logisticsPartnerShare + batchSummary.partnerShare).toFixed(2));
+                settlement.adminLogisticsProfit = Number((settlement.adminLogisticsProfit + batchSummary.adminProfit).toFixed(2));
+                settlement.finalPayable = Number((settlement.finalPayable + batchSummary.final).toFixed(2));
+            } else {
+                settlement = new Settlement({
+                    sellerId, weekRange: `${startDate} to ${endDate}`,
+                    payoutBreakdown: newPayoutRows,
+                    orderCount: batchSummary.count,
+                    totalSales: Number(batchSummary.sales.toFixed(2)),
+                    commissionTotal: Number(batchSummary.comm.toFixed(2)),
+                    gstTotal: Number(batchSummary.gst.toFixed(2)),
+                    tdsTotal: Number(batchSummary.tds.toFixed(2)),
+                    deliveryTotal: Number(batchSummary.delivery.toFixed(2)),
+                    logisticsPartnerShare: Number(batchSummary.partnerShare.toFixed(2)),
+                    adminLogisticsProfit: Number(batchSummary.adminProfit.toFixed(2)),
+                    finalPayable: Number(batchSummary.final.toFixed(2))
+                });
+            }
+            await settlement.save();
+            await Order.updateMany({ _id: { $in: orders.map(o => o._id) } }, { $set: { isSettled: true } });
         }
 
-        await settlement.save();
-        await Order.updateMany({ _id: { $in: orders.map(o => o._id) } }, { $set: { isSettled: true } });
-
-        const finalData = await Settlement.findById(settlement._id).populate('sellerId', 'shopName email');
-        res.json({ success: true, message: "Detailed Payout Calculated Successfully! ✅", data: finalData });
+        const finalData = await Settlement.findById(settlement?._id || settlement).populate('sellerId', 'shopName email');
+        res.json({ success: true, message: "Detailed Payout Sync Success! ✅", data: finalData });
 
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
