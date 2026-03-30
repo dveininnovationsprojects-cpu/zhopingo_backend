@@ -21,6 +21,7 @@ const SettlementSchema = new mongoose.Schema(
     logisticsShare: { type: Number, default: 0 }, // Delhivery-ku pogum share
     adminLogisticsProfit: { type: Number, default: 0 }, // Delivery-la Admin-ku kedacha profit
     paymentDate: { type: Date },
+    
   },
   { timestamps: true },
 );
