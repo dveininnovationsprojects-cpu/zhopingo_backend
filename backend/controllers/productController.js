@@ -421,21 +421,36 @@ exports.toggleProductStatus = async (req, res) => {
     const productId = req.params.id;
     const sellerId = req.user?.id;
 
+    // 1. Find product and ensure it belongs to the logged-in seller
     const product = await Product.findOne({ _id: productId, seller: sellerId });
+    
     if (!product) {
-      return res.status(404).json({ success: false, message: "Product not found" });
+      return res.status(404).json({ success: false, message: "Product not found or unauthorized" });
     }
 
-    // Toggle logic
-    product.status = product.status === "active" ? "inactive" : "active";
+    // 2. Strict Toggle Logic
+    // String comparison-la thappu varaama irukka trim and lowercase panrom
+    const currentStatus = product.status ? product.status.toLowerCase().trim() : "active";
+    
+    if (currentStatus === "active") {
+        product.status = "inactive";
+    } else {
+        product.status = "active";
+    }
+
+    // 3. Save with validation
     await product.save();
+
+    console.log(`✅ Product ${productId} status changed to: ${product.status}`);
 
     res.json({
       success: true,
-      message: `Product is now ${product.status}`,
-      status: product.status
+      message: `Product is now ${product.status.toUpperCase()}`,
+      status: product.status // 👈 Ippo active/inactive katchithama thirumba varum
     });
+
   } catch (err) {
+    console.error("❌ Toggle Error:", err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 };
