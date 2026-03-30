@@ -441,11 +441,12 @@ exports.updateFinanceSettings = async (req, res) => {
 //   }
 // };
 // 🌟 1. GENERATE WEEKLY SETTLEMENT (Detailed Breakdown Sync)
+
 exports.generateWeeklySettlement = async (req, res) => {
     try {
         const { sellerId, startDate, endDate } = req.body;
         
-        // 🕒 Strict Time formatting for cut-off logic
+        // 🕒 Strict Time formatting (00:00:00 to 23:59:59)
         const filterStart = new Date(startDate);
         filterStart.setHours(0, 0, 0, 0);
         const filterEnd = new Date(endDate);
@@ -457,7 +458,7 @@ exports.generateWeeklySettlement = async (req, res) => {
             tdsPercent: 2,
         };
 
-        // 🔍 Fetch only non-settled Delivered/Returned orders within the week
+        // 🔍 QUERY: Strictly non-settled orders with status change within the range
         const orders = await Order.find({
             "sellerSplitData.sellerId": new mongoose.Types.ObjectId(sellerId),
             isSettled: { $ne: true },
@@ -467,19 +468,19 @@ exports.generateWeeklySettlement = async (req, res) => {
             ],
         }).populate('items.productId');
 
-        // 🛡️ Logic: Pudhu order illana, exist aagura data-vah view panna tharrom
+        // 🛡️ Logic: No NEW eligible orders found, return existing week data if any
         if (!orders || orders.length === 0) {
             const existing = await Settlement.findOne({ sellerId, weekRange: `${startDate} to ${endDate}` })
                 .populate('sellerId', 'shopName email');
             
             if (existing) {
-                return res.json({ success: true, message: "Viewing existing settlement data.", data: existing });
+                return res.json({ success: true, message: "Showing existing settlement data.", data: existing });
             }
-            return res.status(404).json({ success: false, message: "No eligible orders found for this week." });
+            return res.status(404).json({ success: false, message: "No delivered or returned orders found for this cycle." });
         }
 
         let newPayoutRows = [];
-        let runningSummary = { sales: 0, comm: 0, gst: 0, tds: 0, delivery: 0, final: 0, count: 0 };
+        let summary = { sales: 0, comm: 0, gst: 0, tds: 0, delivery: 0, final: 0, count: 0 };
 
         orders.forEach((order) => {
             const split = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId);
@@ -488,100 +489,110 @@ exports.generateWeeklySettlement = async (req, res) => {
                 const isReturned = order.status === "Returned";
                 const deliveryCharge = order.billDetails?.deliveryCharge || 0;
 
-                // 📦 BREAKDOWN BY PRODUCT (Nee keta maari thani thaniya)
+                // 📦 Individual Item Breakdown
                 order.items.filter(item => item.sellerId.toString() === sellerId).forEach(p => {
-                    runningSummary.count++;
+                    summary.count++;
                     const itemTotal = p.price * p.quantity;
 
-                    // 🧮 Individual Item Math (Atomic Calculation)
-                    const commAmt = isReturned ? 0 : itemTotal * (Number(settings.commissionPercent) / 100);
-                    const gstAmt = isReturned ? 0 : commAmt * (Number(settings.gstOnCommissionPercent) / 100);
-                    const tdsAmt = isReturned ? 0 : itemTotal * (Number(settings.tdsPercent) / 100);
-                    
-                    // Logic: Split delivery charge strictly among seller's items
-                    const itemDeliveryShare = isReturned ? 0 : (deliveryCharge / order.items.length);
-                    const itemNet = isReturned ? -itemTotal : (itemTotal - (commAmt + gstAmt + tdsAmt + itemDeliveryShare));
+                    let platformComm = 0;
+                    let gstAmt = 0;
+                    let tdsAmt = 0;
+                    let itemDeliveryShare = 0;
+                    let netPayable = 0;
 
-                    // 📅 Date Logic for Table
-                    const dDate = order.status === "Delivered" ? order.updatedAt : null;
-                    const rDate = order.status === "Returned" ? order.updatedAt : null;
+                    if (!isReturned) {
+                        // 📈 SALE LOGIC: Regular Fees Deduction
+                        platformComm = itemTotal * (Number(settings.commissionPercent) / 100);
+                        gstAmt = platformComm * (Number(settings.gstOnCommissionPercent) / 100);
+                        tdsAmt = itemTotal * (Number(settings.tdsPercent) / 100);
+                        itemDeliveryShare = (deliveryCharge / order.items.length) || 0;
+                        
+                        netPayable = itemTotal - (platformComm + gstAmt + tdsAmt + itemDeliveryShare);
+
+                        // Summary Runners
+                        summary.sales += itemTotal;
+                        summary.comm += platformComm;
+                        summary.gst += gstAmt;
+                        summary.tds += tdsAmt;
+                        summary.delivery += itemDeliveryShare;
+                        summary.final += netPayable;
+                    } else {
+                        // 📉 RETURN LOGIC: Strictly deduct product amount only
+                        // Commission/GST/TDS remains with Admin (No reverse deduction)
+                        netPayable = -itemTotal; 
+
+                        // Summary Runners (Strictly Item Price Deduction)
+                        summary.sales -= itemTotal;
+                        summary.final -= itemTotal;
+                    }
 
                     newPayoutRows.push({
                         orderId: order._id,
                         orderDate: order.createdAt,
                         statusDate: order.updatedAt,
-                        deliveryDate: dDate, // 🎯 Delivered date
-                        returnDate: rDate,   // 🎯 Returned date
+                        deliveryDate: !isReturned ? order.updatedAt : null,
+                        returnDate: isReturned ? order.updatedAt : null,
                         type: isReturned ? "RETURN" : "SALE",
                         productName: p.name || p.productId?.name || "Product",
                         quantity: p.quantity,
                         amount: isReturned ? -itemTotal : itemTotal,
-                        commissionPercent: Number(settings.commissionPercent),
-                        commissionAmount: Number(commAmt.toFixed(2)),
+                        commissionPercent: isReturned ? 0 : Number(settings.commissionPercent),
+                        commissionAmount: Number(platformComm.toFixed(2)),
                         gstAmount: Number(gstAmt.toFixed(2)),
                         tdsAmount: Number(tdsAmt.toFixed(2)),
                         deliveryDeduction: Number(itemDeliveryShare.toFixed(2)),
-                        netPayable: Number(itemNet.toFixed(2))
+                        netPayable: Number(netPayable.toFixed(2))
                     });
-
-                    // Summary runners calculation
-                    runningSummary.sales += isReturned ? -itemTotal : itemTotal;
-                    runningSummary.comm += commAmt;
-                    runningSummary.gst += gstAmt;
-                    runningSummary.tds += tdsAmt;
-                    runningSummary.delivery += itemDeliveryShare;
-                    runningSummary.final += itemNet;
                 });
             }
         });
 
-        // 🌟 ATOMIC SYNC: Find current week record or Create new
+        // 🌟 ATOMIC UPSERT: Sync to existing week record
         let settlement = await Settlement.findOne({ sellerId, weekRange: `${startDate} to ${endDate}` });
 
         if (settlement) {
-            // Safety: Initialize breakdown if it was broken before
             if (!settlement.payoutBreakdown) settlement.payoutBreakdown = [];
             
             settlement.payoutBreakdown.push(...newPayoutRows);
-            settlement.orderCount += runningSummary.count;
-            settlement.totalSales = Number((settlement.totalSales + runningSummary.sales).toFixed(2));
-            settlement.commissionTotal = Number((settlement.commissionTotal + runningSummary.comm).toFixed(2));
-            settlement.gstTotal = Number((settlement.gstTotal + runningSummary.gst).toFixed(2));
-            settlement.tdsTotal = Number((settlement.tdsTotal + runningSummary.tds).toFixed(2));
-            settlement.deliveryTotal = Number((settlement.deliveryTotal + runningSummary.delivery).toFixed(2));
-            settlement.finalPayable = Number((settlement.finalPayable + runningSummary.final).toFixed(2));
+            settlement.orderCount += summary.count;
+            settlement.totalSales = Number((settlement.totalSales + summary.sales).toFixed(2));
+            settlement.commissionTotal = Number((settlement.commissionTotal + summary.comm).toFixed(2));
+            settlement.gstTotal = Number((settlement.gstTotal + summary.gst).toFixed(2));
+            settlement.tdsTotal = Number((settlement.tdsTotal + summary.tds).toFixed(2));
+            settlement.deliveryTotal = Number((settlement.deliveryTotal + summary.delivery).toFixed(2));
+            settlement.finalPayable = Number((settlement.finalPayable + summary.final).toFixed(2));
         } else {
             settlement = new Settlement({
                 sellerId,
                 weekRange: `${startDate} to ${endDate}`,
                 payoutBreakdown: newPayoutRows,
-                orderCount: runningSummary.count,
-                totalSales: Number(runningSummary.sales.toFixed(2)),
-                commissionTotal: Number(runningSummary.comm.toFixed(2)),
-                gstTotal: Number(runningSummary.gst.toFixed(2)),
-                tdsTotal: Number(runningSummary.tds.toFixed(2)),
-                deliveryTotal: Number(runningSummary.delivery.toFixed(2)),
-                finalPayable: Number(runningSummary.final.toFixed(2)),
+                orderCount: summary.count,
+                totalSales: Number(summary.sales.toFixed(2)),
+                commissionTotal: Number(summary.comm.toFixed(2)),
+                gstTotal: Number(summary.gst.toFixed(2)),
+                tdsTotal: Number(summary.tds.toFixed(2)),
+                deliveryTotal: Number(summary.delivery.toFixed(2)),
+                finalPayable: Number(summary.final.toFixed(2)),
                 status: "Pending",
             });
         }
 
         await settlement.save();
 
-        // ✅ Mark orders so they don't get double counted
+        // 🛡️ Final Cut-off: Mark orders as settled strictly
         const orderIds = orders.map((o) => o._id);
         await Order.updateMany({ _id: { $in: orderIds } }, { $set: { isSettled: true } });
 
-        const populatedData = await Settlement.findById(settlement._id).populate('sellerId', 'shopName email');
+        const finalData = await Settlement.findById(settlement._id).populate('sellerId', 'shopName email');
 
         res.json({
             success: true,
-            message: "Detailed Settlement Sync Success! ✅",
-            data: populatedData,
+            message: "Payout Sync Success! Calculated strictly on Delivery/Return dates. ✅",
+            data: finalData,
         });
 
     } catch (err) {
-        console.error("Critical Sync Error:", err);
+        console.error("Payout Logic Error:", err);
         res.status(500).json({ success: false, error: err.message });
     }
 };
