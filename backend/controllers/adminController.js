@@ -462,31 +462,26 @@ exports.generateWeeklySettlement = async (req, res) => {
 
         if (!orders || orders.length === 0) {
             if (settlement) return res.json({ success: true, data: settlement });
-            return res.status(404).json({ success: false, message: "No orders found." });
+            return res.status(404).json({ success: false, message: "No new Delivered/Returned orders found." });
         }
 
         let newPayoutRows = [];
         let batchSummary = { sales: 0, comm: 0, gst: 0, tds: 0, delivery: 0, partnerShare: 0, adminProfit: 0, final: 0, count: 0 };
 
         orders.forEach((order) => {
-            // 🎯 This specific seller's split data from the order
+            // Find this specific seller's split to see if THEY charged shipping
             const split = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId);
             
             if (split) {
                 const isReturned = order.status === "Returned";
                 const isDelivered = order.status === "Delivered";
 
-                // 🚚 LOGISTICS ENGINE (Based on DB response provided)
-                // totalAmount (180) - sellerSubtotal (100) = 80 (Shipping)
-                const totalBill = order.billDetails?.totalAmount || 0;
-                
-                // Order-la irukura ella sellers-oda subtotal-aiyum kootuna dhaan shipping katchithama theriyum
-                const totalItemsRevenueInOrder = order.sellerSplitData.reduce((acc, curr) => acc + (curr.sellerSubtotal || 0), 0);
-                
-                const actualShippingPaidByCustomer = totalBill - totalItemsRevenueInOrder;
-                const isFreeDeliveryForCustomer = actualShippingPaidByCustomer <= 0;
+                // 🚚 LOGISTICS DETECTOR (Industry Standard)
+                // DB-la seller charged shipping 0-ku mela irundha, it's PAID delivery.
+                const shippingPaidByCustomer = Number(split.customerChargedShipping || 0);
+                const isFreeDeliveryForCustomer = shippingPaidByCustomer <= 0;
 
-                // Logistics partner cost (API call amount or flat 40)
+                // Logistics Partner Charge (Unga Actual Cost - e.g. ₹40)
                 const partnerCostPerItem = 40; 
 
                 order.items.filter(item => item.sellerId.toString() === sellerId).forEach(p => {
@@ -497,29 +492,28 @@ exports.generateWeeklySettlement = async (req, res) => {
                     );
 
                     if (!alreadyPresent) {
-                        const itemPriceRevenue = p.price * p.quantity;
+                        const itemRevenue = p.price * p.quantity;
                         let cAmt = 0, gAmt = 0, tAmt = 0, sDeduction = 0, shipProfit = 0, net = 0;
 
                         if (isDelivered) {
-                            cAmt = itemPriceRevenue * (settings.commissionPercent / 100);
+                            cAmt = itemRevenue * (settings.commissionPercent / 100);
                             gAmt = cAmt * (settings.gstOnCommissionPercent / 100);
-                            tAmt = itemPriceRevenue * (settings.tdsPercent / 100);
+                            tAmt = itemRevenue * (settings.tdsPercent / 100);
 
                             if (!isFreeDeliveryForCustomer) {
-                                // ✅ Case: PAID DELIVERY (Customer paid 80)
-                                sDeduction = 0; // Seller pays nothing
-                                // Admin Profit = 80 (from customer) - 40 (to partner) = 40
-                                shipProfit = (actualShippingPaidByCustomer / order.items.length) - partnerCostPerItem;
+                                // ✅ PAID DELIVERY: Customer already paid shipping (e.g. 80)
+                                sDeduction = 0; // Seller doesn't pay.
+                                // Admin Profit = Shipping collected - Partner cost
+                                shipProfit = shippingPaidByCustomer - partnerCostPerItem;
                             } else {
-                                // 🎁 Case: FREE DELIVERY (Customer paid 0)
-                                sDeduction = 45 / order.items.length; // Seller pays flat fee
-                                // Admin Profit = 45 (from seller) - 40 (to partner) = 5
+                                // 🎁 FREE DELIVERY: Seller has to cover the cost
+                                sDeduction = 45 / order.items.filter(i => i.sellerId.toString() === sellerId).length;
                                 shipProfit = sDeduction - partnerCostPerItem;
                             }
 
-                            net = itemPriceRevenue - (cAmt + gAmt + tAmt + sDeduction);
+                            net = itemRevenue - (cAmt + gAmt + tAmt + sDeduction);
 
-                            batchSummary.sales += itemPriceRevenue;
+                            batchSummary.sales += itemRevenue;
                             batchSummary.comm += cAmt;
                             batchSummary.gst += gAmt;
                             batchSummary.tds += tAmt;
@@ -528,10 +522,10 @@ exports.generateWeeklySettlement = async (req, res) => {
                             batchSummary.adminProfit += shipProfit;
                             batchSummary.final += net;
                         } else {
-                            // 📉 RETURN LOGIC
-                            net = -itemPriceRevenue;
-                            batchSummary.sales -= itemPriceRevenue;
-                            batchSummary.final -= itemPriceRevenue;
+                            // 📉 RETURN logic
+                            net = -itemRevenue;
+                            batchSummary.sales -= itemRevenue;
+                            batchSummary.final -= itemRevenue;
                         }
 
                         batchSummary.count++;
@@ -545,14 +539,14 @@ exports.generateWeeklySettlement = async (req, res) => {
                             type: order.status.toUpperCase(),
                             productName: prodName,
                             quantity: p.quantity,
-                            amount: isReturned ? -itemPriceRevenue : itemPriceRevenue,
+                            amount: isReturned ? -itemRevenue : itemRevenue,
                             commissionAmount: Number(cAmt.toFixed(2)),
                             gstAmount: Number(gAmt.toFixed(2)),
                             tdsAmount: Number(tAmt.toFixed(2)),
                             
                             // 🚚 Breakdown Logistics Transparency
                             deliveryType: isFreeDeliveryForCustomer ? "FREE" : "PAID",
-                            customerPaidShipping: Number((actualShippingPaidByCustomer / order.items.length).toFixed(2)),
+                            customerPaidShipping: Number(shippingPaidByCustomer.toFixed(2)),
                             sellerDeduction: Number(sDeduction.toFixed(2)),
                             logisticsPartnerCost: Number(partnerCostPerItem.toFixed(2)),
                             adminProfitOnShipping: Number(shipProfit.toFixed(2)),
@@ -564,7 +558,6 @@ exports.generateWeeklySettlement = async (req, res) => {
             }
         });
 
-        // 🌟 FINAL ATOMIC UPSERT
         if (newPayoutRows.length > 0) {
             if (settlement) {
                 settlement.payoutBreakdown.push(...newPayoutRows);
@@ -593,7 +586,8 @@ exports.generateWeeklySettlement = async (req, res) => {
                 });
             }
             await settlement.save();
-            await Order.updateMany({ _id: { $in: orders.map(o => o._id) } }, { $set: { isSettled: true } });
+            const orderIds = orders.map(o => o._id);
+            await Order.updateMany({ _id: { $in: orderIds } }, { $set: { isSettled: true } });
         }
 
         const finalData = await Settlement.findById(settlement?._id || settlement).populate('sellerId', 'shopName email');
