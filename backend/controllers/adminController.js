@@ -444,7 +444,6 @@ exports.updateFinanceSettings = async (req, res) => {
 exports.generateWeeklySettlement = async (req, res) => {
     try {
         const { sellerId, startDate, endDate } = req.body;
-        
         const filterStart = new Date(startDate);
         filterStart.setHours(0, 0, 0, 0);
         const filterEnd = new Date(endDate);
@@ -467,21 +466,18 @@ exports.generateWeeklySettlement = async (req, res) => {
 
         if (!orders || orders.length === 0) {
             if (settlement) return res.json({ success: true, data: settlement });
-            return res.status(404).json({ success: false, message: "No Delivered/Returned orders found." });
+            return res.status(404).json({ success: false, message: "No orders found." });
         }
 
         let newPayoutRows = [];
-        let currentBatchSummary = { sales: 0, comm: 0, gst: 0, tds: 0, delivery: 0, final: 0, count: 0 };
+        let batchSummary = { sales: 0, comm: 0, gst: 0, tds: 0, delivery: 0, final: 0, count: 0 };
 
         orders.forEach((order) => {
             const split = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId);
-            
             if (split) {
                 const isReturned = order.status === "Returned";
-                const isDelivered = order.status === "Delivered";
                 
-                // 🌟 THE FIX: Checking if delivery is FREE for customer
-                // Customer pay panna delivery charge > 0 na, namma seller kitta pudikka koodathu.
+                // 🛡️ Delivery Guard: Strictly check if customer paid
                 const customerPaidDelivery = order.billDetails?.deliveryCharge || 0;
                 const isFreeDeliveryForCustomer = customerPaidDelivery === 0;
 
@@ -493,52 +489,53 @@ exports.generateWeeklySettlement = async (req, res) => {
                     );
 
                     if (!alreadyPresent) {
-                        const itemPriceTotal = p.price * p.quantity; // 🎯 Base Product Price (Revenue)
+                        const itemPrice = p.price * p.quantity;
                         let cAmt = 0, gAmt = 0, tAmt = 0, dDeduction = 0, net = 0;
 
-                        if (isDelivered) {
-                            cAmt = itemPriceTotal * (Number(settings.commissionPercent) / 100);
+                        if (!isReturned) {
+                            cAmt = itemPrice * (Number(settings.commissionPercent) / 100);
                             gAmt = cAmt * (Number(settings.gstOnCommissionPercent) / 100);
-                            tAmt = itemPriceTotal * (Number(settings.tdsPercent) / 100);
+                            tAmt = itemPrice * (Number(settings.tdsPercent) / 100);
                             
-                            // 🌟 DEDUCTION LOGIC: Only if delivery is FREE for customer, charge the seller.
-                            // Otherwise, customer paid for it, so seller deduction is 0.
+                            // 🌟 ATOMIC FIX: ONLY charge seller if customer got it for free
                             if (isFreeDeliveryForCustomer) {
-                                dDeduction = 45 / order.items.length; // Flat 45 example split
+                                // Default flat shipping fee (split among items in order)
+                                dDeduction = 45 / order.items.length; 
+                            } else {
+                                dDeduction = 0; 
                             }
 
-                            net = itemPriceTotal - (cAmt + gAmt + tAmt + dDeduction);
+                            net = itemPrice - (cAmt + gAmt + tAmt + dDeduction);
 
-                            currentBatchSummary.sales += itemPriceTotal;
-                            currentBatchSummary.comm += cAmt;
-                            currentBatchSummary.gst += gAmt;
-                            currentBatchSummary.tds += tAmt;
-                            currentBatchSummary.delivery += dDeduction;
-                            currentBatchSummary.final += net;
+                            batchSummary.sales += itemPrice;
+                            batchSummary.comm += cAmt;
+                            batchSummary.gst += gAmt;
+                            batchSummary.tds += tAmt;
+                            batchSummary.delivery += dDeduction;
+                            batchSummary.final += net;
                         } else {
-                            // RETURN: Only item price minus
-                            net = -itemPriceTotal; 
-                            currentBatchSummary.sales -= itemPriceTotal;
-                            currentBatchSummary.final -= itemPriceTotal;
+                            net = -itemPrice;
+                            batchSummary.sales -= itemPrice;
+                            batchSummary.final -= itemPrice;
                         }
 
-                        currentBatchSummary.count++;
+                        batchSummary.count++;
 
                         newPayoutRows.push({
                             orderId: order._id,
                             orderDate: order.createdAt,
                             statusDate: order.updatedAt,
-                            deliveryDate: isDelivered ? order.updatedAt : null,
+                            deliveryDate: !isReturned ? order.updatedAt : null,
                             returnDate: isReturned ? order.updatedAt : null,
                             type: order.status.toUpperCase(),
                             productName: prodName,
                             quantity: p.quantity,
-                            amount: isReturned ? -itemPriceTotal : itemPriceTotal,
+                            amount: isReturned ? -itemPrice : itemPrice,
                             commissionPercent: isReturned ? 0 : Number(settings.commissionPercent),
                             commissionAmount: Number(cAmt.toFixed(2)),
                             gstAmount: Number(gAmt.toFixed(2)),
                             tdsAmount: Number(tAmt.toFixed(2)),
-                            deliveryDeduction: Number(dDeduction.toFixed(2)), // 🎯 Ippo strictly correct-ah varum
+                            deliveryDeduction: Number(dDeduction.toFixed(2)),
                             netPayable: Number(net.toFixed(2))
                         });
                     }
@@ -550,24 +547,24 @@ exports.generateWeeklySettlement = async (req, res) => {
 
         if (settlement) {
             settlement.payoutBreakdown.push(...newPayoutRows);
-            settlement.orderCount += currentBatchSummary.count;
-            settlement.totalSales = Number((settlement.totalSales + currentBatchSummary.sales).toFixed(2));
-            settlement.commissionTotal = Number((settlement.commissionTotal + currentBatchSummary.comm).toFixed(2));
-            settlement.gstTotal = Number((settlement.gstTotal + currentBatchSummary.gst).toFixed(2));
-            settlement.tdsTotal = Number((settlement.tdsTotal + currentBatchSummary.tds).toFixed(2));
-            settlement.deliveryTotal = Number((settlement.deliveryTotal + currentBatchSummary.delivery).toFixed(2));
-            settlement.finalPayable = Number((settlement.finalPayable + currentBatchSummary.final).toFixed(2));
+            settlement.orderCount += batchSummary.count;
+            settlement.totalSales = Number((settlement.totalSales + batchSummary.sales).toFixed(2));
+            settlement.commissionTotal = Number((settlement.commissionTotal + batchSummary.comm).toFixed(2));
+            settlement.gstTotal = Number((settlement.gstTotal + batchSummary.gst).toFixed(2));
+            settlement.tdsTotal = Number((settlement.tdsTotal + batchSummary.tds).toFixed(2));
+            settlement.deliveryTotal = Number((settlement.deliveryTotal + batchSummary.delivery).toFixed(2));
+            settlement.finalPayable = Number((settlement.finalPayable + batchSummary.final).toFixed(2));
         } else {
             settlement = new Settlement({
                 sellerId, weekRange: `${startDate} to ${endDate}`,
                 payoutBreakdown: newPayoutRows,
-                orderCount: currentBatchSummary.count,
-                totalSales: Number(currentBatchSummary.sales.toFixed(2)),
-                commissionTotal: Number(currentBatchSummary.comm.toFixed(2)),
-                gstTotal: Number(currentBatchSummary.gst.toFixed(2)),
-                tdsTotal: Number(currentBatchSummary.tds.toFixed(2)),
-                deliveryTotal: Number(currentBatchSummary.delivery.toFixed(2)),
-                finalPayable: Number(currentBatchSummary.final.toFixed(2))
+                orderCount: batchSummary.count,
+                totalSales: Number(batchSummary.sales.toFixed(2)),
+                commissionTotal: Number(batchSummary.comm.toFixed(2)),
+                gstTotal: Number(batchSummary.gst.toFixed(2)),
+                tdsTotal: Number(batchSummary.tds.toFixed(2)),
+                deliveryTotal: Number(batchSummary.delivery.toFixed(2)),
+                finalPayable: Number(batchSummary.final.toFixed(2))
             });
         }
 
@@ -575,12 +572,13 @@ exports.generateWeeklySettlement = async (req, res) => {
         await Order.updateMany({ _id: { $in: orders.map(o => o._id) } }, { $set: { isSettled: true } });
 
         const finalData = await Settlement.findById(settlement._id).populate('sellerId', 'shopName email');
-        res.json({ success: true, message: "Payout Finalized with Proper Delivery Logic! ✅", data: finalData });
+        res.json({ success: true, message: "Payout Success! Strict delivery logic applied. ✅", data: finalData });
 
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
 };
+
 // 3. Mark as Paid (🌟 Strictly Button Click - No Body Needed)
 exports.markSettlementAsPaid = async (req, res) => {
   try {
