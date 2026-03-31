@@ -189,6 +189,7 @@ const Order = require("../models/Order");
 const User = require("../models/User");
 const Seller = require("../models/Seller");
 const axios = require("axios");
+const mongoose = require("mongoose");
 
 // 🌟 THE SYNC: Logistics Controller-la irundhu master function-ah direct-ah edukkurom
 const { processShipmentCreation } = require("./logisticsController"); 
