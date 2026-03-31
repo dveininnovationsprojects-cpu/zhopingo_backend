@@ -66,6 +66,51 @@ exports.getRealTimeRateInternal = async (pincode, weightKg, originPincode, payme
     }
 };
 
+// /* =====================================================
+//     🌟 7. PUBLIC RATE CALCULATION (For Frontend Cart)
+// ===================================================== */
+// exports.calculateLiveDeliveryRate = async (req, res) => {
+//     try {
+//         const { pincode, items, paymentMode } = req.body;
+
+//         if (!pincode || !items || items.length === 0) {
+//             return res.status(400).json({ success: false, message: "Missing pincode or items" });
+//         }
+
+//         const hasFreeDeliveryItem = items.some(item => item.isFreeDelivery === true);
+//         if (hasFreeDeliveryItem) {
+//             return res.json({ success: true, finalCharge: 0, type: "FREE" });
+//         }
+
+//         let totalWeightKg = items.reduce((sum, item) => {
+//             const kg = exports.getWeightInKg(item.weightValue || item.weight, item.unit || 'g');
+//             return sum + (kg * item.quantity);
+//         }, 0);
+
+//         const firstSellerId = items[0].sellerId;
+//         const sellerDoc = await Seller.findById(firstSellerId);
+//         const originPin = sellerDoc?.shopAddress?.pincode || "600001";
+
+//         const liveRate = await exports.getRealTimeRateInternal(
+//             pincode, 
+//             totalWeightKg, 
+//             originPin, 
+//             paymentMode || "Pre-paid"
+//         );
+
+//         res.json({ 
+//             success: true, 
+//             finalCharge: liveRate, 
+//             type: "PAID",
+//             weight: totalWeightKg.toFixed(3)
+//         });
+
+//     } catch (err) {
+//         console.error("Cart Rate Error:", err.message);
+//         res.status(500).json({ success: false, finalCharge: 80, message: "Fallback applied" });
+//     }
+// };
+
 /* =====================================================
     🌟 7. PUBLIC RATE CALCULATION (For Frontend Cart)
 ===================================================== */
@@ -91,18 +136,27 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
         const sellerDoc = await Seller.findById(firstSellerId);
         const originPin = sellerDoc?.shopAddress?.pincode || "600001";
 
-        const liveRate = await exports.getRealTimeRateInternal(
+        // 📡 API-la irundhu real cost edukkuron (e.g., ₹39)
+        const realApiRate = await exports.getRealTimeRateInternal(
             pincode, 
             totalWeightKg, 
             originPin, 
             paymentMode || "Pre-paid"
         );
 
+        /* =====================================================
+           💰 THE PROFIT GUARD: Minimum ₹80 Logic
+        ===================================================== */
+        // API ₹39 nu sonnalum, namma ₹80 thaan customer kitta kaatuvom.
+        // Oru vaelai API ₹120 nu sonna, real amount-ae kaatuvom.
+        const finalChargeToCustomer = realApiRate < 80 ? 80 : realApiRate;
+
         res.json({ 
             success: true, 
-            finalCharge: liveRate, 
+            finalCharge: finalChargeToCustomer, // 🌟 Customer will see ₹80
             type: "PAID",
-            weight: totalWeightKg.toFixed(3)
+            weight: totalWeightKg.toFixed(3),
+            actualCost: realApiRate // 🕵️ Admin reference-kaga internal-ah anuppalam
         });
 
     } catch (err) {
