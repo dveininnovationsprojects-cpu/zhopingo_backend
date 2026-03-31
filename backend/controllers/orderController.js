@@ -317,8 +317,8 @@ const {
 //   }
 // };
 /* =====================================================
-    🌟 MASTER CREATE ORDER (1Cr Standard - Final Pro Edition)
-    Logic: Atomic Stock, Real-Time Logistics Sync, Split Finance + Wallet AWB Fix
+    🌟 MASTER CREATE ORDER (1Cr Standard - Final Pro Edition)
+    Logic: Atomic Stock, Real-Time Logistics Sync, Split Finance + Wallet AWB Fix
 ===================================================== */
 exports.createOrder = async (req, res) => {
   try {
@@ -407,7 +407,6 @@ exports.createOrder = async (req, res) => {
 
       sellerWiseSplit[sIdStr].sellerSubtotal += subtotal;
 
-      // Prep items for DB storage
       processedItems.push({
         productId: productDoc._id,
         name: productDoc.name,
@@ -489,20 +488,20 @@ exports.createOrder = async (req, res) => {
       newOrder.status = "Placed"; 
       newOrder.paymentStatus = "Paid"; 
 
-      // 🛡️ CRITICAL FIX 1: Save order BEFORE triggering shipment
+      // 🛡️ CRITICAL FIX 1: Save order BEFORE triggering shipment so Delhivery can find the order ID
       await newOrder.save();
 
-      // 🚀 THE MASTER SYNC TRIGGER (Corrected for Dynamic Pickup Name)
+      // 🚀 THE MASTER SYNC TRIGGER
       for (let split of newOrder.sellerSplitData) {
         try {
-           // 🌟 THE SYNC FIX: Using split.sellerId instead of split.shopName
-           // processShipmentCreation kulla namma generateWarehouseName help-ah sync pannirukkoam
+           // CRITICAL FIX 2: processShipmentCreation ah direct-ah call panroam (No 'exports.' prefix)
            const shipmentRes = await processShipmentCreation(
               newOrder._id, 
-              split.sellerId
+              split.sellerId, 
+              split.shopName
            );
            if(shipmentRes.success) {
-              console.log(`✅ Frontend Order AWB Success: ${shipmentRes.awb}`);
+              console.log(`✅ AWB Sync Success for ${split.shopName}: ${shipmentRes.awb}`);
            }
         } catch (shipErr) {
            console.error(`❌ Shipment Auto-Trigger Error: ${shipErr.message}`);
