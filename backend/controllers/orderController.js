@@ -407,7 +407,6 @@ exports.createOrder = async (req, res) => {
 
       sellerWiseSplit[sIdStr].sellerSubtotal += subtotal;
 
-      // Prep items for DB storage
       processedItems.push({
         productId: productDoc._id,
         name: productDoc.name,
@@ -464,7 +463,7 @@ exports.createOrder = async (req, res) => {
       paymentStatus: "Pending", 
     });
 
-    // 💰 WALLET SYNC: Atomic Transaction + AWB Trigger
+    // 💰 WALLET SYNC: Atomic Transaction + AWB Trigger & Storage Fix
     if (paymentMethod === "WALLET") {
       if (user.walletBalance < finalGrandTotal) {
         for (const item of processedItems) {
@@ -489,20 +488,44 @@ exports.createOrder = async (req, res) => {
       newOrder.status = "Placed"; 
       newOrder.paymentStatus = "Paid"; 
 
-      // 🛡️ CRITICAL FIX 1: Save order BEFORE triggering shipment
+      // 🛡️ STEP 1: Save the base order first
       await newOrder.save();
 
-      // 🚀 THE MASTER SYNC TRIGGER (Corrected for Dynamic Pickup Name)
+      console.log("🚀 STARTING LIVE AWB SYNC & DIRECT DB STORAGE...");
+
+      // 🚀 STEP 2: Loop through sellers, Trigger Delhivery, and FORCE SAVE to DB
       for (let split of newOrder.sellerSplitData) {
         try {
-           // 🌟 THE SYNC FIX: Using split.sellerId instead of split.shopName
-           // processShipmentCreation kulla namma generateWarehouseName help-ah sync pannirukkoam
            const shipmentRes = await processShipmentCreation(
               newOrder._id, 
               split.sellerId
            );
-           if(shipmentRes.success) {
-              console.log(`✅ Frontend Order AWB Success: ${shipmentRes.awb}`);
+
+           if(shipmentRes.success && shipmentRes.awb) {
+              console.log(`✅ AWB Received: ${shipmentRes.awb}. Updating Database...`);
+
+              // 🌟 THE CRITICAL DB INJECTION: Directly updating the document to ensure persistence
+              await Order.findOneAndUpdate(
+                { _id: newOrder._id, "sellerSplitData.sellerId": split.sellerId },
+                { 
+                  $set: { 
+                    "sellerSplitData.$.awbNumber": shipmentRes.awb,
+                    "sellerSplitData.$.packageStatus": "Packed"
+                  } 
+                }
+              );
+
+              // Individual item level sync for AWB tracking on frontend
+              await Order.updateMany(
+                { _id: newOrder._id, "items.sellerId": split.sellerId },
+                { 
+                  $set: { 
+                    "items.$[elem].itemAwbNumber": shipmentRes.awb,
+                    "items.$[elem].itemStatus": "Packed"
+                  } 
+                },
+                { arrayFilters: [{ "elem.sellerId": split.sellerId }] }
+              );
            }
         } catch (shipErr) {
            console.error(`❌ Shipment Auto-Trigger Error: ${shipErr.message}`);
@@ -510,9 +533,10 @@ exports.createOrder = async (req, res) => {
       }
     }
 
-    // Final save to capture AWB updates
-    await newOrder.save();
-    res.status(201).json({ success: true, order: newOrder });
+    // Refresh the order object before sending response to show latest AWB
+    const finalStoredOrder = await Order.findById(newOrder._id);
+    res.status(201).json({ success: true, order: finalStoredOrder });
+
   } catch (err) {
     console.error("CRITICAL ORDER ERROR:", err);
     res.status(500).json({ success: false, error: "Internal System Failure" });
