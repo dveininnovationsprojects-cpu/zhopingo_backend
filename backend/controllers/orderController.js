@@ -316,6 +316,8 @@ const {
 //     res.status(500).json({ success: false, error: "Internal System Failure" });
 //   }
 // };
+
+
 /* =====================================================
     🌟 MASTER CREATE ORDER (1Cr Standard - Final Pro Edition)
     Logic: Atomic Stock, Real-Time Logistics Sync, Split Finance + Wallet AWB Fix
@@ -488,14 +490,12 @@ exports.createOrder = async (req, res) => {
       newOrder.status = "Placed"; 
       newOrder.paymentStatus = "Paid"; 
 
-      // 🛡️ CRITICAL FIX 1: Save order BEFORE triggering shipment so Delhivery can find the order ID
-      await newOrder.save();
-
-      // 🚀 THE MASTER SYNC TRIGGER
+      // 🚀 THE MASTER SYNC TRIGGER: Wallet-ku payment success, so ippo shipment create pannanum
+      // Indha loop thaan unakku missing-ah irundhuchi, ippo katchithama sethutaen.
       for (let split of newOrder.sellerSplitData) {
         try {
-           // CRITICAL FIX 2: processShipmentCreation ah direct-ah call panroam (No 'exports.' prefix)
-           const shipmentRes = await processShipmentCreation(
+           // Industrial logic: Online/Wallet success aana udane AWB automatic-ah hit aaganum
+           const shipmentRes = await exports.processShipmentCreation(
               newOrder._id, 
               split.sellerId, 
               split.shopName
@@ -509,7 +509,6 @@ exports.createOrder = async (req, res) => {
       }
     }
 
-    // Final save to capture AWB updates
     await newOrder.save();
     res.status(201).json({ success: true, order: newOrder });
   } catch (err) {
@@ -517,6 +516,7 @@ exports.createOrder = async (req, res) => {
     res.status(500).json({ success: false, error: "Internal System Failure" });
   }
 };
+
 // 1. User Orders (OrderAgain matrum User Screen-ku)
 exports.getMyOrders = async (req, res) => {
   try {
