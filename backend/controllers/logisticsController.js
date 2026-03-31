@@ -618,14 +618,53 @@ exports.manualRegisterWarehouse = async (req, res) => {
         const sellerDoc = await Seller.findById(sellerId);
         if (!sellerDoc) return res.status(404).json({ success: false, message: "Seller not found" });
 
-        const result = await exports.registerPickupLocation(sellerDoc);
+        // 🌟 uniqueName-ah strictly seller ID vachi fix pannuvom
+        const uniqueName = (sellerDoc.shopName.replace(/[^a-zA-Z0-9]/g, "") + sellerDoc._id.toString().slice(-4)).substring(0, 30);
 
-        if (result.success) {
-            res.json({ success: true, message: "Sync Successful (Update/Create)", registeredName: result.registeredName });
-        } else {
-            res.status(500).json({ success: false, error: result.error });
+        const payload = {
+            "name": uniqueName,
+            "email": sellerDoc.email || "support@zhopingo.in",
+            "phone": sellerDoc.shopAddress?.phone || sellerDoc.phone,
+            "contact_person": sellerDoc.shopAddress?.receiverName || sellerDoc.name, // 👈 Faculty Name
+            "address": `${sellerDoc.shopAddress.flatNo}, ${sellerDoc.shopAddress.area}`,
+            "city": sellerDoc.shopAddress.city || "Chennai",
+            "country": "India",
+            "pin": sellerDoc.shopAddress.pincode,
+            "return_address": `${sellerDoc.shopAddress.flatNo}, ${sellerDoc.shopAddress.area}`,
+            "return_pin": sellerDoc.shopAddress.pincode
+        };
+
+        let response;
+        try {
+            // 🚀 STRATEGY: Try Update (PATCH) first
+            console.log(`📡 Attempting UPDATE for: ${uniqueName}`);
+            response = await axios.patch(`${DELHI_BASE_URL}/api/backend/clientwarehouse/edit/`, 
+                payload, 
+                { headers: { 'Authorization': `Token ${DELHI_TOKEN}`, 'Content-Type': 'application/json' } }
+            );
+        } catch (patchErr) {
+            // 🚀 If entry doesn't exist, CREATE (POST) it
+            console.log(`ℹ️ Entry not found, Attempting CREATE for: ${uniqueName}`);
+            response = await axios.post(`${DELHI_BASE_URL}/api/backend/clientwarehouse/create/`, 
+                payload, 
+                { headers: { 'Authorization': `Token ${DELHI_TOKEN}`, 'Content-Type': 'application/json' } }
+            );
         }
+
+        res.json({ 
+            success: true, 
+            message: "Sync Successful!", 
+            registeredName: uniqueName,
+            facultyName: payload.contact_person,
+            delhiveryMsg: response.data?.data?.message || "Operation Success"
+        });
+
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        // Intha log 400 error-la enna field thappu nu katchithama kaattum
+        console.error("❌ Registration Final Error:", err.response?.data || err.message);
+        res.status(err.response?.status || 500).json({ 
+            success: false, 
+            error: err.response?.data || err.message 
+        });
     }
 };
