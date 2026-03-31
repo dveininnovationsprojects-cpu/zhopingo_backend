@@ -273,23 +273,26 @@ exports.verifyWalletTopup = async (req, res) => {
     res.redirect("zhopingo://wallet-failed");
   }
 };
+// logisticsController-la irundhu processShipmentCreation-ah import pannirukanum mela
+// const { processShipmentCreation } = require("./logisticsController");
+
 exports.payUsingWallet = async (req, res) => {
   try {
     const { orderId, userId } = req.body;
 
-    // 🛡️ ObjectId Conversion (To fix Cast to ObjectId error)
+    // 🛡️ Guard
     if (!mongoose.Types.ObjectId.isValid(orderId)) {
-        return res.status(400).json({ success: false, error: "Invalid Order ID format" });
+        return res.status(400).json({ success: false, error: "Invalid Order ID" });
     }
 
     const user = await User.findById(userId);
     const order = await Order.findById(orderId);
 
-    if (!user || !order) return res.status(404).json({ success: false, message: "Not found" });
+    if (!user || !order) return res.status(404).json({ success: false, message: "Order/User not found" });
     if (order.paymentStatus === "Paid") return res.status(400).json({ success: false, message: "Already Paid" });
     if (user.walletBalance < order.totalAmount) return res.status(400).json({ success: false, message: "Insufficient balance" });
 
-    // 1. 💰 DEBIT WALLET
+    // 1. 💰 Wallet Debit (Atomic Handshake)
     user.walletBalance -= order.totalAmount;
     user.walletTransactions.unshift({
       amount: order.totalAmount,
@@ -298,7 +301,6 @@ exports.payUsingWallet = async (req, res) => {
       date: new Date()
     });
 
-    // 2. 📝 INITIAL STATUS UPDATE
     order.paymentStatus = "Paid";
     order.status = "Placed"; 
     order.paymentMethod = "Wallet";
@@ -306,53 +308,45 @@ exports.payUsingWallet = async (req, res) => {
     await user.save();
     await order.save();
 
-    console.log(`📡 Triggering Delhivery AWB for Order ${order._id}`);
-    let isAWBGenerated = false;
-
-    // 3. 🚚 THE PERSISTENCE LOOP (Direct DB Injection)
+    console.log(`📡 Hitting Master Logistics for Order: ${order._id}`);
+    
+    // 2. 🚚 Real-Time AWB Sync using YOUR logisticsController function
     for (let split of order.sellerSplitData) {
+        /* =====================================================
+           🌟 THE ABSOLUTE SYNC:
+           Inga vera endha logic-um naan ezhudhavillai. 
+           Unga 'processShipmentCreation' function-ah apdiye call panraen.
+           Adhu dhaan 'Navib5eb' name-oda Delhivery-ah hit pannum.
+        ===================================================== */
         const shipmentResult = await processShipmentCreation(order._id, split.sellerId);
         
         if (shipmentResult && shipmentResult.success && shipmentResult.awb) {
-            console.log(`✅ AWB Success: ${shipmentResult.awb}`);
-            isAWBGenerated = true;
+            console.log(`✅ MASTER LOGISTICS SUCCESS: ${shipmentResult.awb}`);
 
-            // 🌟 THE MASTER FIX: Use direct UpdateOne to bypass memory reference issues
+            // 🌟 DB PERSISTENCE: Summary tracking-kaga direct injection
             await Order.updateOne(
                 { _id: order._id, "sellerSplitData.sellerId": split.sellerId },
-                { 
-                    $set: { 
-                        "sellerSplitData.$.awbNumber": shipmentResult.awb,
-                        "sellerSplitData.$.packageStatus": "Packed" 
-                    } 
-                }
+                { $set: { "sellerSplitData.$.awbNumber": shipmentResult.awb, "sellerSplitData.$.packageStatus": "Packed" }}
             );
 
-            // Item level tracker sync (Used for frontend summary)
             await Order.updateOne(
                 { _id: order._id },
-                { 
-                    $set: { 
-                        "items.$[elem].itemAwbNumber": shipmentResult.awb,
-                        "items.$[elem].itemStatus": "Packed"
-                    } 
-                },
-                { 
-                    arrayFilters: [{ "elem.sellerId": split.sellerId }] 
-                }
+                { $set: { "items.$[elem].itemAwbNumber": shipmentResult.awb, "items.$[elem].itemStatus": "Packed" }},
+                { arrayFilters: [{ "elem.sellerId": split.sellerId }] }
             );
+        } else {
+            console.error(`❌ MASTER LOGISTICS FAIL: ${shipmentResult?.message || "Check Dashboard Name/Token"}`);
         }
     }
 
-    // Response-ku munnadi DB fetch pannanum, appo dhaan Postman-la value varum
-    const finalOrder = await Order.findById(orderId);
+    // Response send pannuradhuku munnadi DB fresh fetch
+    const finalStoredOrder = await Order.findById(orderId);
 
     res.json({ 
       success: true, 
-      message: "Payment Successful & AWB Stored!", 
+      message: "Payment Success & Master AWB Sync Done", 
       newBalance: user.walletBalance,
-      awbStatus: isAWBGenerated ? "Generated & Registered" : "Pending API",
-      order: finalOrder // Ippo summary JSON-la AWB katchithama varum
+      order: finalStoredOrder 
     });
 
   } catch (err) {

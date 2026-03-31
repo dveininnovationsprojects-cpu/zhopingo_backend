@@ -116,7 +116,7 @@ router.put('/update/:id',
     processImages,
     productCtrl.updateProduct
 );
-router.patch(
+router.put(
     '/toggle-status/:id', 
     protect, 
     productCtrl.toggleProductStatus
