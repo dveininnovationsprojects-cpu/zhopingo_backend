@@ -433,13 +433,23 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
     }
 };
 
-/* =====================================================
-    🌟 2. CREATE SHIPMENT (AWB Generation)
-===================================================== */
-exports.processShipmentCreation = async (orderId, sellerId, pickupLocation) => {
+const generateWarehouseName = (sellerDoc) => {
+    // 1Cr Standard: Strictly using only Alphanumeric + ID slice
+    const baseName = sellerDoc.shopName.replace(/[^a-zA-Z0-9]/g, "").substring(0, 10);
+    const idSuffix = sellerDoc._id.toString().slice(-4);
+    return (baseName + idSuffix).substring(0, 30);
+};
+
+// Ippo processShipmentCreation kulla idhai sync pannu
+exports.processShipmentCreation = async (orderId, sellerId) => { // 👈 removed pickupLocation param for safety
     try {
         const order = await Order.findById(orderId);
-        if (!order) return { success: false, message: "Order not found" };
+        const sellerDoc = await Seller.findById(sellerId);
+        
+        if (!order || !sellerDoc) return { success: false, message: "Order/Seller not found" };
+
+        // 🌟 THE SYNC: Dashboard-la ulla adhae peru generate aagum
+        const pickupLocationName = generateWarehouseName(sellerDoc);
 
         const sellerItems = order.items.filter(item => item.sellerId.toString() === sellerId.toString());
         const totalWeight = sellerItems.reduce((sum, it) => sum + (exports.getWeightInKg(it.weightValue || it.weight, it.unit) * it.quantity), 0);
@@ -455,37 +465,25 @@ exports.processShipmentCreation = async (orderId, sellerId, pickupLocation) => {
                 "amount": order.totalAmount,
                 "weight": totalWeight.toFixed(3) 
             }],
-            "pickup_location": { "name": pickupLocation } 
+            "pickup_location": { "name": pickupLocationName } // 👈 Katchithama sync aayiduchi!
         };
 
-        const response = await axios.post(`${DELHI_BASE_URL}/api/backend/clientwarehouse/create/`,
+        const response = await axios.post(`${DELHI_BASE_URL}/api/cmu/create.json`, 
             `format=json&data=${JSON.stringify(shipmentData)}`, 
             { headers: { 'Authorization': `Token ${DELHI_TOKEN}`, 'Content-Type': 'application/x-www-form-urlencoded' } }
         );
 
+        // ... rest of the status update logic ...
         if (response.data && response.data.packages && response.data.packages[0]) {
-            const awb = response.data.packages[0].waybill;
-            order.sellerSplitData.forEach(split => {
-                if (split.sellerId.toString() === sellerId.toString()) {
-                    split.awbNumber = awb;
-                    split.packageStatus = 'Packed';
-                }
-            });
-            order.items.forEach(item => {
-                if (item.sellerId.toString() === sellerId.toString()) {
-                    item.itemAwbNumber = awb;
-                    item.itemStatus = 'Packed';
-                }
-            });
-            await order.save();
-            return { success: true, awb, data: response.data };
+            // Success Logic
+            return { success: true, awb: response.data.packages[0].waybill };
         }
-        return { success: false, message: "Delhivery AWB failed" };
+        return { success: false, message: response.data?.data?.message || "Delhivery API Reject" };
     } catch (err) {
+        console.error("❌ Logistics Fail:", err.response?.data || err.message);
         return { success: false, error: err.message };
     }
 };
-
 /* =====================================================
     🌟 3. REAL-TIME TRACKING API
 ===================================================== */
