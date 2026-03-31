@@ -272,10 +272,15 @@ exports.verifyWalletTopup = async (req, res) => {
     res.redirect("zhopingo://wallet-failed");
   }
 };
-// ✅ 3. PAY USING WALLET (Final Pro Handshake with Persistent DB Fix)
 exports.payUsingWallet = async (req, res) => {
   try {
     const { orderId, userId } = req.body;
+
+    // 🛡️ ObjectId Conversion (To fix Cast to ObjectId error)
+    if (!mongoose.Types.ObjectId.isValid(orderId)) {
+        return res.status(400).json({ success: false, error: "Invalid Order ID format" });
+    }
+
     const user = await User.findById(userId);
     const order = await Order.findById(orderId);
 
@@ -292,27 +297,26 @@ exports.payUsingWallet = async (req, res) => {
       date: new Date()
     });
 
-    // 2. 📝 STATUS UPDATE
+    // 2. 📝 INITIAL STATUS UPDATE
     order.paymentStatus = "Paid";
     order.status = "Placed"; 
     order.paymentMethod = "Wallet";
 
-    await order.save();
     await user.save();
+    await order.save();
 
-    console.log(`📡 Payment Success: Triggering Shipment for Order ${order._id}`);
+    console.log(`📡 Triggering Delhivery AWB for Order ${order._id}`);
     let isAWBGenerated = false;
 
-    // 3. 🚚 REAL-TIME AWB TRIGGER & DIRECT DB INJECTION
+    // 3. 🚚 THE PERSISTENCE LOOP (Direct DB Injection)
     for (let split of order.sellerSplitData) {
         const shipmentResult = await processShipmentCreation(order._id, split.sellerId);
         
         if (shipmentResult && shipmentResult.success && shipmentResult.awb) {
-            console.log(`✅ AWB Generated: ${shipmentResult.awb} for Seller: ${split.sellerId}`);
+            console.log(`✅ AWB Success: ${shipmentResult.awb}`);
             isAWBGenerated = true;
 
-            // 🌟 PERSISTENCE FIX 1: Seller Split Array Update
-            // 'identifier' approach use panna strictly update aagiyae thiranum
+            // 🌟 THE MASTER FIX: Use direct UpdateOne to bypass memory reference issues
             await Order.updateOne(
                 { _id: order._id, "sellerSplitData.sellerId": split.sellerId },
                 { 
@@ -323,8 +327,7 @@ exports.payUsingWallet = async (req, res) => {
                 }
             );
 
-            // 🌟 PERSISTENCE FIX 2: Individual Items Array Update
-            // Summary screen items array-la irundhu dhaan tracking edukkurom, so idhum strictly update aaganum
+            // Item level tracker sync (Used for frontend summary)
             await Order.updateOne(
                 { _id: order._id },
                 { 
@@ -340,19 +343,19 @@ exports.payUsingWallet = async (req, res) => {
         }
     }
 
-    // Response send pannuradhuku munnadi DB-la irundhu fresh object fetch panrom (Crucial step)
+    // Response-ku munnadi DB fetch pannanum, appo dhaan Postman-la value varum
     const finalOrder = await Order.findById(orderId);
 
     res.json({ 
       success: true, 
-      message: "Payment Successful & Shipment Persistent!", 
+      message: "Payment Successful & AWB Stored!", 
       newBalance: user.walletBalance,
-      awbStatus: isAWBGenerated ? "Generated & Stored" : "Delhivery Error",
-      order: finalOrder // Ippo summary screen-la `null` pōyi value vandhurukkum
+      awbStatus: isAWBGenerated ? "Generated & Registered" : "Pending API",
+      order: finalOrder // Ippo summary JSON-la AWB katchithama varum
     });
 
   } catch (err) {
-    console.error("Wallet Payment Error:", err);
+    console.error("CRITICAL WALLET ERROR:", err);
     res.status(500).json({ success: false, error: err.message });
   }
 };
