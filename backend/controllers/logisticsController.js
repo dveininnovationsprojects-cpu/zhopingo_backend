@@ -565,18 +565,25 @@ exports.handleDelhiveryWebhook = async (req, res) => {
 };
 
 // logisticsController.js kulla...
+// logisticsController.js
 
 exports.registerPickupLocation = async (sellerDoc) => {
     try {
-        // 🌟 THE SYNC LOGIC: 
-        // Seller address update panna thoorum pudhu location create aaga vaippu irukku.
-        // So, namma name-ah innum unique-ah maathalam (Pincode sethu)
-        const uniqueName = (sellerDoc.shopName.replace(/[^a-zA-Z0-9]/g, "") + sellerDoc.shopAddress.pincode).substring(0, 30);
+        // 🌟 PROBLEM 1 FIX (Unique ID): 
+        // Pincode sethu name create panna koodaadhu, ஏன்னா pincode maara thoorum pudhu location vizhum.
+        // Shop Name + Seller ID last 4 digits mattum maintain panna, adhae location 'Update' aaga vaippu irukku (or skip aagum).
+        const uniqueName = (sellerDoc.shopName.replace(/[^a-zA-Z0-9]/g, "") + sellerDoc._id.toString().slice(-4)).substring(0, 30);
 
         const payload = {
             "name": uniqueName, 
             "email": sellerDoc.email || "support@zhopingo.in",
-            "phone": sellerDoc.phone || "9994718702",
+            "phone": sellerDoc.shopAddress?.phone || sellerDoc.phone, // Strict contact phone
+            
+            // 🌟 PROBLEM 2 FIX (Faculty/Contact Name): 
+            // Delhivery API-la contact person details-ah 'contact_person' nu oru field-la anuppanum.
+            // Unga DB-la ulla 'receiverName' dhaan inga Faculty Name-ah varum.
+            "contact_person": sellerDoc.shopAddress?.receiverName || sellerDoc.name, 
+
             "address": `${sellerDoc.shopAddress.flatNo}, ${sellerDoc.shopAddress.area}`,
             "city": sellerDoc.shopAddress.city || "Chennai",
             "country": "India",
@@ -585,22 +592,22 @@ exports.registerPickupLocation = async (sellerDoc) => {
             "return_pin": sellerDoc.shopAddress.pincode
         };
 
-        // URL strictly strictly strictly NO .json
+        console.log(`📡 Sending Contact Person: ${payload.contact_person}`);
+
         const response = await axios.post(`${DELHI_BASE_URL}/api/backend/clientwarehouse/create/`, 
             payload, 
             { headers: { 'Authorization': `Token ${DELHI_TOKEN}`, 'Content-Type': 'application/json' } }
         );
 
-        console.log(`✅ Delhivery Handshake Success: ${uniqueName}`);
+        console.log("✅ Sync Success:", uniqueName);
         return { success: true, registeredName: uniqueName };
 
     } catch (err) {
-        // Oru vaelai 'Already Exists' nu vandha, adhu success dhaan (ஏன்னா location anga irukku)
+        // Oru vaelai already exists-nu vandha data-va ignore panniduvom
         if (err.response?.data?.data?.name?.[0]?.includes("already exists")) {
-             console.log("ℹ️ Location already exists in Delhivery. Skipping creation.");
-             return { success: true }; 
+             return { success: true, message: "Existing location used" }; 
         }
-        console.error("❌ Delhivery Sync Error:", err.response?.data || err.message);
+        console.error("❌ Sync Error:", err.response?.data || err.message);
         return { success: false, error: err.message };
     }
 };
