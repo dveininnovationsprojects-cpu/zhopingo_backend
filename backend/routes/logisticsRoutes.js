@@ -63,4 +63,9 @@ router.post('/register-warehouse', logisticsController.manualRegisterWarehouse);
 
 router.post('/test-awb', logisticsController.testAwbGeneration);
 
+router.get('/label/:awb', logisticsController.getShippingLabel);
+router.get('/manifest/:awb', logisticsController.getManifest);
+router.post('/sync-status',  logisticsController.syncOrderStatusManual);
+router.post('/schedule-pickup', protect, logisticsController.schedulePickup);
+
 module.exports = router;

@@ -543,25 +543,66 @@ exports.checkServiceability = async (req, res) => {
 };
 
 /* =====================================================
-    📈 6. WEBHOOK (Auto-Sync Status)
+    📈 6. WEBHOOK (Auto-Sync Status from Delhivery)
+    Purpose: Automatically moves status to SHIPPED/DELIVERED
 ===================================================== */
 exports.handleDelhiveryWebhook = async (req, res) => {
-    try {
-        // 🌟 THE SYNC: Multiple keys handle panroam for safety
-        const waybill = req.body.waybill || req.body.waybill_number || req.body.data?.waybill;
-        const status = req.body.status || req.body.data?.status;
+    try {
+        // Delhivery pushes status in various keys based on event
+        const waybill = req.body.waybill || req.body.waybill_number || req.body.data?.waybill;
+        const rawStatus = (req.body.status || req.body.data?.status || "").toLowerCase(); 
 
-        const order = await Order.findOne({ "sellerSplitData.awbNumber": waybill });
-        if (order) {
-            order.sellerSplitData.forEach(split => {
-                if (split.awbNumber === waybill && status === 'Delivered') split.packageStatus = 'Delivered';
-            });
-            await order.save();
-        }
-        res.status(200).send("OK");
-    } catch (err) { res.status(500).send("Error"); }
+        console.log(`📡 WEBHOOK RECEIVED -> AWB: ${waybill} | Event: ${rawStatus}`);
+
+        if (!waybill) return res.status(400).send("No Waybill Found");
+
+        const order = await Order.findOne({ "sellerSplitData.awbNumber": waybill });
+        
+        if (order) {
+            /* =====================================================
+               🌟 INDUSTRY STATUS MAPPING (Golden Logic)
+            ===================================================== */
+            let newStatus = null;
+
+            // Delhivery logic: Pickup aana udaney status 'In Transit' nu varum
+            if (rawStatus.includes("transit") || rawStatus.includes("pickup") || rawStatus.includes("dispatched")) {
+                newStatus = "Shipped"; // App-la 'Shipped' nu kaattuvaom
+            } else if (rawStatus.includes("delivered")) {
+                newStatus = "Delivered";
+            } else if (rawStatus.includes("return") || rawStatus.includes("rto") || rawStatus.includes("undelivered")) {
+                newStatus = "RTO";
+            }
+
+            if (newStatus) {
+                // 1. Sync Seller Split Array (Admin View)
+                order.sellerSplitData.forEach(split => {
+                    if (split.awbNumber === waybill) {
+                        split.packageStatus = newStatus;
+                        if (newStatus === "Delivered") split.deliveredDate = new Date();
+                    }
+                });
+
+                // 2. Sync Individual Items (Frontend Summary View)
+                order.items.forEach(item => {
+                    if (item.itemAwbNumber === waybill) {
+                        item.itemStatus = newStatus;
+                    }
+                });
+
+                await order.save();
+                console.log(`✅ SYNC SUCCESS: Order ${order._id} is now ${newStatus}`);
+            }
+        }
+
+        // Delhivery expects 200 OK within 2 seconds
+        res.status(200).send("OK");
+
+    } catch (err) { 
+        console.error("❌ WEBHOOK CRASH:", err.message);
+        // Responding with 200 even on error to stop Delhivery from retrying endlessly
+        res.status(200).send("Error Logged"); 
+    }
 };
-
 // logisticsController.js
 
 exports.registerPickupLocation = async (sellerDoc) => {
@@ -720,6 +761,87 @@ exports.testAwbGeneration = async (req, res) => {
         }
     } catch (err) {
         console.error("❌ Test AWB Error:", err.response?.data || err.message);
+        res.status(500).json({ success: false, error: err.response?.data || err.message });
+    }
+};
+
+// 📄 A. DOWNLOAD SHIPPING LABEL (Box mela otturadhuku)
+exports.getShippingLabel = async (req, res) => {
+    try {
+        const { awb } = req.params;
+        const response = await axios.get(`${DELHI_BASE_URL}/api/p/packing_slip?wbns=${awb}`, {
+            headers: { 'Authorization': `Token ${DELHI_TOKEN}` }
+        });
+        if (response.data?.packages?.[0]?.pdf_url) {
+            return res.json({ success: true, labelUrl: response.data.packages[0].pdf_url });
+        }
+        res.status(404).json({ success: false, message: "Label generating, try in 1 min." });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+};
+
+// 📄 B. GENERATE MANIFEST (Courier boy-kitta signature vaanga)
+exports.getManifest = async (req, res) => {
+    try {
+        const { awb } = req.params;
+        // Delhivery Manifest endpoint
+        const response = await axios.get(`${DELHI_BASE_URL}/api/p/manifest/download?wbns=${awb}`, {
+            headers: { 'Authorization': `Token ${DELHI_TOKEN}` }
+        });
+        res.json({ success: true, manifestUrl: response.data?.url || "Pending" });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+};
+
+// 🔄 C. MANUAL STATUS REFRESH (Webhook late aana Seller check panna)
+exports.syncOrderStatusManual = async (req, res) => {
+    try {
+        const { awb } = req.body;
+        const response = await axios.get(`${DELHI_BASE_URL}/api/v1/packages/json/?waybill=${awb}`, {
+            headers: { 'Authorization': `Token ${DELHI_TOKEN}` }
+        });
+
+        const latestStatus = response.data?.ShipmentData?.[0]?.Shipment?.Status?.Status;
+        if (!latestStatus) return res.status(404).json({ success: false, message: "AWB not found" });
+
+        // Same Webhook logic-ah inga pōdurom to update DB
+        // (Status 'In Transit' nu vandha DB-la 'Shipped' nu update aagum)
+        
+        res.json({ success: true, currentStatus: latestStatus, fullData: response.data });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+};
+// 🚚 1. SCHEDULE PICKUP (Request to Ship)
+// Seller "Ready to Ship" click panna idhu trigger aaganum
+exports.schedulePickup = async (req, res) => {
+    try {
+        const { sellerId } = req.body;
+        const sellerDoc = await Seller.findById(sellerId);
+        
+        if (!sellerDoc) return res.status(404).json({ success: false, message: "Seller not found" });
+
+        const pickupLocationName = (sellerDoc.shopName.replace(/[^a-zA-Z0-9]/g, "").substring(0, 10) + sellerDoc._id.toString().slice(-4)).substring(0, 30);
+
+        // Delhivery Pickup Request Payload
+        const pickupData = {
+            "pickup_location": pickupLocationName,
+            "pickup_date": new Date().toISOString().split('T')[0], // Today's date (YYYY-MM-DD)
+            "pickup_time": "14:00:00", // Standard pickup window
+            "expected_package_count": 1
+        };
+
+        const response = await axios.post(`${DELHI_BASE_URL}/api/backend/clientwarehouse/pickup/create/`, 
+            pickupData,
+            { headers: { 'Authorization': `Token ${DELHI_TOKEN}`, 'Content-Type': 'application/json' } }
+        );
+
+        console.log(`📡 Pickup Requested for: ${pickupLocationName}`);
+
+        res.json({ 
+            success: true, 
+            message: "Pickup Scheduled Successfully!", 
+            details: response.data 
+        });
+
+    } catch (err) {
+        console.error("❌ Pickup Request Error:", err.response?.data || err.message);
         res.status(500).json({ success: false, error: err.response?.data || err.message });
     }
 };
