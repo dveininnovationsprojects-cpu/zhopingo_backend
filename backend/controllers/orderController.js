@@ -10,7 +10,8 @@ const mongoose = require("mongoose");
 const {
   getRealTimeRateInternal,
   getWeightInKg,
-} = require("./logisticsController");
+  processShipmentCreation // 👈 IDHU KANDIPPA IRUKKANUM!
+}
 
 // /* =====================================================
 //     🌟 MASTER CREATE ORDER (Direct Payload Sync Fix + Stock Sync)
