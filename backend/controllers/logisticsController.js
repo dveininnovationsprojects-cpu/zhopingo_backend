@@ -567,7 +567,7 @@ exports.handleDelhiveryWebhook = async (req, res) => {
 exports.registerPickupLocation = async (sellerDoc) => {
     try {
         // Unique Name maintain pannuvom (No Pincode - strictly ShopName + ID last 4 digits)
-        const uniqueName = (sellerDoc.shopName.replace(/[^a-zA-Z0-9]/g, "") + sellerDoc._id.toString().slice(-4)).substring(0, 30);
+        const uniqueName = generateWarehouseName(sellerDoc);
 
         const payload = {
             "name": uniqueName, 
