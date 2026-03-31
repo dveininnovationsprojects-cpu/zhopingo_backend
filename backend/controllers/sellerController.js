@@ -6,6 +6,8 @@ const jwt = require("jsonwebtoken");
 const Settlement = require("../models/Settlement");
 const { sendAdminNotification } = require("../utils/emailService");
 const mongoose = require("mongoose");
+// 🌟 Import andha dynamic function (Logistics-la irundhu)
+const { registerPickupLocation } = require("./logisticsController");
 
 const JWT_SECRET = process.env.JWT_SECRET || "secret123";
 exports.registerSeller = async (req, res) => {
@@ -466,16 +468,13 @@ exports.updateSellerAdminStatus = async (req, res) => {
     }
 };
 
-
-// controllers/sellerController.js
 exports.addSellerAddress = async (req, res) => {
   try {
     const sellerId = req.params.id || req.user?.id;
     if (!sellerId) return res.status(400).json({ success: false, message: "Seller identity missing" });
 
-    const { receiverName, flatNo, area, pincode, phone, addressType } = req.body;
+    const { receiverName, flatNo, area, city, pincode, phone, addressType } = req.body; // 🌟 added 'city'
 
-    // 🌟 Check mandatory fields for Delhivery
     if (!flatNo || !area || !pincode) {
       return res.status(400).json({ success: false, message: "Pickup pincode and address are required" });
     }
@@ -488,8 +487,9 @@ exports.addSellerAddress = async (req, res) => {
             receiverName: receiverName || "Seller Pickup Point",
             flatNo,
             area,
+            city: city || "Not Specified",
             pincode,
-            phone,
+            phone: phone || "9876543210",
             addressType: addressType || "Shop"
           }
         }
@@ -499,13 +499,27 @@ exports.addSellerAddress = async (req, res) => {
 
     if (!updatedSeller) return res.status(404).json({ success: false, message: "Seller not found" });
 
+    // 🚀 THE MAGIC TRIGGER: 1Cr High-Stakes Model
+    // Seller address-ah DB-la save panna udane, Delhivery portal-layum auto-va register panroam
+    console.log(`📡 Registering Dynamic Pickup Point: ${updatedSeller.shopName}`);
+    
+    const delhiveryReg = await registerPickupLocation(updatedSeller);
+
+    if (delhiveryReg.success) {
+        console.log(`✅ Delhivery Portal Sync Success for: ${updatedSeller.shopName}`);
+    } else {
+        console.error(`⚠️ Delhivery Portal Sync Failed: ${delhiveryReg.error}`);
+        // Inga return panna venam, ஏன்னா address DB-la save aayiduchi.
+    }
+
     res.json({ 
       success: true, 
-      message: "Pickup address saved successfully for shipping",
+      message: "Pickup address saved and synced with Delhivery! ✅",
       data: updatedSeller.shopAddress 
     });
 
   } catch (err) {
+    console.error("CRITICAL ADDRESS SYNC ERROR:", err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 };

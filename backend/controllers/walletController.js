@@ -1,54 +1,41 @@
+
+
 // const { StandardCheckoutClient, Env, StandardCheckoutPayRequest } = require("pg-sdk-node");
 // const Order = require("../models/Order");
 // const User = require("../models/User");
+// const Seller = require("../models/Seller");
 // const axios = require("axios");
 
-// // 🌟 PhonePe Client Instance (Nee kuduthulla adhey config)
-// const client = StandardCheckoutClient.getInstance(
-//   process.env.PHONEPE_CLIENT_ID,
-//   process.env.PHONEPE_CLIENT_SECRET,
-//   parseInt(process.env.PHONEPE_CLIENT_VERSION),
-//   process.env.PHONEPE_ENV === "PRODUCTION" ? Env.PRODUCTION : Env.SANDBOX
-// );
+// // 🌟 THE SYNC: Logistics Controller-la irundhu master function-ah direct-ah edukkurom
+// const { processShipmentCreation } = require("./logisticsController"); 
 
-// // 🌟 Helper: Delhivery Shipment logic (Apdiye sync pannittaen)
-// const createDelhiveryShipment = async (order, customerPhone) => {
-//   try {
-//     const itemHSN = order.items?.[0]?.hsnCode || order.items?.[0]?.hsn || "0000";
-//     const shipmentData = {
-//       shipments: [{
-//         name: order.shippingAddress?.receiverName || "Customer",
-//         add: `${order.shippingAddress?.flatNo || ""}, ${order.shippingAddress?.addressLine || order.shippingAddress?.area || "Testing Street"}`,
-//         pin: order.shippingAddress?.pincode,
-//         phone: customerPhone,
-//         order: order._id.toString(),
-//         payment_mode: "Pre-paid",
-//         amount: order.totalAmount,
-//         weight: 0.5,
-//         hsn_code: itemHSN, 
-//       }],
-//       pickup_location: { name: "benjamin" }, 
-//     };
+// // 🛠️ ENVIRONMENT TOGGLE
+// const IS_PROD = process.env.NODE_ENV === "production";
 
-//     const DELHI_URL = process.env.DELHIVERY_ENV === "PRODUCTION" 
-//       ? "https://track.delhivery.com/api/cmu/create.json" 
-//       : "https://staging-express.delhivery.com/api/cmu/create.json";
-
-//     const response = await axios.post(
-//       DELHI_URL,
-//       `format=json&data=${JSON.stringify(shipmentData)}`,
-//       { headers: { Authorization: `Token ${process.env.DELHIVERY_TOKEN}`, "Content-Type": "application/x-www-form-urlencoded" } }
-//     );
-//     return response.data;
-//   } catch (error) {
-//     console.error("❌ Wallet Payment Delhivery Error:", error.message);
-//     return null;
-//   }
+// /* =====================================================
+//     🔑 PHONEPE SDK INITIALIZATION (Global Singleton Fix)
+//     Prevents "Cannot re-initialize" error across multiple controllers
+// ===================================================== */
+// const getPhonePeClient = () => {
+//     if (!global.phonePeClientInstance) {
+//         try {
+//             global.phonePeClientInstance = StandardCheckoutClient.getInstance(
+//                 process.env.PHONEPE_CLIENT_ID,
+//                 process.env.PHONEPE_CLIENT_SECRET,
+//                 parseInt(process.env.PHONEPE_CLIENT_VERSION) || 1,
+//                 IS_PROD ? Env.PRODUCTION : Env.SANDBOX
+//             );
+//         } catch (error) {
+//             console.error("Wallet PhonePe Init Error:", error.message);
+//         }
+//     }
+//     return global.phonePeClientInstance;
 // };
 
 // // ✅ 1. CREATE WALLET TOPUP SESSION (Using PhonePe)
 // exports.createWalletTopupSession = async (req, res) => {
 //   try {
+//     const client = getPhonePeClient(); // 👈 Safe Initialization Call
 //     const { userId, amount } = req.body;
 //     // Wallet topup-kku dummy ID create pannuvom
 //     const topupId = `WLT_${userId}_${Date.now()}`;
@@ -67,8 +54,11 @@
 //     res.status(500).json({ success: false, error: error.message });
 //   }
 // };
+
+// // ✅ 2. VERIFY WALLET TOPUP
 // exports.verifyWalletTopup = async (req, res) => {
 //   try {
+//     const client = getPhonePeClient(); // 👈 Safe Initialization Call
 //     const { topupId } = req.params; 
 //     const response = await client.getOrderStatus(topupId);
 
@@ -90,7 +80,7 @@
 //         });
 //         await user.save();
 //       }
-     
+      
 //       return res.redirect(`zhopingo://wallet-success?amount=${amount}`);
 //     }
 //     res.redirect("zhopingo://wallet-failed");
@@ -99,6 +89,7 @@
 //   }
 // };
 
+// // ✅ 3. PAY USING WALLET (With Direct Logistics Sync)
 // exports.payUsingWallet = async (req, res) => {
 //   try {
 //     const { orderId, userId } = req.body;
@@ -122,26 +113,32 @@
 //     order.status = "Placed";
 //     order.paymentMethod = "Wallet";
 
-//     // 3. 🚚 Trigger Delhivery Shipment & SYNC SPLIT DATA
-//     // Note: createDelhiveryShipment function backend-la split wise shipment create panna maari irukanum
-//     const delhiRes = await createDelhiveryShipment(order, user.phone || "9876543210");
-    
-//     let generatedAWB = "128374922"; // Default Fallback
-//     if (delhiRes && (delhiRes.success === true || delhiRes.packages?.length > 0)) {
-//         generatedAWB = delhiRes.packages[0].waybill;
-//         order.awbNumber = generatedAWB;
-//     } else {
-//         order.awbNumber = generatedAWB; 
-//     }
+//     // 3. 🚚 Trigger Delhivery Shipment via Centralized Logistics Logic
+//     let isAWBGenerated = false;
 
-//     // 🔥 THE CRITICAL SYNC: Update AWB inside each seller's split object
-//     // Idhu pannala-na frontend-la tracking "Pending" nu dhaan kaatum
-//     if (order.sellerSplitData && order.sellerSplitData.length > 0) {
-//       order.sellerSplitData = order.sellerSplitData.map(split => ({
-//         ...split.toObject(),
-//         awbNumber: generatedAWB, // Inga update aana dhaan Mobile UI-la Live Tracking work aagum
-//         packageStatus: "Placed"
-//       }));
+//     for (let split of order.sellerSplitData) {
+//         const sellerDoc = await Seller.findById(split.sellerId);
+        
+//         if (sellerDoc) {
+//             if (IS_PROD) {
+//                 // 🌟 DIRECT CALL TO LOGISTICS CONTROLLER
+//                 const shipmentResult = await processShipmentCreation(order._id, sellerDoc._id, sellerDoc.shopName);
+//                 if (shipmentResult && shipmentResult.success) isAWBGenerated = true;
+//             } else {
+//                 // SANDBOX FALLBACK: Testing purposes only
+//                 const fallbackAWB = "128374922";
+//                 split.awbNumber = fallbackAWB;
+//                 split.packageStatus = "Placed";
+                
+//                 order.items.forEach(item => {
+//                     if (item.sellerId.toString() === split.sellerId.toString()) {
+//                         item.itemAwbNumber = fallbackAWB;
+//                         item.itemStatus = "Placed";
+//                     }
+//                 });
+//                 isAWBGenerated = true;
+//             }
+//         }
 //     }
 
 //     // 4. Atomic Save
@@ -152,7 +149,7 @@
 //       success: true, 
 //       message: "Payment Successful & Shipment Triggered!", 
 //       newBalance: user.walletBalance,
-//       awbNumber: generatedAWB 
+//       awbStatus: isAWBGenerated ? "Generated" : "Pending Sync"
 //     });
 
 //   } catch (err) {
@@ -210,7 +207,7 @@ const getPhonePeClient = () => {
                 process.env.PHONEPE_CLIENT_ID,
                 process.env.PHONEPE_CLIENT_SECRET,
                 parseInt(process.env.PHONEPE_CLIENT_VERSION) || 1,
-                IS_PROD ? Env.PRODUCTION : Env.SANDBOX
+                Env.SANDBOX // 👈 Fixed to Sandbox as per your requirement
             );
         } catch (error) {
             console.error("Wallet PhonePe Init Error:", error.message);
@@ -276,7 +273,7 @@ exports.verifyWalletTopup = async (req, res) => {
   }
 };
 
-// ✅ 3. PAY USING WALLET (With Direct Logistics Sync)
+// ✅ 3. PAY USING WALLET (With Direct Real-Logistics Sync)
 exports.payUsingWallet = async (req, res) => {
   try {
     const { orderId, userId } = req.body;
@@ -300,43 +297,36 @@ exports.payUsingWallet = async (req, res) => {
     order.status = "Placed";
     order.paymentMethod = "Wallet";
 
-    // 3. 🚚 Trigger Delhivery Shipment via Centralized Logistics Logic
+    // 🛡️ CRITICAL: DB-la update pannittu dhaan shipment trigger pannanum
+    await order.save();
+    await user.save();
+
+    // 3. 🚚 Trigger Real Delhivery Shipment (Always triggering live API)
+    console.log(`📡 Wallet Payment Success: Triggering Real AWB for Order ${order._id}`);
     let isAWBGenerated = false;
 
     for (let split of order.sellerSplitData) {
         const sellerDoc = await Seller.findById(split.sellerId);
         
         if (sellerDoc) {
-            if (IS_PROD) {
-                // 🌟 DIRECT CALL TO LOGISTICS CONTROLLER
-                const shipmentResult = await processShipmentCreation(order._id, sellerDoc._id, sellerDoc.shopName);
-                if (shipmentResult && shipmentResult.success) isAWBGenerated = true;
-            } else {
-                // SANDBOX FALLBACK: Testing purposes only
-                const fallbackAWB = "128374922";
-                split.awbNumber = fallbackAWB;
-                split.packageStatus = "Placed";
-                
-                order.items.forEach(item => {
-                    if (item.sellerId.toString() === split.sellerId.toString()) {
-                        item.itemAwbNumber = fallbackAWB;
-                        item.itemStatus = "Placed";
-                    }
-                });
+            // 🌟 REAL HANDSHAKE: IS_PROD check-ah thookitu directly hit panroam
+            // processShipmentCreation kulla Delhivery Real Token dhaan use aagum
+            const shipmentResult = await processShipmentCreation(order._id, sellerDoc._id, sellerDoc.shopName);
+            
+            if (shipmentResult && shipmentResult.success) {
+                console.log(`✅ Real AWB Generated for ${sellerDoc.shopName}: ${shipmentResult.awb}`);
                 isAWBGenerated = true;
+            } else {
+                console.log(`❌ Delhivery Error for ${sellerDoc.shopName}: ${shipmentResult?.message || 'Check Token/Pickup'}`);
             }
         }
     }
-
-    // 4. Atomic Save
-    await user.save();
-    await order.save();
 
     res.json({ 
       success: true, 
       message: "Payment Successful & Shipment Triggered!", 
       newBalance: user.walletBalance,
-      awbStatus: isAWBGenerated ? "Generated" : "Pending Sync"
+      awbStatus: isAWBGenerated ? "Generated" : "Delhivery API Error"
     });
 
   } catch (err) {
