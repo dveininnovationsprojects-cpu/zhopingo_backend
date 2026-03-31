@@ -564,14 +564,17 @@ exports.handleDelhiveryWebhook = async (req, res) => {
     } catch (err) { res.status(500).send("Error"); }
 };
 
-// logisticsController.js
+// logisticsController.js kulla...
+
 exports.registerPickupLocation = async (sellerDoc) => {
     try {
-        // 🌟 THE FIX: Shop Name kooda seller ID-oda last 4 digits sethuko (Unique-aga irukka)
-        const uniqueName = (sellerDoc.shopName.replace(/[^a-zA-Z0-9]/g, "") + sellerDoc._id.toString().slice(-4)).substring(0, 30);
+        // 🌟 THE SYNC LOGIC: 
+        // Seller address update panna thoorum pudhu location create aaga vaippu irukku.
+        // So, namma name-ah innum unique-ah maathalam (Pincode sethu)
+        const uniqueName = (sellerDoc.shopName.replace(/[^a-zA-Z0-9]/g, "") + sellerDoc.shopAddress.pincode).substring(0, 30);
 
         const payload = {
-            "name": uniqueName, // 👈 Ippo idhu strictly unique
+            "name": uniqueName, 
             "email": sellerDoc.email || "support@zhopingo.in",
             "phone": sellerDoc.phone || "9994718702",
             "address": `${sellerDoc.shopAddress.flatNo}, ${sellerDoc.shopAddress.area}`,
@@ -582,18 +585,23 @@ exports.registerPickupLocation = async (sellerDoc) => {
             "return_pin": sellerDoc.shopAddress.pincode
         };
 
-        const response = await axios.post(`${DELHI_BASE_URL}/api/backend/clientwarehouse/create/`,
+        // URL strictly strictly strictly NO .json
+        const response = await axios.post(`${DELHI_BASE_URL}/api/backend/clientwarehouse/create/`, 
             payload, 
             { headers: { 'Authorization': `Token ${DELHI_TOKEN}`, 'Content-Type': 'application/json' } }
         );
 
-        // 🔍 DEBUG: Indha log-ah terminal-la paaru
-        console.log("🔥 DELHI-RESPONSE:", JSON.stringify(response.data, null, 2));
+        console.log(`✅ Delhivery Handshake Success: ${uniqueName}`);
+        return { success: true, registeredName: uniqueName };
 
-        return { success: true, data: response.data, registeredName: uniqueName };
     } catch (err) {
-        console.error("❌ Registration Error:", err.response?.data || err.message);
-        return { success: false, error: err.response?.data || err.message };
+        // Oru vaelai 'Already Exists' nu vandha, adhu success dhaan (ஏன்னா location anga irukku)
+        if (err.response?.data?.data?.name?.[0]?.includes("already exists")) {
+             console.log("ℹ️ Location already exists in Delhivery. Skipping creation.");
+             return { success: true }; 
+        }
+        console.error("❌ Delhivery Sync Error:", err.response?.data || err.message);
+        return { success: false, error: err.message };
     }
 };
 exports.manualRegisterWarehouse = async (req, res) => {
