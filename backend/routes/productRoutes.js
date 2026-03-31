@@ -118,7 +118,7 @@ router.put('/update/:id',
 );
 router.patch(
     '/toggle-status/:id', 
-    protect, 
+   
     productCtrl.toggleProductStatus
 );
 
