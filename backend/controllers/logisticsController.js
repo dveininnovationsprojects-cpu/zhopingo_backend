@@ -112,6 +112,7 @@ exports.getRealTimeRateInternal = async (pincode, weightKg, originPincode, payme
 // };
 
 /* =====================================================
+/* =====================================================
     🌟 7. PUBLIC RATE CALCULATION (For Frontend Cart)
 ===================================================== */
 exports.calculateLiveDeliveryRate = async (req, res) => {
@@ -136,7 +137,7 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
         const sellerDoc = await Seller.findById(firstSellerId);
         const originPin = sellerDoc?.shopAddress?.pincode || "600001";
 
-        // 📡 API-la irundhu real cost edukkuron (e.g., ₹39)
+        // 📡 Step 1: Delhivery kitta irundhu real rate vaanguroam (e.g., ₹39)
         const realApiRate = await exports.getRealTimeRateInternal(
             pincode, 
             totalWeightKg, 
@@ -145,22 +146,25 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
         );
 
         /* =====================================================
-           💰 THE PROFIT GUARD: Minimum ₹80 Logic
+            💰 THE MASTER PROFIT GUARD: FORCE MINIMUM ₹80
         ===================================================== */
-        // API ₹39 nu sonnalum, namma ₹80 thaan customer kitta kaatuvom.
-        // Oru vaelai API ₹120 nu sonna, real amount-ae kaatuvom.
-        const finalChargeToCustomer = realApiRate < 80 ? 80 : realApiRate;
+        // Industrial Standard: Frontend-ku anupura amount strictly customer pay panna pora amount.
+        // API ₹39 nu sonnalum, namma ₹80 thaan return pannuvom.
+        let finalChargeToCustomer = realApiRate < 80 ? 80 : realApiRate;
+
+        console.log(`🚀 PROFIT SYNC: Delhivery: ₹${realApiRate} | Customer Charged: ₹${finalChargeToCustomer}`);
 
         res.json({ 
             success: true, 
-            finalCharge: finalChargeToCustomer, // 🌟 Customer will see ₹80
+            finalCharge: finalChargeToCustomer, // 🌟 Ippo 80 thaan pōgum
             type: "PAID",
             weight: totalWeightKg.toFixed(3),
-            actualCost: realApiRate // 🕵️ Admin reference-kaga internal-ah anuppalam
+            actualLogisticsCost: realApiRate // Internal tracking-kaga
         });
 
     } catch (err) {
         console.error("Cart Rate Error:", err.message);
+        // Fallback-layum strictly 80 dhaan irukanum
         res.status(500).json({ success: false, finalCharge: 80, message: "Fallback applied" });
     }
 };
