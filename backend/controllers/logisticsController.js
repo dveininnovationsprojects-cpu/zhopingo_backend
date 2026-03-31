@@ -564,21 +564,16 @@ exports.handleDelhiveryWebhook = async (req, res) => {
     } catch (err) { res.status(500).send("Error"); }
 };
 
-// logisticsController.js kulla...
-
 // logisticsController.js
-
 exports.registerPickupLocation = async (sellerDoc) => {
     try {
-        // 🌟 RULE 1: Strictly uniqueName-ah Seller ID vachi fix pannuvom (No Pincode)
-        // Appo thaan pincode maarunaalum adhae entry-la update aagum
+        // 🌟 THE FIX: Shop Name kooda seller ID-oda last 4 digits sethuko (Unique-aga irukka)
         const uniqueName = (sellerDoc.shopName.replace(/[^a-zA-Z0-9]/g, "") + sellerDoc._id.toString().slice(-4)).substring(0, 30);
 
         const payload = {
-            "name": uniqueName, 
+            "name": uniqueName, // 👈 Ippo idhu strictly unique
             "email": sellerDoc.email || "support@zhopingo.in",
-            "phone": sellerDoc.shopAddress?.phone || sellerDoc.phone,
-            "contact_person": sellerDoc.shopAddress?.receiverName || sellerDoc.name, // 👈 Faculty Name fix
+            "phone": sellerDoc.phone || "9994718702",
             "address": `${sellerDoc.shopAddress.flatNo}, ${sellerDoc.shopAddress.area}`,
             "city": sellerDoc.shopAddress.city || "Chennai",
             "country": "India",
@@ -587,30 +582,18 @@ exports.registerPickupLocation = async (sellerDoc) => {
             "return_pin": sellerDoc.shopAddress.pincode
         };
 
-        let response;
-        try {
-            // 🚀 Step A: Adhae name-la entry iruntha strictly UPDATE (PATCH) pannu
-            console.log(`📡 Attempting to Update existing warehouse: ${uniqueName}`);
-            response = await axios.patch(`${DELHI_BASE_URL}/api/backend/clientwarehouse/edit/`, 
-                payload, 
-                { headers: { 'Authorization': `Token ${DELHI_TOKEN}`, 'Content-Type': 'application/json' } }
-            );
-            console.log("✅ Delhivery Update Success!");
-        } catch (patchErr) {
-            // 🚀 Step B: Oru vaelai andha name-la entry illana mattum CREATE (POST) pannu
-            console.log(`ℹ️ Entry not found, creating new warehouse: ${uniqueName}`);
-            response = await axios.post(`${DELHI_BASE_URL}/api/backend/clientwarehouse/create/`, 
-                payload, 
-                { headers: { 'Authorization': `Token ${DELHI_TOKEN}`, 'Content-Type': 'application/json' } }
-            );
-            console.log("✅ Delhivery Creation Success!");
-        }
+        const response = await axios.post(`${DELHI_BASE_URL}/api/backend/clientwarehouse/create/`,
+            payload, 
+            { headers: { 'Authorization': `Token ${DELHI_TOKEN}`, 'Content-Type': 'application/json' } }
+        );
 
-        return { success: true, registeredName: uniqueName };
+        // 🔍 DEBUG: Indha log-ah terminal-la paaru
+        console.log("🔥 DELHI-RESPONSE:", JSON.stringify(response.data, null, 2));
 
+        return { success: true, data: response.data, registeredName: uniqueName };
     } catch (err) {
-        console.error("❌ Delhivery Sync Error:", err.response?.data || err.message);
-        return { success: false, error: err.message };
+        console.error("❌ Registration Error:", err.response?.data || err.message);
+        return { success: false, error: err.response?.data || err.message };
     }
 };
 exports.manualRegisterWarehouse = async (req, res) => {
