@@ -565,15 +565,20 @@ exports.handleDelhiveryWebhook = async (req, res) => {
 };
 
 // logisticsController.js
+
 exports.registerPickupLocation = async (sellerDoc) => {
     try {
-        // 🌟 THE FIX: Shop Name kooda seller ID-oda last 4 digits sethuko (Unique-aga irukka)
+        // 🌟 Unique Name fix: ShopName + ID last 4 digits (No Pincode - to keep the same ID for updates)
         const uniqueName = (sellerDoc.shopName.replace(/[^a-zA-Z0-9]/g, "") + sellerDoc._id.toString().slice(-4)).substring(0, 30);
 
         const payload = {
-            "name": uniqueName, // 👈 Ippo idhu strictly unique
+            "name": uniqueName, 
             "email": sellerDoc.email || "support@zhopingo.in",
-            "phone": sellerDoc.phone || "9994718702",
+            "phone": sellerDoc.shopAddress?.phone || sellerDoc.phone || "9994718702",
+            
+            // 🌟 FACULTY NAME FIX: receiverName-ah 'contact_person' field-la anuppanum
+            "contact_person": sellerDoc.shopAddress?.receiverName || sellerDoc.name, 
+
             "address": `${sellerDoc.shopAddress.flatNo}, ${sellerDoc.shopAddress.area}`,
             "city": sellerDoc.shopAddress.city || "Chennai",
             "country": "India",
@@ -582,68 +587,45 @@ exports.registerPickupLocation = async (sellerDoc) => {
             "return_pin": sellerDoc.shopAddress.pincode
         };
 
-        const response = await axios.post(`${DELHI_BASE_URL}/api/backend/clientwarehouse/create/`,
-            payload, 
-            { headers: { 'Authorization': `Token ${DELHI_TOKEN}`, 'Content-Type': 'application/json' } }
-        );
+        let response;
+        try {
+            // 🚀 STRATEGY A: First existing entry-ah UPDATE panna try pannuvom (PATCH)
+            console.log(`📡 Updating existing warehouse: ${uniqueName}`);
+            response = await axios.patch(`${DELHI_BASE_URL}/api/backend/clientwarehouse/edit/`, 
+                payload, 
+                { headers: { 'Authorization': `Token ${DELHI_TOKEN}`, 'Content-Type': 'application/json' } }
+            );
+        } catch (patchErr) {
+            // 🚀 STRATEGY B: Update fail aana (Entry illana), pudhusa CREATE pannuvom (POST)
+            console.log(`ℹ️ Entry not found, creating new warehouse: ${uniqueName}`);
+            response = await axios.post(`${DELHI_BASE_URL}/api/backend/clientwarehouse/create/`, 
+                payload, 
+                { headers: { 'Authorization': `Token ${DELHI_TOKEN}`, 'Content-Type': 'application/json' } }
+            );
+        }
 
-        // 🔍 DEBUG: Indha log-ah terminal-la paaru
-        console.log("🔥 DELHI-RESPONSE:", JSON.stringify(response.data, null, 2));
+        console.log("🔥 DELHI-SYNC-SUCCESS:", JSON.stringify(response.data, null, 2));
+        return { success: true, registeredName: uniqueName };
 
-        return { success: true, data: response.data, registeredName: uniqueName };
     } catch (err) {
-        console.error("❌ Registration Error:", err.response?.data || err.message);
-        return { success: false, error: err.response?.data || err.message };
+        console.error("❌ Delhivery Sync Error:", err.response?.data || err.message);
+        return { success: false, error: err.message };
     }
 };
-
-// logisticsController.js kulla indha function-ah add pannu machan
-
 exports.manualRegisterWarehouse = async (req, res) => {
     try {
         const { sellerId } = req.body;
-        if (!sellerId) return res.status(400).json({ success: false, message: "Seller ID missing" });
-
         const sellerDoc = await Seller.findById(sellerId);
         if (!sellerDoc) return res.status(404).json({ success: false, message: "Seller not found" });
 
-        if (!sellerDoc.shopAddress || !sellerDoc.shopAddress.pincode) {
-            return res.status(400).json({ success: false, message: "Seller address not updated in Zhopingo" });
+        const result = await exports.registerPickupLocation(sellerDoc);
+
+        if (result.success) {
+            res.json({ success: true, message: "Sync Successful (Update/Create)", registeredName: result.registeredName });
+        } else {
+            res.status(500).json({ success: false, error: result.error });
         }
-
-        // 🌟 THE UNIQUE SYNC: Shop Name + ID last 4 digits (to avoid 'Already Exists' silent error)
-        const uniqueName = (sellerDoc.shopName.replace(/[^a-zA-Z0-9]/g, "") + sellerDoc._id.toString().slice(-4)).substring(0, 30);
-
-        const payload = {
-            "name": uniqueName,
-            "email": sellerDoc.email || "support@zhopingo.in",
-            "phone": sellerDoc.phone || "9994718702",
-            "address": `${sellerDoc.shopAddress.flatNo}, ${sellerDoc.shopAddress.area}`,
-            "city": sellerDoc.shopAddress.city || "Chennai",
-            "country": "India",
-            "pin": sellerDoc.shopAddress.pincode,
-            "return_address": `${sellerDoc.shopAddress.flatNo}, ${sellerDoc.shopAddress.area}`,
-            "return_pin": sellerDoc.shopAddress.pincode
-        };
-
-        console.log(`📡 Manual Sync: Hitting Delhivery for ${uniqueName}`);
-
-        const response = await axios.post(`${DELHI_BASE_URL}/api/backend/clientwarehouse/create/.json`, 
-            payload, 
-            { headers: { 'Authorization': `Token ${DELHI_TOKEN}`, 'Content-Type': 'application/json' } }
-        );
-
-        console.log("🔥 DELHI-RESPONSE:", JSON.stringify(response.data, null, 2));
-
-        res.json({ 
-            success: true, 
-            message: "Warehouse Registered in Delhivery!", 
-            delhiveryData: response.data,
-            registeredName: uniqueName 
-        });
-
     } catch (err) {
-        console.error("❌ Registration Error:", err.response?.data || err.message);
-        res.status(500).json({ success: false, error: err.response?.data || err.message });
+        res.status(500).json({ success: false, error: err.message });
     }
 };
