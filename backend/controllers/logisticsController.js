@@ -564,24 +564,36 @@ exports.handleDelhiveryWebhook = async (req, res) => {
     } catch (err) { res.status(500).send("Error"); }
 };
 
-/* =====================================================
-    🏠 DELHI-WAREHOUSE: Auto-Register Pickup Location
-===================================================== */
 exports.registerPickupLocation = async (sellerDoc) => {
     try {
+        // 🌟 Special characters-ah thookitu clean name anupuvom
+        const cleanName = sellerDoc.shopName.replace(/[^a-zA-Z0-9]/g, "");
+
         const payload = {
-            "name": sellerDoc.shopName,
+            "name": cleanName, // 👈 Cleaned Name (e.g., NavinECOM)
             "email": sellerDoc.email || "support@zhopingo.in",
-            "phone": sellerDoc.phone,
-            "address": `${sellerDoc.shopAddress.flatNo}, ${sellerDoc.shopAddress.area}`,
+            "phone": sellerDoc.phone || "9994718702",
+            "address": `${sellerDoc.shopAddress.flatNo}, ${sellerDoc.shopAddress.area}`.substring(0, 190), // Strict Length Guard
             "city": sellerDoc.shopAddress.city || "Chennai",
-            "country": "India", "pin": sellerDoc.shopAddress.pincode,
-            "return_address": `${sellerDoc.shopAddress.flatNo}, ${sellerDoc.shopAddress.area}`,
+            "country": "India",
+            "pin": sellerDoc.shopAddress.pincode,
+            "return_address": `${sellerDoc.shopAddress.flatNo}, ${sellerDoc.shopAddress.area}`.substring(0, 190),
             "return_pin": sellerDoc.shopAddress.pincode
         };
+
+        console.log("📡 Hitting Delhivery Warehouse API with:", JSON.stringify(payload));
+
         const response = await axios.post(`${DELHI_BASE_URL}/api/backend/clientwarehouse/create/.json`, 
-            payload, { headers: { 'Authorization': `Token ${DELHI_TOKEN}`, 'Content-Type': 'application/json' } }
+            payload, 
+            { headers: { 'Authorization': `Token ${DELHI_TOKEN}`, 'Content-Type': 'application/json' } }
         );
+
+        // 🔥 DEBUG: Delhivery enna katchithama solludhu nu terminal-la paapom
+        console.log("🔥 Delhivery API Raw Response:", JSON.stringify(response.data, null, 2));
+
         return { success: true, data: response.data };
-    } catch (err) { return { success: false, error: err.message }; }
+    } catch (err) {
+        console.error("❌ Delhivery Location Registration Error:", err.response?.data || err.message);
+        return { success: false, error: err.response?.data || err.message };
+    }
 };
