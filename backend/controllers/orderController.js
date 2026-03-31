@@ -6,12 +6,12 @@ const FinanceSettings = require("../models/FinanceSettings");
 
 const mongoose = require("mongoose");
 
-// 🌟 THE SYNC: Logistics controller-la irundhu internal function-ah import panrom
+// 🌟 THE CRITICAL SYNC: Functions-ah katchithama import panrom
 const {
   getRealTimeRateInternal,
   getWeightInKg,
   processShipmentCreation // 👈 IDHU KANDIPPA IRUKKANUM!
-}
+} = require("./logisticsController");
 
 // /* =====================================================
 //     🌟 MASTER CREATE ORDER (Direct Payload Sync Fix + Stock Sync)
