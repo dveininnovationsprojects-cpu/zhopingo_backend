@@ -236,143 +236,77 @@
 //   }
 // };
 
+
 const { StandardCheckoutClient, Env, StandardCheckoutPayRequest } = require("pg-sdk-node");
 const Order = require("../models/Order");
 const User = require("../models/User");
-const Seller = require("../models/Seller");
-const axios = require("axios");
-const crypto = require("crypto");
+
+// 🌟 Import Master Logistics Function
+const { processShipmentCreation } = require("./logisticsController"); 
 
 // 🛠️ ENVIRONMENT TOGGLE
-const IS_PROD = process.env.NODE_ENV === "production";
+const IS_PROD = process.env.PHONEPE_ENV === "PRODUCTION";
 
 /* =====================================================
-    🔑 PHONEPE SDK INITIALIZATION (The Critical Fix)
-    Singleton logic: Thidhirunu multiple times trigger aagadha maari check panrom.
+    🔑 PHONEPE SDK INITIALIZATION (SINGLETON)
 ===================================================== */
-let phonePeClient = null;
+const phonePeClient = StandardCheckoutClient.getInstance(
+    process.env.PHONEPE_CLIENT_ID,
+    process.env.PHONEPE_CLIENT_SECRET,
+    parseInt(process.env.PHONEPE_CLIENT_VERSION) || 1,
+    IS_PROD ? Env.PRODUCTION : Env.SANDBOX
+);
 
-const getPhonePeClient = () => {
-    if (!phonePeClient) {
-        phonePeClient = StandardCheckoutClient.getInstance(
-            process.env.PHONEPE_CLIENT_ID,
-            process.env.PHONEPE_CLIENT_SECRET,
-            parseInt(process.env.PHONEPE_CLIENT_VERSION) || 1,
-            IS_PROD ? Env.PRODUCTION : Env.SANDBOX
-        );
-    }
-    return phonePeClient;
-};
-
-/* =====================================================
-    🚚 MULTI-SELLER SHIPMENT ENGINE (The Blinkit Standard)
-    (Ovvoru seller-ukkum thonithaniya shipment book pannum)
-===================================================== */
-const createDelhiveryShipment = async (order, sellerItems, sellerDoc, customerPhone) => {
-    try {
-        const DELHI_URL = IS_PROD 
-            ? "https://track.delhivery.com/api/cmu/create.json" 
-            : "https://staging-express.delhivery.com/api/cmu/create.json";
-
-        // Logic: Calculate total weight for this specific seller's items
-        const totalWeight = sellerItems.reduce((sum, it) => sum + (Number(it.weight || 500) * it.quantity), 0) / 1000;
-
-        const shipmentData = {
-            shipments: [{
-                name: order.shippingAddress?.receiverName || "Customer",
-                add: `${order.shippingAddress?.flatNo || ""}, ${order.shippingAddress?.area || ""}`,
-                pin: order.shippingAddress?.pincode,
-                phone: customerPhone,
-                order: `${order._id}_${sellerDoc._id}`, // Unique sub-order ref for multi-seller
-                payment_mode: "Pre-paid",
-                amount: order.totalAmount, // Overall order reference
-                weight: totalWeight > 0 ? totalWeight : 0.5,
-                hsn_code: sellerItems[0]?.hsnCode || "0000",
-            }],
-            pickup_location: { name: sellerDoc.shopName }, // Registered Seller Pickup Point
-        };
-
-        const response = await axios.post(
-            DELHI_URL,
-            `format=json&data=${JSON.stringify(shipmentData)}`,
-            {
-                headers: {
-                    'Authorization': `Token ${process.env.DELHIVERY_TOKEN}`,
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                },
-            }
-        );
-        return response.data;
-    } catch (error) {
-        console.error(`❌ Delhivery Error for Seller ${sellerDoc.shopName}:`, error.message);
-        return null;
-    }
-};
+// Export for wallet
+exports.phonePeClient = phonePeClient;
 
 /* =====================================================
     🌟 MASTER SYNC: updateOrderSuccess
-    (Handles Real Booking vs Fallback Sandbox)
 ===================================================== */
 const updateOrderSuccess = async (orderId) => {
     try {
         const order = await Order.findById(orderId);
         if (!order || order.paymentStatus === "Paid") return true;
 
-        const customer = await User.findById(order.customerId);
         order.paymentStatus = "Paid";
         order.status = "Placed";
+        await order.save(); 
 
-        // 🚀 LOOP: Book individual shipment for each seller in the cart
-        for (let split of order.sellerSplitData) {
-            const sellerDoc = await Seller.findById(split.sellerId);
-            const sellerItems = order.items.filter(it => it.sellerId.toString() === split.sellerId.toString());
-
-            if (sellerDoc) {
-                // PRODUCTION-la irundha mattum Delhivery API-ah hit pannum
-                let delhiRes = IS_PROD ? await createDelhiveryShipment(order, sellerItems, sellerDoc, customer?.phone) : null;
-
-                if (delhiRes && delhiRes.packages && delhiRes.packages.length > 0) {
-                    const realAWB = delhiRes.packages[0].waybill;
-                    split.awbNumber = realAWB;
-                    split.packageStatus = "Placed";
-                    
-                    // Individual item-level tracking sync
-                    order.items.forEach(item => {
+        if (order.sellerSplitData && order.sellerSplitData.length > 0) {
+            for (let split of order.sellerSplitData) {
+                if (IS_PROD) {
+                    await processShipmentCreation(order._id, split.sellerId, split.shopName);
+                } else {
+                    const fallbackAWB = "128374922";
+                    const freshOrder = await Order.findById(orderId);
+                    freshOrder.sellerSplitData.forEach(s => {
+                        if (s.sellerId.toString() === split.sellerId.toString()) {
+                            s.awbNumber = fallbackAWB;
+                            s.packageStatus = "Placed";
+                        }
+                    });
+                    freshOrder.items.forEach(item => {
                         if (item.sellerId.toString() === split.sellerId.toString()) {
-                            item.itemAwbNumber = realAWB;
+                            item.itemAwbNumber = fallbackAWB;
                             item.itemStatus = "Placed";
                         }
                     });
-                } else {
-                    // SANDBOX FALLBACK: Testing purposes only
-                    const fallbackAWB = IS_PROD ? "RETRY_REQUIRED" : "128374922";
-                    split.awbNumber = fallbackAWB;
-                    split.packageStatus = IS_PROD ? "Shipping_Failed" : "Placed";
-                    
-                    order.items.forEach(item => {
-                        if (item.sellerId.toString() === split.sellerId.toString()) {
-                            item.itemAwbNumber = fallbackAWB;
-                            item.itemStatus = IS_PROD ? "Shipping_Failed" : "Placed";
-                        }
-                    });
+                    await freshOrder.save();
                 }
             }
         }
-
-        await order.save();
         return true;
     } catch (err) {
-        console.error("❌ updateOrderSuccess Critical Error:", err.message);
+        console.error("❌ updateOrderSuccess Error:", err.message);
         return false;
     }
 };
 
 /* =====================================================
-    💳 PHONEPE SESSION & SECURITY HANDSHAKE
+    💳 PHONEPE SESSION (The Critical Fix for OrderId)
 ===================================================== */
 exports.createSession = async (req, res) => {
     try {
-        const client = getPhonePeClient(); // 👈 Safe Initialization Call
         const { orderId } = req.body;
         const order = await Order.findById(orderId);
         if (!order) return res.status(404).json({ success: false, message: "Order not found" });
@@ -380,82 +314,79 @@ exports.createSession = async (req, res) => {
         const request = StandardCheckoutPayRequest.builder()
             .merchantOrderId(order._id.toString())
             .amount(Math.round(order.totalAmount * 100))
-            // Live domain switch
             .redirectUrl(`${process.env.BASE_URL}/api/v1/payments/phonepe-return/${orderId}`)
             .build();
 
-        const response = await client.pay(request);
-        const checkoutUrl = response.redirect_url || response.data?.instrumentResponse?.redirectInfo?.url;
+        const response = await phonePeClient.pay(request);
+        
+        // 🌟 URL EXTRACTION
+        const checkoutUrl = response.redirect_url || 
+                            response.redirectUrl || 
+                            (response.data && response.data.instrumentResponse && response.data.instrumentResponse.redirectInfo && response.data.instrumentResponse.redirectInfo.url);
 
-        res.json({ success: true, url: checkoutUrl, phonepeOrderId: response.order_id });
+        // 🌟 ID EXTRACTION: Katchithama intha key kulla dhaan idhu irukkum
+        const phonepeOrderIdResult = response.order_id || 
+                                     response.orderId || 
+                                     (response.data && response.data.merchantOrderId) || 
+                                     (response.data && response.data.orderId) ||
+                                     order._id.toString(); // Fallback to DB ID
+
+        if (!checkoutUrl) throw new Error("PhonePe failed to provide a checkout URL");
+
+        res.json({ 
+            success: true, 
+            url: checkoutUrl, 
+            phonepeOrderId: phonepeOrderIdResult // 👈 IPPO IDHU KANDIPPA VARUM!
+        });
+
     } catch (error) {
+        console.error("Create Session Error:", error.message);
         res.status(500).json({ success: false, error: error.message });
     }
 };
 
 exports.verifyPayment = async (req, res) => {
     try {
-        const client = getPhonePeClient(); // 👈 Safe Initialization Call
         const { orderId } = req.params;
-        // 🛡️ SECURITY: Server-side API check (Not just client redirect)
-        const response = await client.getOrderStatus(orderId);
+        const response = await phonePeClient.getOrderStatus(orderId);
 
-        if (response.state === "COMPLETED" || response.code === "PAYMENT_SUCCESS") {
+        if (response.state === "COMPLETED" || (response.data && response.data.state === "COMPLETED")) {
             await updateOrderSuccess(orderId);
             return res.json({ success: true });
         }
-        res.status(400).json({ success: false, state: response.state });
+        res.status(400).json({ success: false, state: response.state || (response.data && response.data.state) });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
 };
 
-/* =====================================================
-    📞 WEBHOOK: THE REAL-TIME SYNC (High Priority)
-===================================================== */
-exports.webhook = async (req, res) => {
-    try {
-        const base64Payload = req.body.response;
-        const decodedPayload = JSON.parse(Buffer.from(base64Payload, 'base64').toString('utf-8'));
-        
-        // 🛡️ PRODUCTION CHECKSUM VALIDATION (Preventing Fraud)
-        if (IS_PROD) {
-            const xVerifyHeader = req.headers['x-verify'];
-            const checksum = crypto.createHash('sha256')
-                .update(base64Payload + process.env.PHONEPE_SALT_KEY)
-                .digest('hex') + "###" + process.env.PHONEPE_SALT_INDEX;
-
-            if (xVerifyHeader !== checksum) {
-                return res.status(400).send("Invalid Signature");
-            }
-        }
-
-        const orderId = decodedPayload.data.merchantOrderId;
-        const status = decodedPayload.code;
-
-        if (status === "PAYMENT_SUCCESS") {
-            await updateOrderSuccess(orderId);
-        }
-
-        res.status(200).send("OK");
-    } catch (error) {
-        console.error("Webhook Error:", error.message);
-        res.status(500).send("Error");
-    }
-};
-
 exports.phonepeReturn = async (req, res) => {
     try {
-        const client = getPhonePeClient(); // 👈 Safe Initialization Call
         const { orderId } = req.params;
-        const response = await client.getOrderStatus(orderId);
+        const response = await phonePeClient.getOrderStatus(orderId);
+        const state = response.state || (response.data && response.data.state);
 
-        if (response.state === "COMPLETED") {
+        if (state === "COMPLETED") {
             await updateOrderSuccess(orderId);
             return res.redirect(`zhopingo://payment-verify/${orderId}?status=success`);
         }
         res.redirect(`zhopingo://payment-verify/${orderId}?status=failed`);
     } catch (error) {
         res.redirect(`zhopingo://payment-verify/${orderId}?status=failed`);
+    }
+};
+
+exports.webhook = async (req, res) => {
+    try {
+        const response = req.body;
+        const orderId = response.merchantOrderId || (response.data && response.data.merchantOrderId);
+        const status = response.state || (response.data && response.data.state) || response.code;
+        
+        if (status === "COMPLETED" || status === "PAYMENT_SUCCESS") {
+            await updateOrderSuccess(orderId);
+        }
+        res.status(200).send("OK");
+    } catch (error) { 
+        res.status(500).send("Error"); 
     }
 };

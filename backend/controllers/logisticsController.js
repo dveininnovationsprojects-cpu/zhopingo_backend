@@ -8,7 +8,6 @@ const DELHI_BASE_URL = "https://track.delhivery.com";
 
 /* =====================================================
     ⚖️ HELPER: UNIVERSAL UNIT CONVERTER (Strict Metric Sync)
-    Handles: kg, Liter, Gram, ML, k g, KG etc.
 ===================================================== */
 const getWeightInKg = (value, unit = '') => {
     let rawInput = `${value}${unit}`.toLowerCase().replace(/\s+/g, '');
@@ -29,34 +28,46 @@ const getWeightInKg = (value, unit = '') => {
     }
 };
 
+exports.getWeightInKg = getWeightInKg;
+
 /* =====================================================
     🌟 1. LIVE RATE CALCULATION (Internal Use)
-    Logic: Strictly API based - GST & Surcharge included.
+    Strict Mode: 100% Real API.
 ===================================================== */
 exports.getRealTimeRateInternal = async (pincode, weightKg, originPincode, paymentMode) => {
     try {
+        const weightInGrams = Math.ceil(weightKg * 1000);
+
         const response = await axios.get(`${DELHI_BASE_URL}/api/kinko/v1/invoice/charges/.json`, {
             params: {
-                ss: "R", 
+                md: "S", 
+                ss: "Delivered", // 🌟 THE FINAL FIX: Changed to 'Delivered' as per Delhivery's strict validation
                 pt: paymentMode === "COD" ? "Cash" : "Pre-paid",
                 o_pin: originPincode,
                 d_pin: pincode,
-                weight: Number(weightKg).toFixed(3) // 🌟 Professional Precision
+                weight: weightInGrams,
+                cgm: weightInGrams     
             },
             headers: { 'Authorization': `Token ${DELHI_TOKEN}` }
         });
         
-        const apiRate = response.data?.[0]?.total_amount || response.data?.[0]?.gross_amount || 80;
+        console.log(`📦 Delhivery Check -> Weight sent: ${weightInGrams}g, Charge: ₹${response.data?.[0]?.total_amount}`);
+
+        const apiRate = response.data?.[0]?.total_amount || response.data?.[0]?.gross_amount;
+        
+        if (apiRate === undefined || apiRate === null) {
+            throw new Error("Amount missing in Delhivery response");
+        }
+
         return Math.ceil(apiRate);
     } catch (err) {
-        console.error("❌ Delhivery Rate API Error:", err.message);
-        return 80; 
+        console.error("❌ Delhivery Rate API Error:", err.response?.data || err.message);
+        throw new Error(err.response?.data?.message || err.response?.data?.error || "Failed to fetch from Delhivery");
     }
 };
 
 /* =====================================================
     🌟 7. PUBLIC RATE CALCULATION (For Frontend Cart)
-    Logic: Connects Frontend Request to Internal API Logic
 ===================================================== */
 exports.calculateLiveDeliveryRate = async (req, res) => {
     try {
@@ -66,24 +77,20 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
             return res.status(400).json({ success: false, message: "Missing pincode or items" });
         }
 
-        // 🛡️ 1. Check if any item has Free Delivery
         const hasFreeDeliveryItem = items.some(item => item.isFreeDelivery === true);
         if (hasFreeDeliveryItem) {
             return res.json({ success: true, finalCharge: 0, type: "FREE" });
         }
 
-        // ⚖️ 2. Total Weight Calculation
         let totalWeightKg = items.reduce((sum, item) => {
-            const kg = getWeightInKg(item.weightValue || item.weight, item.unit || 'g');
+            const kg = exports.getWeightInKg(item.weightValue || item.weight, item.unit || 'g');
             return sum + (kg * item.quantity);
         }, 0);
 
-        // 🚚 3. Get Seller Origin (Usually first seller or default)
         const firstSellerId = items[0].sellerId;
         const sellerDoc = await Seller.findById(firstSellerId);
         const originPin = sellerDoc?.shopAddress?.pincode || "600001";
 
-        // 📡 4. Call our Internal API function
         const liveRate = await exports.getRealTimeRateInternal(
             pincode, 
             totalWeightKg, 
@@ -106,7 +113,6 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
 
 /* =====================================================
     🌟 2. CREATE SHIPMENT (AWB Generation + DB Auto-Save)
-    Logic: Automatically links AWB to Order & Seller Split.
 ===================================================== */
 exports.processShipmentCreation = async (orderId, sellerId, pickupLocation) => {
     try {
@@ -114,8 +120,7 @@ exports.processShipmentCreation = async (orderId, sellerId, pickupLocation) => {
         if (!order) return { success: false, message: "Order not found" };
 
         const sellerItems = order.items.filter(item => item.sellerId.toString() === sellerId.toString());
-        // Calculate Total Package Weight for this Seller
-        const totalWeight = sellerItems.reduce((sum, it) => sum + (getWeightInKg(it.weightValue || it.weight, it.unit) * it.quantity), 0);
+        const totalWeight = sellerItems.reduce((sum, it) => sum + (exports.getWeightInKg(it.weightValue || it.weight, it.unit) * it.quantity), 0);
 
         const shipmentData = {
             "shipments": [{
@@ -126,7 +131,7 @@ exports.processShipmentCreation = async (orderId, sellerId, pickupLocation) => {
                 "order": order._id.toString(),
                 "payment_mode": order.paymentMethod === "COD" ? "Cash" : "Pre-paid",
                 "amount": order.totalAmount,
-                "weight": totalWeight.toFixed(3) // 🌟 Strict Kg format
+                "weight": totalWeight.toFixed(3) 
             }],
             "pickup_location": { "name": pickupLocation } 
         };
@@ -139,7 +144,6 @@ exports.processShipmentCreation = async (orderId, sellerId, pickupLocation) => {
         if (response.data && response.data.packages && response.data.packages[0]) {
             const awb = response.data.packages[0].waybill;
 
-            // Update Seller Split Object
             order.sellerSplitData.forEach(split => {
                 if (split.sellerId.toString() === sellerId.toString()) {
                     split.awbNumber = awb;
@@ -147,7 +151,6 @@ exports.processShipmentCreation = async (orderId, sellerId, pickupLocation) => {
                 }
             });
 
-            // Update individual Item status for UI handshake
             order.items.forEach(item => {
                 if (item.sellerId.toString() === sellerId.toString()) {
                     item.itemAwbNumber = awb;

@@ -253,9 +253,9 @@ exports.createOrder = async (req, res) => {
         commissionTotal: comm,
         gstTotal: gst,
         tdsTotal: tds,
-        actualShippingCost: split.teamShare, // 👈 Indha field DB-la save aaganum
-        customerChargedShipping: split.adminRevenue, // 👈 Indha field-um DB-la save aaganum
-        finalPayableToSeller: split.sellerSubtotal - (comm + gst + tds), // 👈 Payout mapping
+        actualShippingCost: split.teamShare, 
+        customerChargedShipping: split.adminRevenue, 
+        finalPayableToSeller: split.sellerSubtotal - (comm + gst + tds), 
         packageStatus: "Placed",
       };
     });
@@ -275,10 +275,8 @@ exports.createOrder = async (req, res) => {
       shippingAddress,
       // Automatic status promotion for COD
       status: paymentMethod === "COD" ? "Placed" : "Pending",
-      paymentStatus:
-        paymentMethod === "WALLET" || paymentMethod === "ONLINE" || paymentMethod === "PREPAID"
-          ? "Paid"
-          : "Pending",
+      // 🛑 THE CRITICAL FIX: Default to 'Pending' for ONLINE payments!
+      paymentStatus: "Pending", 
     });
 
     // 💰 WALLET SYNC: Atomic Transaction
@@ -303,7 +301,10 @@ exports.createOrder = async (req, res) => {
         date: new Date(),
       });
       await user.save();
-      newOrder.status = "Placed"; // Promote only after payment success
+      
+      // Since wallet deduction is successful right here, we mark it Paid & Placed
+      newOrder.status = "Placed"; 
+      newOrder.paymentStatus = "Paid"; 
     }
 
     await newOrder.save();

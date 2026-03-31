@@ -441,6 +441,8 @@ exports.updateFinanceSettings = async (req, res) => {
 //   }
 // };
 // 🌟 1. GENERATE WEEKLY SETTLEMENT (Detailed Breakdown Sync)
+// 🌟 1. GENERATE WEEKLY SETTLEMENT (Final Math-Fix Edition)
+// 🌟 1. GENERATE WEEKLY SETTLEMENT (Final Math-Fix Edition)
 exports.generateWeeklySettlement = async (req, res) => {
     try {
         const { sellerId, startDate, endDate } = req.body;
@@ -449,54 +451,44 @@ exports.generateWeeklySettlement = async (req, res) => {
         const filterEnd = new Date(endDate);
         filterEnd.setHours(23, 59, 59, 999);
 
-        // 🌟 1. Dynamic Finance Settings Fetch
-        const settings = (await FinanceSettings.findOne()) || { 
-            commissionPercent: 10, 
-            gstOnCommissionPercent: 18, 
-            tdsPercent: 2 
-        };
+        const settings = (await FinanceSettings.findOne()) || { commissionPercent: 10, gstOnCommissionPercent: 18, tdsPercent: 2 };
 
-        // 🌟 2. Fetch Eligible Orders (Delivered or Returned & Not yet settled)
         const orders = await Order.find({
-            "sellerSplitData.sellerId": new mongoose.Types.ObjectId(sellerId),
+            "sellerSplitData.sellerId": sellerId, 
             isSettled: { $ne: true },
             status: { $in: ["Delivered", "Returned"] },
             updatedAt: { $gte: filterStart, $lte: filterEnd }
         }).populate('items.productId');
 
-        let settlement = await Settlement.findOne({ 
-            sellerId, 
-            weekRange: `${startDate} to ${endDate}` 
-        });
+        let settlement = await Settlement.findOne({ sellerId, weekRange: `${startDate} to ${endDate}` });
 
         if (!orders || orders.length === 0) {
             if (settlement) return res.json({ success: true, data: settlement });
-            return res.status(404).json({ success: false, message: "No eligible orders found for this period." });
+            return res.status(404).json({ success: false, message: "No eligible orders found." });
         }
 
         let newPayoutRows = [];
-        let batchStats = { 
-            sales: 0, comm: 0, gst: 0, tds: 0, 
-            delivDed: 0, partnerBill: 0, adminProf: 0, 
-            final: 0, count: 0 
-        };
+        let batchStats = { sales: 0, comm: 0, gst: 0, tds: 0, delivDed: 0, partnerBill: 0, adminProf: 0, final: 0, count: 0 };
 
-        // 🌟 3. Settlement Engine Loop
         orders.forEach((order) => {
             const split = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId);
             if (split) {
                 const isReturned = order.status === "Returned";
                 
-                // 🚚 REAL-TIME LOGISTICS DATA (Direct from Order DB Split)
-                // Team Cost fetch from DB (No more static ₹40)
-                const actualLogisticsPartnerCost = split.actualShippingCost || 0; 
-                // Customer Paid fetch from DB (No more static ₹80)
-                const customerPaidShippingPerSeller = split.customerChargedShipping || 0;
+                // 🌟 YOUR GOD LEVEL DETECTION LOGIC (STRICTLY UNTOUCHED)
+                const totalShippingChargedToCustomer = order.billDetails?.deliveryCharge || 0;
+                const isPaidDelivery = totalShippingChargedToCustomer > 0;
 
-                order.items.filter(item => item.sellerId.toString() === sellerId).forEach(p => {
+                // 🚀 PURE DYNAMIC DATA MAPPING
+                const realPartnerFee = Number(split.actualShippingCost || 0); 
+                const dynamicFreeDeduction = Number(split.deliveryDeduction || 0);
+
+                const sellerItems = order.items.filter(item => item.sellerId.toString() === sellerId);
+                const sellerItemCount = sellerItems.length;
+
+                sellerItems.forEach(p => {
                     const prodName = p.name || p.productId?.name || "Product";
                     
-                    // Duplicate check inside the current settlement
                     const alreadyPresent = settlement?.payoutBreakdown?.some(row => 
                         row.orderId.toString() === order._id.toString() && row.productName === prodName
                     );
@@ -504,33 +496,27 @@ exports.generateWeeklySettlement = async (req, res) => {
                     if (!alreadyPresent) {
                         const productPrice = p.price * p.quantity;
                         let cAmt = 0, gAmt = 0, tAmt = 0, sDed = 0, adminShipProf = 0, net = 0;
-
-                        // Per Item Share calculation (Logistics split)
-                        const itemsCount = order.items.filter(i => i.sellerId.toString() === sellerId).length;
-                        const partnerSharePerItem = actualLogisticsPartnerCost / itemsCount;
-                        const adminShipRevenuePerItem = customerPaidShippingPerSeller / itemsCount;
+                        const partnerSharePerItem = realPartnerFee / sellerItemCount;
 
                         if (order.status === "Delivered") {
-                            // 💰 Finance Calculations
                             cAmt = productPrice * (settings.commissionPercent / 100);
                             gAmt = cAmt * (settings.gstOnCommissionPercent / 100);
                             tAmt = productPrice * (settings.tdsPercent / 100);
 
-                            // 🚚 Dynamic Delivery Logic
-                            if (customerPaidShippingPerSeller > 0) {
-                                // ✅ PAID DELIVERY: Customer paid, so Seller deduction is 0
+                            if (isPaidDelivery) {
+                                // ✅ PAID: Customer pays, Delhivery takes. Profit = (Charged - Partner)
                                 sDed = 0; 
-                                adminShipProf = adminShipRevenuePerItem - partnerSharePerItem;
+                                adminShipProf = (totalShippingChargedToCustomer / sellerItemCount) - partnerSharePerItem;
                             } else {
-                                // 🎁 FREE DELIVERY: Seller pays for the delivery (Admin deducts from payout)
-                                // Standard free delivery deduction e.g., ₹45 if you want to keep it
-                                sDed = 45 / itemsCount; 
-                                adminShipProf = sDed - partnerSharePerItem;
+                                // 🎁 FREE: Seller pays, Delhivery takes. Profit = 0 (Exactly what you asked)
+                                // We take from seller ONLY what is needed to pay Delhivery.
+                                sDed = partnerSharePerItem; 
+                                adminShipProf = 0; 
                             }
 
                             net = productPrice - (cAmt + gAmt + tAmt + sDed);
 
-                            // 📊 Update Batch Stats
+                            // 📊 Update Batch Statistics
                             batchStats.sales += productPrice;
                             batchStats.comm += cAmt;
                             batchStats.gst += gAmt;
@@ -540,7 +526,7 @@ exports.generateWeeklySettlement = async (req, res) => {
                             batchStats.adminProf += adminShipProf;
                             batchStats.final += net;
                         } else {
-                            // 🔄 RETURN LOGIC (Debit the seller)
+                            // 🛑 RETURN Logic
                             net = -productPrice;
                             batchStats.sales -= productPrice;
                             batchStats.final -= productPrice;
@@ -552,18 +538,17 @@ exports.generateWeeklySettlement = async (req, res) => {
                             orderId: order._id,
                             productName: prodName,
                             type: order.status.toUpperCase(),
-                            customerPaidTotal: Number((productPrice + adminShipRevenuePerItem).toFixed(2)),
+                            customerPaidTotal: Number((productPrice + (totalShippingChargedToCustomer / sellerItemCount)).toFixed(2)),
                             productPriceOnly: productPrice,
                             platformCommission: Number(cAmt.toFixed(2)),
                             gstOnCommission: Number(gAmt.toFixed(2)),
                             tdsDeduction: Number(tAmt.toFixed(2)),
                             
-                            // 🚚 Transparency fields (100% Real-time sync)
-                            shippingType: customerPaidShippingPerSeller > 0 ? "PAID" : "FREE",
-                            customerPaidShipping: Number(adminShipRevenuePerItem.toFixed(2)),
+                            shippingType: isPaidDelivery ? "PAID" : "FREE",
+                            customerPaidShipping: Number((totalShippingChargedToCustomer / sellerItemCount).toFixed(2)),
                             sellerShippingDeduction: Number(sDed.toFixed(2)),
                             logisticsPartnerCost: Number(partnerSharePerItem.toFixed(2)),
-                            adminShippingProfit: Number(adminShipProf.toFixed(2)),
+                            adminShippingProfit: Number(adminShipProf.toFixed(2)), // 🌟 Now strictly 0 for Free
                             
                             netPayableToSeller: Number(net.toFixed(2)),
                             statusDate: order.updatedAt,
@@ -575,7 +560,7 @@ exports.generateWeeklySettlement = async (req, res) => {
             }
         });
 
-        // 🌟 4. ATOMIC DATABASE SYNC (Update Existing or Create New)
+        // 🌟 ATOMIC DATABASE SYNC (Keeping your exact structure)
         if (newPayoutRows.length > 0) {
             if (settlement) {
                 settlement.payoutBreakdown.push(...newPayoutRows);
@@ -590,8 +575,7 @@ exports.generateWeeklySettlement = async (req, res) => {
                 settlement.finalSettlementAmount = Number((settlement.finalSettlementAmount + batchStats.final).toFixed(2));
             } else {
                 settlement = new Settlement({
-                    sellerId, 
-                    weekRange: `${startDate} to ${endDate}`,
+                    sellerId, weekRange: `${startDate} to ${endDate}`,
                     payoutBreakdown: newPayoutRows,
                     totalOrderCount: batchStats.count,
                     totalSalesRevenue: Number(batchStats.sales.toFixed(2)),
@@ -605,25 +589,14 @@ exports.generateWeeklySettlement = async (req, res) => {
                 });
             }
             await settlement.save();
-            
-            // 🛡️ Lock orders to prevent double settlement
-            await Order.updateMany(
-                { _id: { $in: orders.map(o => o._id) } }, 
-                { $set: { isSettled: true } }
-            );
+            await Order.updateMany({ _id: { $in: orders.map(o => o._id) } }, { $set: { isSettled: true } });
         }
 
-        const finalData = await Settlement.findById(settlement?._id || settlement)
-            .populate('sellerId', 'shopName email');
-            
-        res.json({ 
-            success: true, 
-            message: "Weekly Settlement Synced with Real-Time Logistics! ✅", 
-            data: finalData 
-        });
+        const finalData = await Settlement.findById(settlement?._id || settlement).populate('sellerId', 'shopName email');
+        res.json({ success: true, message: "100% Mathematical Precision Sync! ✅", data: finalData });
 
     } catch (err) {
-        console.error("SETTLEMENT ERROR:", err);
+        console.error("Settlement Error:", err.message);
         res.status(500).json({ success: false, error: err.message });
     }
 };
