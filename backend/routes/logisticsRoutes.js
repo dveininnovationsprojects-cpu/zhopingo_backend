@@ -56,4 +56,9 @@ router.post('/create-shipment', protect, logisticsController.processShipmentCrea
 // 📈 Webhook (STRICTLY NO PROTECT - Delhivery needs open access)
 router.post('/webhook/delhivery', logisticsController.handleDelhiveryWebhook);
 
+// logisticsRoutes.js kulla indha line-ah add pannu
+
+// 📍 MANUAL WAREHOUSE REGISTRATION (Dashboard-la varaadha seller-ku idha hit pannanum)
+router.post('/register-warehouse', logisticsController.manualRegisterWarehouse);
+
 module.exports = router;

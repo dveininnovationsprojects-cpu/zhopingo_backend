@@ -596,3 +596,54 @@ exports.registerPickupLocation = async (sellerDoc) => {
         return { success: false, error: err.response?.data || err.message };
     }
 };
+
+// logisticsController.js kulla indha function-ah add pannu machan
+
+exports.manualRegisterWarehouse = async (req, res) => {
+    try {
+        const { sellerId } = req.body;
+        if (!sellerId) return res.status(400).json({ success: false, message: "Seller ID missing" });
+
+        const sellerDoc = await Seller.findById(sellerId);
+        if (!sellerDoc) return res.status(404).json({ success: false, message: "Seller not found" });
+
+        if (!sellerDoc.shopAddress || !sellerDoc.shopAddress.pincode) {
+            return res.status(400).json({ success: false, message: "Seller address not updated in Zhopingo" });
+        }
+
+        // 🌟 THE UNIQUE SYNC: Shop Name + ID last 4 digits (to avoid 'Already Exists' silent error)
+        const uniqueName = (sellerDoc.shopName.replace(/[^a-zA-Z0-9]/g, "") + sellerDoc._id.toString().slice(-4)).substring(0, 30);
+
+        const payload = {
+            "name": uniqueName,
+            "email": sellerDoc.email || "support@zhopingo.in",
+            "phone": sellerDoc.phone || "9994718702",
+            "address": `${sellerDoc.shopAddress.flatNo}, ${sellerDoc.shopAddress.area}`,
+            "city": sellerDoc.shopAddress.city || "Chennai",
+            "country": "India",
+            "pin": sellerDoc.shopAddress.pincode,
+            "return_address": `${sellerDoc.shopAddress.flatNo}, ${sellerDoc.shopAddress.area}`,
+            "return_pin": sellerDoc.shopAddress.pincode
+        };
+
+        console.log(`📡 Manual Sync: Hitting Delhivery for ${uniqueName}`);
+
+        const response = await axios.post(`${DELHI_BASE_URL}/api/backend/clientwarehouse/create/.json`, 
+            payload, 
+            { headers: { 'Authorization': `Token ${DELHI_TOKEN}`, 'Content-Type': 'application/json' } }
+        );
+
+        console.log("🔥 DELHI-RESPONSE:", JSON.stringify(response.data, null, 2));
+
+        res.json({ 
+            success: true, 
+            message: "Warehouse Registered in Delhivery!", 
+            delhiveryData: response.data,
+            registeredName: uniqueName 
+        });
+
+    } catch (err) {
+        console.error("❌ Registration Error:", err.response?.data || err.message);
+        res.status(500).json({ success: false, error: err.response?.data || err.message });
+    }
+};
