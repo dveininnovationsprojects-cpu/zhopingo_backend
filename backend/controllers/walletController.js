@@ -272,8 +272,7 @@ exports.verifyWalletTopup = async (req, res) => {
     res.redirect("zhopingo://wallet-failed");
   }
 };
-
-// ✅ 3. PAY USING WALLET (With Direct Real-Logistics Sync)
+// ✅ 3. PAY USING WALLET (Final Pro Handshake with Persistent DB Fix)
 exports.payUsingWallet = async (req, res) => {
   try {
     const { orderId, userId } = req.body;
@@ -281,9 +280,10 @@ exports.payUsingWallet = async (req, res) => {
     const order = await Order.findById(orderId);
 
     if (!user || !order) return res.status(404).json({ success: false, message: "Not found" });
+    if (order.paymentStatus === "Paid") return res.status(400).json({ success: false, message: "Already Paid" });
     if (user.walletBalance < order.totalAmount) return res.status(400).json({ success: false, message: "Insufficient balance" });
 
-    // 1. Debit Wallet
+    // 1. 💰 DEBIT WALLET
     user.walletBalance -= order.totalAmount;
     user.walletTransactions.unshift({
       amount: order.totalAmount,
@@ -292,41 +292,63 @@ exports.payUsingWallet = async (req, res) => {
       date: new Date()
     });
 
-    // 2. Update Order Status (Industry Standard)
+    // 2. 📝 STATUS UPDATE
     order.paymentStatus = "Paid";
-    order.status = "Placed";
+    order.status = "Placed"; 
     order.paymentMethod = "Wallet";
 
-    // 🛡️ CRITICAL: DB-la update pannittu dhaan shipment trigger pannanum
     await order.save();
     await user.save();
 
-    // 3. 🚚 Trigger Real Delhivery Shipment (Always triggering live API)
-    console.log(`📡 Wallet Payment Success: Triggering Real AWB for Order ${order._id}`);
+    console.log(`📡 Payment Success: Triggering Shipment for Order ${order._id}`);
     let isAWBGenerated = false;
 
+    // 3. 🚚 REAL-TIME AWB TRIGGER & DIRECT DB INJECTION
     for (let split of order.sellerSplitData) {
-        const sellerDoc = await Seller.findById(split.sellerId);
+        const shipmentResult = await processShipmentCreation(order._id, split.sellerId);
         
-        if (sellerDoc) {
-            // 🌟 REAL HANDSHAKE: IS_PROD check-ah thookitu directly hit panroam
-            // processShipmentCreation kulla Delhivery Real Token dhaan use aagum
-            const shipmentResult = await processShipmentCreation(order._id, sellerDoc._id, sellerDoc.shopName);
-            
-            if (shipmentResult && shipmentResult.success) {
-                console.log(`✅ Real AWB Generated for ${sellerDoc.shopName}: ${shipmentResult.awb}`);
-                isAWBGenerated = true;
-            } else {
-                console.log(`❌ Delhivery Error for ${sellerDoc.shopName}: ${shipmentResult?.message || 'Check Token/Pickup'}`);
-            }
+        if (shipmentResult && shipmentResult.success && shipmentResult.awb) {
+            console.log(`✅ AWB Generated: ${shipmentResult.awb} for Seller: ${split.sellerId}`);
+            isAWBGenerated = true;
+
+            // 🌟 PERSISTENCE FIX 1: Seller Split Array Update
+            // 'identifier' approach use panna strictly update aagiyae thiranum
+            await Order.updateOne(
+                { _id: order._id, "sellerSplitData.sellerId": split.sellerId },
+                { 
+                    $set: { 
+                        "sellerSplitData.$.awbNumber": shipmentResult.awb,
+                        "sellerSplitData.$.packageStatus": "Packed" 
+                    } 
+                }
+            );
+
+            // 🌟 PERSISTENCE FIX 2: Individual Items Array Update
+            // Summary screen items array-la irundhu dhaan tracking edukkurom, so idhum strictly update aaganum
+            await Order.updateOne(
+                { _id: order._id },
+                { 
+                    $set: { 
+                        "items.$[elem].itemAwbNumber": shipmentResult.awb,
+                        "items.$[elem].itemStatus": "Packed"
+                    } 
+                },
+                { 
+                    arrayFilters: [{ "elem.sellerId": split.sellerId }] 
+                }
+            );
         }
     }
 
+    // Response send pannuradhuku munnadi DB-la irundhu fresh object fetch panrom (Crucial step)
+    const finalOrder = await Order.findById(orderId);
+
     res.json({ 
       success: true, 
-      message: "Payment Successful & Shipment Triggered!", 
+      message: "Payment Successful & Shipment Persistent!", 
       newBalance: user.walletBalance,
-      awbStatus: isAWBGenerated ? "Generated" : "Delhivery API Error"
+      awbStatus: isAWBGenerated ? "Generated & Stored" : "Delhivery Error",
+      order: finalOrder // Ippo summary screen-la `null` pōyi value vandhurukkum
     });
 
   } catch (err) {
@@ -334,7 +356,6 @@ exports.payUsingWallet = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
-
 // ✅ 4. GET STATUS
 exports.getWalletStatus = async (req, res) => {
   try {

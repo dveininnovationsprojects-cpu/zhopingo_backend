@@ -316,30 +316,19 @@ const {
 //     res.status(500).json({ success: false, error: "Internal System Failure" });
 //   }
 // };
-
-
 /* =====================================================
-    🌟 MASTER CREATE ORDER (1Cr Standard - Final Pro Edition)
-    Logic: Atomic Stock, Real-Time Logistics Sync, Split Finance + Wallet AWB Fix
+    🌟 MASTER CREATE ORDER (1Cr Standard - Pure Creation Edition)
+    Logic: Stock Blocking, Finance Splits, Payout Data Preparation.
+    Status: STRICTLY PENDING (No Payment/AWB Trigger here)
 ===================================================== */
 exports.createOrder = async (req, res) => {
   try {
-    const {
-      items,
-      customerId,
-      shippingAddress,
-      paymentMethod,
-      deliveryCharge,
-    } = req.body;
+    const { items, customerId, shippingAddress, paymentMethod, deliveryCharge } = req.body;
 
-    // 1. User Validation
+    // 1. User & Finance Settings Handshake
     const user = await User.findById(customerId);
-    if (!user)
-      return res
-        .status(404)
-        .json({ success: false, message: "User not found" });
+    if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-    // 2. Fetch Global Finance Settings
     const settings = (await FinanceSettings.findOne()) || {
       commissionPercent: 10,
       gstOnCommissionPercent: 18,
@@ -350,26 +339,21 @@ exports.createOrder = async (req, res) => {
     let sellerWiseSplit = {};
     const processedItems = [];
 
-    // 3. Process Items & Handle Logic Handshakes
+    // 2. Process Items & Golden Logic Handshakes
     for (const item of items) {
       const productDoc = await Product.findById(item.productId || item._id);
-      const sellerDoc = await Seller.findById(
-        productDoc?.seller || item.sellerId,
-      );
+      const sellerDoc = await Seller.findById(productDoc?.seller || item.sellerId);
 
       if (!productDoc || !sellerDoc) continue;
 
       const qty = Number(item.quantity);
 
-      // 🛡️ STOCK GUARD: Atomic verification
+      // 🛡️ STOCK GUARD: Atomic verification (Block stock on creation)
       if (productDoc.stock < qty) {
-        return res.status(400).json({
-          success: false,
-          message: `Insufficient stock for ${productDoc.name}. Only ${productDoc.stock} left.`,
-        });
+        return res.status(400).json({ success: false, message: `Insufficient stock for ${productDoc.name}.` });
       }
 
-      // 📉 ATOMIC STOCK REDUCTION
+      // 📉 BLOCK STOCK: Stock-ah katchithama minus pannuvom
       productDoc.stock -= qty;
       if (productDoc.stock <= 0) {
         productDoc.stock = 0;
@@ -384,26 +368,24 @@ exports.createOrder = async (req, res) => {
       const sIdStr = sellerDoc._id.toString();
 
       if (!sellerWiseSplit[sIdStr]) {
-        // 🚚 REAL-TIME LOGISTICS SYNC
+        // 🚚 REAL-TIME LOGISTICS QUOTE (Preserved for Payout info)
         const weightVal = Number(productDoc.weight) || 500;
         const weightKg = getWeightInKg(weightVal, productDoc.unit || "g") * qty;
-        const originPin =
-          sellerDoc.shopAddress?.pincode || sellerDoc.pincode || "600001";
+        const originPin = sellerDoc.shopAddress?.pincode || "600001";
 
-        // 📡 Delhivery API call for TEAM SHARE (Logistics cost)
         const teamLogisticsCost = await getRealTimeRateInternal(
           shippingAddress.pincode,
           weightKg,
           originPin,
-          paymentMethod === "COD" ? "COD" : "Pre-paid",
+          "Pre-paid"
         );
 
         sellerWiseSplit[sIdStr] = {
           sellerId: sellerDoc._id,
           shopName: sellerDoc.shopName,
           sellerSubtotal: 0,
-          teamShare: teamLogisticsCost, // 👈 Logistics Partner's Share (e.g. ₹39)
-          adminRevenue: 0, // 👈 Admin's Logistics Profit Margin (e.g. ₹80)
+          teamShare: teamLogisticsCost, // 👈 Admin Profit & Payout info
+          adminRevenue: 0, 
         };
       }
 
@@ -422,6 +404,7 @@ exports.createOrder = async (req, res) => {
       });
     }
 
+    // 🌟 ALLOCATE LOGISTICS REVENUE
     const frontendDeliveryAmount = Number(deliveryCharge) || 0;
     const firstSellerKey = Object.keys(sellerWiseSplit)[0];
     if (firstSellerKey) {
@@ -430,6 +413,7 @@ exports.createOrder = async (req, res) => {
 
     const finalGrandTotal = totalItemTotal + frontendDeliveryAmount;
 
+    // 💰 FINANCE SPLIT: GST, TDS, Payouts (Preserved 100%)
     const finalSellerSplitData = Object.values(sellerWiseSplit).map((split) => {
       const comm = (split.sellerSubtotal * settings.commissionPercent) / 100;
       const gst = (comm * settings.gstOnCommissionPercent) / 100;
@@ -449,6 +433,7 @@ exports.createOrder = async (req, res) => {
       };
     });
 
+    // 📝 THE PENDING FIX: Always Pending, no matter the method
     const newOrder = new Order({
       customerId: user._id,
       items: processedItems,
@@ -461,62 +446,21 @@ exports.createOrder = async (req, res) => {
       totalAmount: finalGrandTotal,
       paymentMethod,
       shippingAddress,
-      status: paymentMethod === "COD" ? "Placed" : "Pending",
-      paymentStatus: "Pending", 
+      status: "Placed", 
+      paymentStatus: "Pending", // 🌟 IPPO IDHU STRICTLY PENDING
     });
 
-    // 💰 WALLET SYNC: Atomic Transaction + AWB Trigger
-    if (paymentMethod === "WALLET") {
-      if (user.walletBalance < finalGrandTotal) {
-        for (const item of processedItems) {
-          await Product.findByIdAndUpdate(item.productId, {
-            $inc: { stock: item.quantity },
-          });
-        }
-        return res
-          .status(400)
-          .json({ success: false, message: "Insufficient Wallet Balance" });
-      }
-
-      user.walletBalance -= finalGrandTotal;
-      user.walletTransactions.unshift({
-        amount: finalGrandTotal,
-        type: "DEBIT",
-        reason: `Payment for Order #${newOrder._id.toString().slice(-6).toUpperCase()}`,
-        date: new Date(),
-      });
-      await user.save();
-      
-      newOrder.status = "Placed"; 
-      newOrder.paymentStatus = "Paid"; 
-
-      // 🚀 THE MASTER SYNC TRIGGER: Wallet-ku payment success, so ippo shipment create pannanum
-      // Indha loop thaan unakku missing-ah irundhuchi, ippo katchithama sethutaen.
-      for (let split of newOrder.sellerSplitData) {
-        try {
-           // Industrial logic: Online/Wallet success aana udane AWB automatic-ah hit aaganum
-           const shipmentRes = await exports.processShipmentCreation(
-              newOrder._id, 
-              split.sellerId, 
-              split.shopName
-           );
-           if(shipmentRes.success) {
-              console.log(`✅ AWB Sync Success for ${split.shopName}: ${shipmentRes.awb}`);
-           }
-        } catch (shipErr) {
-           console.error(`❌ Shipment Auto-Trigger Error: ${shipErr.message}`);
-        }
-      }
-    }
-
     await newOrder.save();
-    res.status(201).json({ success: true, order: newOrder });
+    
+    // Refresh to ensure all DB defaults are captured
+    const finalStoredOrder = await Order.findById(newOrder._id);
+    res.status(201).json({ success: true, order: finalStoredOrder });
+
   } catch (err) {
-    console.error("CRITICAL ORDER ERROR:", err);
-    res.status(500).json({ success: false, error: "Internal System Failure" });
+    console.error("CRITICAL ORDER ERROR:", err.message);
+    res.status(500).json({ success: false, error: err.message });
   }
 };
-
 // 1. User Orders (OrderAgain matrum User Screen-ku)
 exports.getMyOrders = async (req, res) => {
   try {
