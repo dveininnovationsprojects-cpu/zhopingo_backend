@@ -259,39 +259,64 @@ const phonePeClient = StandardCheckoutClient.getInstance(
 
 // Export for wallet
 exports.phonePeClient = phonePeClient;
-
 /* =====================================================
-    🌟 MASTER SYNC: updateOrderSuccess
+    🌟 MASTER SYNC: updateOrderSuccess (AWB Storage Fix)
 ===================================================== */
 const updateOrderSuccess = async (orderId) => {
     try {
         const order = await Order.findById(orderId);
         if (!order || order.paymentStatus === "Paid") return true;
 
+        // 1. Initial Status Update
         order.paymentStatus = "Paid";
         order.status = "Placed";
         await order.save(); 
 
+        console.log(`📡 PhonePe Success: Syncing AWB for Order ${orderId}`);
+
         if (order.sellerSplitData && order.sellerSplitData.length > 0) {
             for (let split of order.sellerSplitData) {
                 if (IS_PROD) {
-                    await processShipmentCreation(order._id, split.sellerId, split.shopName);
+                    // 🚚 LIVE HANDSHAKE
+                    const shipmentResult = await processShipmentCreation(order._id, split.sellerId, split.shopName);
+                    
+                    if (shipmentResult && shipmentResult.success && shipmentResult.awb) {
+                        // 🌟 THE CRITICAL DB INJECTION: Ensure storage in Array
+                        await Order.findOneAndUpdate(
+                            { _id: order._id, "sellerSplitData.sellerId": split.sellerId },
+                            { 
+                                $set: { 
+                                    "sellerSplitData.$.awbNumber": shipmentResult.awb,
+                                    "sellerSplitData.$.packageStatus": "Packed" 
+                                } 
+                            }
+                        );
+
+                        // Sync individual items for Frontend Summary
+                        await Order.updateMany(
+                            { _id: order._id, "items.sellerId": split.sellerId },
+                            { 
+                                $set: { 
+                                    "items.$[elem].itemAwbNumber": shipmentResult.awb,
+                                    "items.$[elem].itemStatus": "Packed"
+                                } 
+                            },
+                            { arrayFilters: [{ "elem.sellerId": split.sellerId }] }
+                        );
+                        console.log(`✅ AWB Stored: ${shipmentResult.awb}`);
+                    }
                 } else {
-                    const fallbackAWB = "128374922";
-                    const freshOrder = await Order.findById(orderId);
-                    freshOrder.sellerSplitData.forEach(s => {
-                        if (s.sellerId.toString() === split.sellerId.toString()) {
-                            s.awbNumber = fallbackAWB;
-                            s.packageStatus = "Placed";
-                        }
-                    });
-                    freshOrder.items.forEach(item => {
-                        if (item.sellerId.toString() === split.sellerId.toString()) {
-                            item.itemAwbNumber = fallbackAWB;
-                            item.itemStatus = "Placed";
-                        }
-                    });
-                    await freshOrder.save();
+                    // 🧪 SANDBOX FALLBACK
+                    const fallbackAWB = "4716" + Math.floor(Math.random() * 10000000);
+                    await Order.findOneAndUpdate(
+                        { _id: order._id, "sellerSplitData.sellerId": split.sellerId },
+                        { $set: { "sellerSplitData.$.awbNumber": fallbackAWB, "sellerSplitData.$.packageStatus": "Packed" } }
+                    );
+                    await Order.updateMany(
+                        { _id: order._id, "items.sellerId": split.sellerId },
+                        { $set: { "items.$[elem].itemAwbNumber": fallbackAWB, "items.$[elem].itemStatus": "Packed" } },
+                        { arrayFilters: [{ "elem.sellerId": split.sellerId }] }
+                    );
                 }
             }
         }
@@ -301,7 +326,6 @@ const updateOrderSuccess = async (orderId) => {
         return false;
     }
 };
-
 /* =====================================================
     💳 PHONEPE SESSION (The Critical Fix for OrderId)
 ===================================================== */

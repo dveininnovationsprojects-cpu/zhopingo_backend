@@ -400,13 +400,14 @@ exports.createOrder = async (req, res) => {
           sellerId: sellerDoc._id,
           shopName: sellerDoc.shopName,
           sellerSubtotal: 0,
-          teamShare: teamLogisticsCost, // 👈 Logistics Partner's Share (e.g. ₹39)
-          adminRevenue: 0, // 👈 Admin's Logistics Profit Margin (e.g. ₹80)
+          teamShare: teamLogisticsCost, 
+          adminRevenue: 0, 
         };
       }
 
       sellerWiseSplit[sIdStr].sellerSubtotal += subtotal;
 
+      // Prep items for DB storage
       processedItems.push({
         productId: productDoc._id,
         name: productDoc.name,
@@ -463,7 +464,7 @@ exports.createOrder = async (req, res) => {
       paymentStatus: "Pending", 
     });
 
-    // 💰 WALLET SYNC: Atomic Transaction + AWB Trigger & Storage Fix
+    // 💰 WALLET SYNC: Atomic Transaction + AWB Trigger & Persistent DB Fix
     if (paymentMethod === "WALLET") {
       if (user.walletBalance < finalGrandTotal) {
         for (const item of processedItems) {
@@ -488,12 +489,10 @@ exports.createOrder = async (req, res) => {
       newOrder.status = "Placed"; 
       newOrder.paymentStatus = "Paid"; 
 
-      // 🛡️ STEP 1: Save the base order first
+      // 🛡️ CRITICAL STEP: Base Order-ah munnadiye save pannidurom
       await newOrder.save();
 
-      console.log("🚀 STARTING LIVE AWB SYNC & DIRECT DB STORAGE...");
-
-      // 🚀 STEP 2: Loop through sellers, Trigger Delhivery, and FORCE SAVE to DB
+      // 🚀 THE MASTER SYNC TRIGGER (Corrected for Persistence)
       for (let split of newOrder.sellerSplitData) {
         try {
            const shipmentRes = await processShipmentCreation(
@@ -502,9 +501,9 @@ exports.createOrder = async (req, res) => {
            );
 
            if(shipmentRes.success && shipmentRes.awb) {
-              console.log(`✅ AWB Received: ${shipmentRes.awb}. Updating Database...`);
+              console.log(`✅ AWB REGISTERED: ${shipmentRes.awb}. Syncing to DB...`);
 
-              // 🌟 THE CRITICAL DB INJECTION: Directly updating the document to ensure persistence
+              // 🌟 PERSISTENCE FIX: Memory assign pannaama direct-ah DB-la Update panroam
               await Order.findOneAndUpdate(
                 { _id: newOrder._id, "sellerSplitData.sellerId": split.sellerId },
                 { 
@@ -515,7 +514,7 @@ exports.createOrder = async (req, res) => {
                 }
               );
 
-              // Individual item level sync for AWB tracking on frontend
+              // Sync individual items also for the frontend summary
               await Order.updateMany(
                 { _id: newOrder._id, "items.sellerId": split.sellerId },
                 { 
@@ -533,7 +532,7 @@ exports.createOrder = async (req, res) => {
       }
     }
 
-    // Refresh the order object before sending response to show latest AWB
+    // Refresh order object from DB before sending response
     const finalStoredOrder = await Order.findById(newOrder._id);
     res.status(201).json({ success: true, order: finalStoredOrder });
 
