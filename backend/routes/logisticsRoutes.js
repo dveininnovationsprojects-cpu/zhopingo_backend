@@ -61,4 +61,6 @@ router.post('/webhook/delhivery', logisticsController.handleDelhiveryWebhook);
 // 📍 MANUAL WAREHOUSE REGISTRATION (Dashboard-la varaadha seller-ku idha hit pannanum)
 router.post('/register-warehouse', logisticsController.manualRegisterWarehouse);
 
+router.post('/test-awb', logisticsController.testAwbGeneration);
+
 module.exports = router;

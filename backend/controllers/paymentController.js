@@ -260,71 +260,76 @@ const phonePeClient = StandardCheckoutClient.getInstance(
 // Export for wallet
 exports.phonePeClient = phonePeClient;
 /* =====================================================
-    🌟 MASTER SYNC: updateOrderSuccess (AWB Storage Fix)
+    🌟 MASTER SYNC: updateOrderSuccess (PhonePe + AWB Fix)
 ===================================================== */
 const updateOrderSuccess = async (orderId) => {
-    try {
-        const order = await Order.findById(orderId);
-        if (!order || order.paymentStatus === "Paid") return true;
+    try {
+        const order = await Order.findById(orderId);
+        if (!order || order.paymentStatus === "Paid") return true;
 
-        // 1. Initial Status Update
-        order.paymentStatus = "Paid";
-        order.status = "Placed";
-        await order.save(); 
+        // 1. Initial Status Flip
+        order.paymentStatus = "Paid";
+        order.status = "Placed";
+        order.paymentMethod = "Online"; // PhonePe logic sync
+        await order.save(); 
 
-        console.log(`📡 PhonePe Success: Syncing AWB for Order ${orderId}`);
+        console.log(`📡 PhonePe Success: Syncing Master Logistics for Order ${orderId}`);
 
-        if (order.sellerSplitData && order.sellerSplitData.length > 0) {
-            for (let split of order.sellerSplitData) {
-                if (IS_PROD) {
-                    // 🚚 LIVE HANDSHAKE
-                    const shipmentResult = await processShipmentCreation(order._id, split.sellerId, split.shopName);
-                    
-                    if (shipmentResult && shipmentResult.success && shipmentResult.awb) {
-                        // 🌟 THE CRITICAL DB INJECTION: Ensure storage in Array
-                        await Order.findOneAndUpdate(
-                            { _id: order._id, "sellerSplitData.sellerId": split.sellerId },
-                            { 
-                                $set: { 
-                                    "sellerSplitData.$.awbNumber": shipmentResult.awb,
-                                    "sellerSplitData.$.packageStatus": "Packed" 
-                                } 
-                            }
-                        );
+        if (order.sellerSplitData && order.sellerSplitData.length > 0) {
+            for (let split of order.sellerSplitData) {
+                
+                /* =====================================================
+                   🌟 THE ABSOLUTE SYNC (PhonePe Edition):
+                   Inga vera endha manual name-um (Navi) anuppa koodadhu.
+                   Strictly unga 'processShipmentCreation' master call.
+                   Adhu dhaan 'Navib5eb' format-ah Delhivery Dashboard-ku anuppum.
+                ===================================================== */
+                const shipmentResult = await processShipmentCreation(order._id, split.sellerId);
+                
+                if (shipmentResult && shipmentResult.success && shipmentResult.awb) {
+                    console.log(`✅ PhonePe AWB Stored: ${shipmentResult.awb}`);
 
-                        // Sync individual items for Frontend Summary
-                        await Order.updateMany(
-                            { _id: order._id, "items.sellerId": split.sellerId },
-                            { 
-                                $set: { 
-                                    "items.$[elem].itemAwbNumber": shipmentResult.awb,
-                                    "items.$[elem].itemStatus": "Packed"
-                                } 
-                            },
-                            { arrayFilters: [{ "elem.sellerId": split.sellerId }] }
-                        );
-                        console.log(`✅ AWB Stored: ${shipmentResult.awb}`);
-                    }
-                } else {
-                    // 🧪 SANDBOX FALLBACK
-                    const fallbackAWB = "4716" + Math.floor(Math.random() * 10000000);
-                    await Order.findOneAndUpdate(
+                    // 🌟 PERSISTENCE: Seller Array Update
+                    await Order.updateOne(
                         { _id: order._id, "sellerSplitData.sellerId": split.sellerId },
-                        { $set: { "sellerSplitData.$.awbNumber": fallbackAWB, "sellerSplitData.$.packageStatus": "Packed" } }
+                        { 
+                            $set: { 
+                                "sellerSplitData.$.awbNumber": shipmentResult.awb,
+                                "sellerSplitData.$.packageStatus": "Packed" 
+                            } 
+                        }
                     );
-                    await Order.updateMany(
-                        { _id: order._id, "items.sellerId": split.sellerId },
-                        { $set: { "items.$[elem].itemAwbNumber": fallbackAWB, "items.$[elem].itemStatus": "Packed" } },
+
+                    // 🌟 PERSISTENCE: Item Tracking Sync
+                    await Order.updateOne(
+                        { _id: order._id },
+                        { 
+                            $set: { 
+                                "items.$[elem].itemAwbNumber": shipmentResult.awb,
+                                "items.$[elem].itemStatus": "Packed"
+                            } 
+                        },
                         { arrayFilters: [{ "elem.sellerId": split.sellerId }] }
                     );
+                } else {
+                    console.error(`❌ PhonePe Logistics Fail [${split.sellerId}]: ${shipmentResult?.message}`);
+                    
+                    // Fallback logic for production resilience (Blinkit Standard)
+                    if (!IS_PROD) {
+                        const fallbackAWB = "4716" + Math.floor(Math.random() * 10000000);
+                        await Order.updateOne(
+                            { _id: order._id, "sellerSplitData.sellerId": split.sellerId },
+                            { $set: { "sellerSplitData.$.awbNumber": fallbackAWB, "sellerSplitData.$.packageStatus": "Packed" } }
+                        );
+                    }
                 }
-            }
-        }
-        return true;
-    } catch (err) {
-        console.error("❌ updateOrderSuccess Error:", err.message);
-        return false;
-    }
+            }
+        }
+        return true;
+    } catch (err) {
+        console.error("❌ updateOrderSuccess Error:", err.message);
+        return false;
+    }
 };
 /* =====================================================
     💳 PHONEPE SESSION (The Critical Fix for OrderId)

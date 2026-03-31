@@ -273,9 +273,7 @@ exports.verifyWalletTopup = async (req, res) => {
     res.redirect("zhopingo://wallet-failed");
   }
 };
-// logisticsController-la irundhu processShipmentCreation-ah import pannirukanum mela
-// const { processShipmentCreation } = require("./logisticsController");
-
+/// ✅ 3. PAY USING WALLET (Strict Master Logistics Sync)
 exports.payUsingWallet = async (req, res) => {
   try {
     const { orderId, userId } = req.body;
@@ -301,6 +299,7 @@ exports.payUsingWallet = async (req, res) => {
       date: new Date()
     });
 
+    // 📝 DB INITIAL LOCK
     order.paymentStatus = "Paid";
     order.status = "Placed"; 
     order.paymentMethod = "Wallet";
@@ -310,41 +309,53 @@ exports.payUsingWallet = async (req, res) => {
 
     console.log(`📡 Hitting Master Logistics for Order: ${order._id}`);
     
-    // 2. 🚚 Real-Time AWB Sync using YOUR logisticsController function
+    // 2. 🚚 Real-Time AWB Sync using YOUR logisticsController.js
     for (let split of order.sellerSplitData) {
+        
         /* =====================================================
-           🌟 THE ABSOLUTE SYNC:
-           Inga vera endha logic-um naan ezhudhavillai. 
-           Unga 'processShipmentCreation' function-ah apdiye call panraen.
-           Adhu dhaan 'Navib5eb' name-oda Delhivery-ah hit pannum.
+           🌟 THE MASTER HANDSHAKE:
+           Inga naan manual-ah endha peru-m (Navi) anuppala. 
+           Strictly unga 'processShipmentCreation(orderId, sellerId)' call panraen.
+           Unga function kulla Dashboard logic (Navib5eb) irukku, adhu trigger aagi AWB varum.
         ===================================================== */
         const shipmentResult = await processShipmentCreation(order._id, split.sellerId);
         
         if (shipmentResult && shipmentResult.success && shipmentResult.awb) {
-            console.log(`✅ MASTER LOGISTICS SUCCESS: ${shipmentResult.awb}`);
+            console.log(`✅ AWB RECEIVED: ${shipmentResult.awb}`);
 
-            // 🌟 DB PERSISTENCE: Summary tracking-kaga direct injection
+            // 🌟 PERSISTENT DB STORAGE
             await Order.updateOne(
                 { _id: order._id, "sellerSplitData.sellerId": split.sellerId },
-                { $set: { "sellerSplitData.$.awbNumber": shipmentResult.awb, "sellerSplitData.$.packageStatus": "Packed" }}
+                { 
+                    $set: { 
+                        "sellerSplitData.$.awbNumber": shipmentResult.awb,
+                        "sellerSplitData.$.packageStatus": "Packed" 
+                    } 
+                }
             );
 
             await Order.updateOne(
                 { _id: order._id },
-                { $set: { "items.$[elem].itemAwbNumber": shipmentResult.awb, "items.$[elem].itemStatus": "Packed" }},
+                { 
+                    $set: { 
+                        "items.$[elem].itemAwbNumber": shipmentResult.awb,
+                        "items.$[elem].itemStatus": "Packed"
+                    } 
+                },
                 { arrayFilters: [{ "elem.sellerId": split.sellerId }] }
             );
         } else {
-            console.error(`❌ MASTER LOGISTICS FAIL: ${shipmentResult?.message || "Check Dashboard Name/Token"}`);
+            // Dashboard-la warehouse register aagalana idhu Reject aagum
+            console.error(`❌ LOGISTICS REJECT: ${shipmentResult?.message || "Check Dashboard Name Sync"}`);
         }
     }
 
-    // Response send pannuradhuku munnadi DB fresh fetch
+    // 🛡️ REFRESH DATA: Response JSON-la AWB varadhuku fresh order fetch panrom
     const finalStoredOrder = await Order.findById(orderId);
 
     res.json({ 
       success: true, 
-      message: "Payment Success & Master AWB Sync Done", 
+      message: "Payment Success & Master AWB Stored!", 
       newBalance: user.walletBalance,
       order: finalStoredOrder 
     });

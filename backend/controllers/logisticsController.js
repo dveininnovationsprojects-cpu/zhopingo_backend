@@ -668,3 +668,58 @@ exports.manualRegisterWarehouse = async (req, res) => {
         });
     }
 };
+
+// 📍 API TO TEST IF AWB IS GENERATING FOR A SELLER
+exports.testAwbGeneration = async (req, res) => {
+    try {
+        const { sellerId } = req.body;
+        const sellerDoc = await Seller.findById(sellerId);
+        
+        if (!sellerDoc) return res.status(404).json({ success: false, message: "Seller not found" });
+
+        // Namma Dashboard sync logic (Strictly Navib5eb format)
+        const pickupLocationName = (sellerDoc.shopName.replace(/[^a-zA-Z0-9]/g, "").substring(0, 10) + sellerDoc._id.toString().slice(-4)).substring(0, 30);
+
+        console.log(`📡 Testing AWB for Warehouse: ${pickupLocationName}`);
+
+        // Dummy Shipment Data (Delhivery accept panna strictly idhu pōdhum)
+        const testData = {
+            "shipments": [{
+                "name": "Test Customer",
+                "add": "No.1, Test Street, Chennai",
+                "pin": "600040", // Valid destination pin
+                "phone": "9876543210",
+                "order": "TEST_" + Date.now(),
+                "payment_mode": "Pre-paid",
+                "amount": 100,
+                "weight": 0.500
+            }],
+            "pickup_location": { "name": pickupLocationName }
+        };
+
+        const response = await axios.post(`${DELHI_BASE_URL}/api/cmu/create.json`, 
+            `format=json&data=${JSON.stringify(testData)}`, 
+            { headers: { 'Authorization': `Token ${DELHI_TOKEN}`, 'Content-Type': 'application/x-www-form-urlencoded' } }
+        );
+
+        if (response.data && response.data.packages && response.data.packages[0]) {
+            res.json({
+                success: true,
+                message: "AWB Generated Successfully!",
+                warehouseUsed: pickupLocationName,
+                awb: response.data.packages[0].waybill,
+                fullResponse: response.data
+            });
+        } else {
+            res.status(400).json({
+                success: false,
+                message: "Delhivery Rejected Request",
+                warehouseUsed: pickupLocationName,
+                error: response.data
+            });
+        }
+    } catch (err) {
+        console.error("❌ Test AWB Error:", err.response?.data || err.message);
+        res.status(500).json({ success: false, error: err.response?.data || err.message });
+    }
+};
