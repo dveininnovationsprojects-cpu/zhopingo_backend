@@ -568,48 +568,60 @@ exports.handleDelhiveryWebhook = async (req, res) => {
 
 exports.registerPickupLocation = async (sellerDoc) => {
     try {
-        // 🌟 Unique Name fix: ShopName + ID last 4 digits (No Pincode - to keep the same ID for updates)
         const uniqueName = (sellerDoc.shopName.replace(/[^a-zA-Z0-9]/g, "") + sellerDoc._id.toString().slice(-4)).substring(0, 30);
 
         const payload = {
             "name": uniqueName, 
             "email": sellerDoc.email || "support@zhopingo.in",
-            "phone": sellerDoc.shopAddress?.phone || sellerDoc.phone || "9994718702",
-            
-            // 🌟 FACULTY NAME FIX: receiverName-ah 'contact_person' field-la anuppanum
+            "phone": sellerDoc.shopAddress?.phone || sellerDoc.phone,
             "contact_person": sellerDoc.shopAddress?.receiverName || sellerDoc.name, 
-
             "address": `${sellerDoc.shopAddress.flatNo}, ${sellerDoc.shopAddress.area}`,
             "city": sellerDoc.shopAddress.city || "Chennai",
             "country": "India",
-            "pin": sellerDoc.shopAddress.pincode,
+            "pin": parseInt(sellerDoc.shopAddress.pincode), // 🌟 INT sync (Safety)
             "return_address": `${sellerDoc.shopAddress.flatNo}, ${sellerDoc.shopAddress.area}`,
-            "return_pin": sellerDoc.shopAddress.pincode
+            "return_pin": parseInt(sellerDoc.shopAddress.pincode)
         };
 
+        console.log(`📡 Attempting Delhivery Sync for: ${uniqueName}`);
+
+        /* =====================================================
+           🚀 THE INDUSTRIAL FIX: Try Edit (Update) first
+           Delhivery 'edit' endpoint strictly accepts POST/PATCH 
+           with application/json.
+        ===================================================== */
         let response;
         try {
-            // 🚀 STRATEGY A: First existing entry-ah UPDATE panna try pannuvom (PATCH)
-            console.log(`📡 Updating existing warehouse: ${uniqueName}`);
-            response = await axios.patch(`${DELHI_BASE_URL}/api/backend/clientwarehouse/edit/`, 
+            // Step 1: UPDATE attempt
+            response = await axios.post(`${DELHI_BASE_URL}/api/backend/clientwarehouse/edit/`, 
                 payload, 
                 { headers: { 'Authorization': `Token ${DELHI_TOKEN}`, 'Content-Type': 'application/json' } }
             );
-        } catch (patchErr) {
-            // 🚀 STRATEGY B: Update fail aana (Entry illana), pudhusa CREATE pannuvom (POST)
-            console.log(`ℹ️ Entry not found, creating new warehouse: ${uniqueName}`);
-            response = await axios.post(`${DELHI_BASE_URL}/api/backend/clientwarehouse/create/`, 
-                payload, 
-                { headers: { 'Authorization': `Token ${DELHI_TOKEN}`, 'Content-Type': 'application/json' } }
-            );
+            console.log("✅ Delhivery Update Success!");
+        } catch (editErr) {
+            // Step 2: If entry doesn't exist, then CREATE
+            if (editErr.response?.status === 404 || editErr.response?.data?.error?.includes("does not exist")) {
+                console.log("ℹ️ Entry missing, creating new...");
+                response = await axios.post(`${DELHI_BASE_URL}/api/backend/clientwarehouse/create/`, 
+                    payload, 
+                    { headers: { 'Authorization': `Token ${DELHI_TOKEN}`, 'Content-Type': 'application/json' } }
+                );
+                console.log("✅ Delhivery Creation Success!");
+            } else {
+                // If it's already exists error during edit (rare), we ignore it as success
+                if (editErr.response?.data?.error?.[0]?.includes("already exists")) {
+                    console.log("ℹ️ Already exists, sync ignored.");
+                    return { success: true, registeredName: uniqueName };
+                }
+                throw editErr; // Rethrow other errors
+            }
         }
 
-        console.log("🔥 DELHI-SYNC-SUCCESS:", JSON.stringify(response.data, null, 2));
-        return { success: true, registeredName: uniqueName };
+        return { success: true, registeredName: uniqueName, data: response.data };
 
     } catch (err) {
-        console.error("❌ Delhivery Sync Error:", err.response?.data || err.message);
-        return { success: false, error: err.message };
+        console.error("❌ Final Sync Error:", err.response?.data || err.message);
+        return { success: false, error: err.response?.data || err.message };
     }
 };
 exports.manualRegisterWarehouse = async (req, res) => {
