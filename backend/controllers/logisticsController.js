@@ -565,25 +565,20 @@ exports.handleDelhiveryWebhook = async (req, res) => {
 };
 
 // logisticsController.js kulla...
+
 // logisticsController.js
 
 exports.registerPickupLocation = async (sellerDoc) => {
     try {
-        // 🌟 PROBLEM 1 FIX (Unique ID): 
-        // Pincode sethu name create panna koodaadhu, ஏன்னா pincode maara thoorum pudhu location vizhum.
-        // Shop Name + Seller ID last 4 digits mattum maintain panna, adhae location 'Update' aaga vaippu irukku (or skip aagum).
+        // 🌟 RULE 1: Strictly uniqueName-ah Seller ID vachi fix pannuvom (No Pincode)
+        // Appo thaan pincode maarunaalum adhae entry-la update aagum
         const uniqueName = (sellerDoc.shopName.replace(/[^a-zA-Z0-9]/g, "") + sellerDoc._id.toString().slice(-4)).substring(0, 30);
 
         const payload = {
             "name": uniqueName, 
             "email": sellerDoc.email || "support@zhopingo.in",
-            "phone": sellerDoc.shopAddress?.phone || sellerDoc.phone, // Strict contact phone
-            
-            // 🌟 PROBLEM 2 FIX (Faculty/Contact Name): 
-            // Delhivery API-la contact person details-ah 'contact_person' nu oru field-la anuppanum.
-            // Unga DB-la ulla 'receiverName' dhaan inga Faculty Name-ah varum.
-            "contact_person": sellerDoc.shopAddress?.receiverName || sellerDoc.name, 
-
+            "phone": sellerDoc.shopAddress?.phone || sellerDoc.phone,
+            "contact_person": sellerDoc.shopAddress?.receiverName || sellerDoc.name, // 👈 Faculty Name fix
             "address": `${sellerDoc.shopAddress.flatNo}, ${sellerDoc.shopAddress.area}`,
             "city": sellerDoc.shopAddress.city || "Chennai",
             "country": "India",
@@ -592,22 +587,29 @@ exports.registerPickupLocation = async (sellerDoc) => {
             "return_pin": sellerDoc.shopAddress.pincode
         };
 
-        console.log(`📡 Sending Contact Person: ${payload.contact_person}`);
+        let response;
+        try {
+            // 🚀 Step A: Adhae name-la entry iruntha strictly UPDATE (PATCH) pannu
+            console.log(`📡 Attempting to Update existing warehouse: ${uniqueName}`);
+            response = await axios.patch(`${DELHI_BASE_URL}/api/backend/clientwarehouse/edit/`, 
+                payload, 
+                { headers: { 'Authorization': `Token ${DELHI_TOKEN}`, 'Content-Type': 'application/json' } }
+            );
+            console.log("✅ Delhivery Update Success!");
+        } catch (patchErr) {
+            // 🚀 Step B: Oru vaelai andha name-la entry illana mattum CREATE (POST) pannu
+            console.log(`ℹ️ Entry not found, creating new warehouse: ${uniqueName}`);
+            response = await axios.post(`${DELHI_BASE_URL}/api/backend/clientwarehouse/create/`, 
+                payload, 
+                { headers: { 'Authorization': `Token ${DELHI_TOKEN}`, 'Content-Type': 'application/json' } }
+            );
+            console.log("✅ Delhivery Creation Success!");
+        }
 
-        const response = await axios.post(`${DELHI_BASE_URL}/api/backend/clientwarehouse/create/`, 
-            payload, 
-            { headers: { 'Authorization': `Token ${DELHI_TOKEN}`, 'Content-Type': 'application/json' } }
-        );
-
-        console.log("✅ Sync Success:", uniqueName);
         return { success: true, registeredName: uniqueName };
 
     } catch (err) {
-        // Oru vaelai already exists-nu vandha data-va ignore panniduvom
-        if (err.response?.data?.data?.name?.[0]?.includes("already exists")) {
-             return { success: true, message: "Existing location used" }; 
-        }
-        console.error("❌ Sync Error:", err.response?.data || err.message);
+        console.error("❌ Delhivery Sync Error:", err.response?.data || err.message);
         return { success: false, error: err.message };
     }
 };
