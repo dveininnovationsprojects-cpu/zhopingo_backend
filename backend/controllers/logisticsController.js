@@ -458,7 +458,7 @@ exports.processShipmentCreation = async (orderId, sellerId, pickupLocation) => {
             "pickup_location": { "name": pickupLocation } 
         };
 
-        const response = await axios.post(`${DELHI_BASE_URL}/api/cmu/create.json`, 
+        const response = await axios.post(`${DELHI_BASE_URL}/api/backend/clientwarehouse/create/`,
             `format=json&data=${JSON.stringify(shipmentData)}`, 
             { headers: { 'Authorization': `Token ${DELHI_TOKEN}`, 'Content-Type': 'application/x-www-form-urlencoded' } }
         );
@@ -582,7 +582,7 @@ exports.registerPickupLocation = async (sellerDoc) => {
             "return_pin": sellerDoc.shopAddress.pincode
         };
 
-        const response = await axios.post(`${DELHI_BASE_URL}/api/backend/clientwarehouse/create/.json`, 
+        const response = await axios.post(`${DELHI_BASE_URL}/api/backend/clientwarehouse/create/`,
             payload, 
             { headers: { 'Authorization': `Token ${DELHI_TOKEN}`, 'Content-Type': 'application/json' } }
         );
@@ -596,9 +596,6 @@ exports.registerPickupLocation = async (sellerDoc) => {
         return { success: false, error: err.response?.data || err.message };
     }
 };
-
-// logisticsController.js kulla indha function-ah add pannu machan
-
 exports.manualRegisterWarehouse = async (req, res) => {
     try {
         const { sellerId } = req.body;
@@ -607,11 +604,7 @@ exports.manualRegisterWarehouse = async (req, res) => {
         const sellerDoc = await Seller.findById(sellerId);
         if (!sellerDoc) return res.status(404).json({ success: false, message: "Seller not found" });
 
-        if (!sellerDoc.shopAddress || !sellerDoc.shopAddress.pincode) {
-            return res.status(400).json({ success: false, message: "Seller address not updated in Zhopingo" });
-        }
-
-        // 🌟 THE UNIQUE SYNC: Shop Name + ID last 4 digits (to avoid 'Already Exists' silent error)
+        // 🌟 Unique Name logic (Maintain this to avoid 'Already exists' conflict)
         const uniqueName = (sellerDoc.shopName.replace(/[^a-zA-Z0-9]/g, "") + sellerDoc._id.toString().slice(-4)).substring(0, 30);
 
         const payload = {
@@ -626,9 +619,8 @@ exports.manualRegisterWarehouse = async (req, res) => {
             "return_pin": sellerDoc.shopAddress.pincode
         };
 
-        console.log(`📡 Manual Sync: Hitting Delhivery for ${uniqueName}`);
-
-        const response = await axios.post(`${DELHI_BASE_URL}/api/backend/clientwarehouse/create/.json`, 
+        // 🔥 URL FIX: Removed .json to prevent 404 HTML Error
+        const response = await axios.post(`${DELHI_BASE_URL}/api/backend/clientwarehouse/create/`, 
             payload, 
             { headers: { 'Authorization': `Token ${DELHI_TOKEN}`, 'Content-Type': 'application/json' } }
         );
@@ -643,6 +635,7 @@ exports.manualRegisterWarehouse = async (req, res) => {
         });
 
     } catch (err) {
+        // Ippo HTML error varaadhu, katchithama JSON error response varum
         console.error("❌ Registration Error:", err.response?.data || err.message);
         res.status(500).json({ success: false, error: err.response?.data || err.message });
     }
