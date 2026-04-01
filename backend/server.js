@@ -198,6 +198,8 @@ const app = express();
 ====================================================== */
 // வெப்ஹூக் டேட்டாவை படிக்க இது மிக முக்கியம்
 app.use('/api/v1/payments/webhook', express.raw({ type: 'application/json' }));
+// Add this line
+app.use('/api/v1/logistics/webhook/delhivery', express.json());
 
 /* ======================================================
     🌍 GLOBAL MIDDLEWARES

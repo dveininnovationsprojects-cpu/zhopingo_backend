@@ -67,5 +67,9 @@ router.get('/label/:awb', logisticsController.getShippingLabel);
 router.get('/manifest/:awb', logisticsController.getManifest);
 router.post('/sync-status',  logisticsController.syncOrderStatusManual);
 router.post('/schedule-pickup', protect, logisticsController.schedulePickup);
+router.post('/cancel-shipment', logisticsController.cancelShipment);
+router.post('/edit-shipment',protect, logisticsController.editShipment);
+router.get('/documents/:awb', logisticsController.downloadDocuments);
+router.post('/create-rvp', logisticsController.createReversePickup);
 
 module.exports = router;
