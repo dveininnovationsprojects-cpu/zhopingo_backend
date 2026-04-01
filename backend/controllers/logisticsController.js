@@ -414,54 +414,74 @@ exports.getRealTimeRateInternal = async (
     throw new Error("Delhivery Rate API Error");
   }
 };
-
 /* =====================================================
-    🌟 7. PUBLIC RATE CALCULATION (For Frontend Cart)
+    🌟 7. PUBLIC RATE CALCULATION (Multi-Seller Golden Logic)
+    Logic: Same seller items-la oru item paid-naalum charge apply aagum.
+    Multi-seller na cumulative delivery charge katanum.
 ===================================================== */
 exports.calculateLiveDeliveryRate = async (req, res) => {
-  try {
-    const { pincode, items, paymentMode } = req.body;
-    if (!pincode || !items || items.length === 0)
-      return res.status(400).json({ success: false, message: "Missing data" });
+    try {
+        const { pincode, items, paymentMode } = req.body;
+        if (!pincode || !items || items.length === 0) 
+            return res.status(400).json({ success: false, message: "Missing data" });
 
-    const hasFreeDeliveryItem = items.some(
-      (item) => item.isFreeDelivery === true,
-    );
-    if (hasFreeDeliveryItem)
-      return res.json({ success: true, finalCharge: 0, type: "FREE" });
+        // 1. Group items by Seller (Multi-seller split logic)
+        let sellerGroups = {};
+        items.forEach(item => {
+            const sid = item.sellerId.toString();
+            if (!sellerGroups[sid]) sellerGroups[sid] = [];
+            sellerGroups[sid].push(item);
+        });
 
-    let totalWeightKg = items.reduce((sum, item) => {
-      const kg = exports.getWeightInKg(
-        item.weightValue || item.weight,
-        item.unit || "g",
-      );
-      return sum + kg * item.quantity;
-    }, 0);
+        let totalDeliveryCharge = 0;
+        let totalWeightKg = 0;
 
-    const firstSellerId = items[0].sellerId;
-    const sellerDoc = await Seller.findById(firstSellerId);
-    const originPin = sellerDoc?.shopAddress?.pincode || "600001";
+        // 2. Iterate each seller group to find charges
+        for (const sid in sellerGroups) {
+            const sellerItems = sellerGroups[sid];
 
-    const realApiRate = await exports.getRealTimeRateInternal(
-      pincode,
-      totalWeightKg,
-      originPin,
-      paymentMode || "Pre-paid",
-    );
-    let finalChargeToCustomer = realApiRate < 80 ? 80 : realApiRate;
+            // 🛡️ THE GOLDEN logic: Check if ALL items from THIS seller are free
+            const isSellerOrderFullyFree = sellerItems.every(item => item.isFreeDelivery === true);
 
-    res.json({
-      success: true,
-      finalCharge: finalChargeToCustomer,
-      type: "PAID",
-      weight: totalWeightKg.toFixed(3),
-      actualLogisticsCost: realApiRate,
-    });
-  } catch (err) {
-    res
-      .status(500)
-      .json({ success: false, finalCharge: 80, message: "Fallback applied" });
-  }
+            if (!isSellerOrderFullyFree) {
+                // If even ONE item is paid, calculate real rate from Delhivery
+                let sellerWeightKg = sellerItems.reduce((sum, it) => {
+                    const kg = exports.getWeightInKg(it.weightValue || it.weight || 500, it.unit || 'g');
+                    return sum + (kg * it.quantity);
+                }, 0);
+                
+                totalWeightKg += sellerWeightKg;
+
+                const sellerDoc = await Seller.findById(sid);
+                const originPin = sellerDoc?.shopAddress?.pincode || "600001";
+
+                try {
+                    const realApiRate = await exports.getRealTimeRateInternal(
+                        pincode,
+                        sellerWeightKg,
+                        originPin,
+                        paymentMode || "Pre-paid"
+                    );
+                    // Profit Guard: Seller level-la minimum ₹80
+                    totalDeliveryCharge += (realApiRate < 80 ? 80 : realApiRate);
+                } catch (apiErr) {
+                    totalDeliveryCharge += 80; // API fail fallback
+                }
+            }
+            // else: Intha seller products ellame free-na charge 0 (No addition)
+        }
+
+        res.json({
+            success: true,
+            finalCharge: totalDeliveryCharge, // Cumulative charge of all paid sellers
+            type: totalDeliveryCharge === 0 ? "FREE" : "PAID",
+            weight: totalWeightKg.toFixed(3)
+        });
+
+    } catch (err) {
+        console.error("Cart Rate Error:", err.message);
+        res.status(500).json({ success: false, finalCharge: 80, message: "Fallback applied" });
+    }
 };
 
 const generateWarehouseName = (sellerDoc) => {
