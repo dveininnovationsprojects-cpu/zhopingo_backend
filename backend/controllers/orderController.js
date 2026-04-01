@@ -319,15 +319,14 @@ const {
 //   }
 // };
 /* =====================================================
-    🌟 MASTER CREATE ORDER (1Cr Standard - Pure Creation Edition)
-    Logic: Stock Blocking, Finance Splits, Payout Data Preparation.
-    Status: STRICTLY PENDING (No Payment/AWB Trigger here)
+    🌟 MASTER CREATE ORDER (1Cr Standard - Final Golden Edition)
+    Logic: Product-level Free/Paid Check, Multi-Seller Revenue Split, 
+           Atomic Stock Guard.
 ===================================================== */
 exports.createOrder = async (req, res) => {
   try {
     const { items, customerId, shippingAddress, paymentMethod, deliveryCharge } = req.body;
 
-    // 1. User & Finance Settings Handshake
     const user = await User.findById(customerId);
     if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
@@ -341,7 +340,7 @@ exports.createOrder = async (req, res) => {
     let sellerWiseSplit = {};
     const processedItems = [];
 
-    // 2. Process Items & Golden Logic Handshakes
+    // 1️⃣ PRODUCT-BY-PRODUCT ANALYSIS (Handles bulk 100+ items)
     for (const item of items) {
       const productDoc = await Product.findById(item.productId || item._id);
       const sellerDoc = await Seller.findById(productDoc?.seller || item.sellerId);
@@ -350,12 +349,12 @@ exports.createOrder = async (req, res) => {
 
       const qty = Number(item.quantity);
 
-      // 🛡️ STOCK GUARD: Atomic verification (Block stock on creation)
+      // 🛡️ ATOMIC STOCK GUARD
       if (productDoc.stock < qty) {
         return res.status(400).json({ success: false, message: `Insufficient stock for ${productDoc.name}.` });
       }
 
-      // 📉 BLOCK STOCK: Stock-ah katchithama minus pannuvom
+      // BLOCK STOCK
       productDoc.stock -= qty;
       if (productDoc.stock <= 0) {
         productDoc.stock = 0;
@@ -370,7 +369,7 @@ exports.createOrder = async (req, res) => {
       const sIdStr = sellerDoc._id.toString();
 
       if (!sellerWiseSplit[sIdStr]) {
-        // 🚚 REAL-TIME LOGISTICS QUOTE (Preserved for Payout info)
+        // Prepare finance split container matching your Schema
         const weightVal = Number(productDoc.weight) || 500;
         const weightKg = getWeightInKg(weightVal, productDoc.unit || "g") * qty;
         const originPin = sellerDoc.shopAddress?.pincode || "600001";
@@ -386,12 +385,18 @@ exports.createOrder = async (req, res) => {
           sellerId: sellerDoc._id,
           shopName: sellerDoc.shopName,
           sellerSubtotal: 0,
-          teamShare: teamLogisticsCost, // 👈 Admin Profit & Payout info
+          teamShare: teamLogisticsCost, 
           adminRevenue: 0, 
+          hasPaidItem: false // 🌟 THE GOLDEN FLAG
         };
       }
 
       sellerWiseSplit[sIdStr].sellerSubtotal += subtotal;
+
+      // 🌟 GOLDEN LOGIC: If even ONE item in this seller group is NOT free, the split is PAID.
+      if (productDoc.isFreeDelivery === false) {
+        sellerWiseSplit[sIdStr].hasPaidItem = true;
+      }
 
       processedItems.push({
         productId: productDoc._id,
@@ -406,16 +411,23 @@ exports.createOrder = async (req, res) => {
       });
     }
 
-    // 🌟 ALLOCATE LOGISTICS REVENUE
-    const frontendDeliveryAmount = Number(deliveryCharge) || 0;
-    const firstSellerKey = Object.keys(sellerWiseSplit)[0];
-    if (firstSellerKey) {
-      sellerWiseSplit[firstSellerKey].adminRevenue = frontendDeliveryAmount;
+    // 🚚 2️⃣ PRECISE REVENUE ALLOCATION (Splits Frontend Delivery Charge)
+    const totalFrontendDelivery = Number(deliveryCharge) || 0;
+    const paidSellers = Object.values(sellerWiseSplit).filter(s => s.hasPaidItem === true);
+    
+    if (paidSellers.length > 0) {
+        // Divide total charge (e.g., ₹160) among sellers who had paid items
+        const sharePerPaidSeller = totalFrontendDelivery / paidSellers.length;
+        Object.keys(sellerWiseSplit).forEach(sId => {
+            if (sellerWiseSplit[sId].hasPaidItem) {
+                sellerWiseSplit[sId].adminRevenue = sharePerPaidSeller;
+            }
+        });
     }
 
-    const finalGrandTotal = totalItemTotal + frontendDeliveryAmount;
+    const finalGrandTotal = totalItemTotal + totalFrontendDelivery;
 
-    // 💰 FINANCE SPLIT: GST, TDS, Payouts (Preserved 100%)
+    // 💰 3️⃣ FINANCE SPLIT CALCULATION (Matches your Schema exactly)
     const finalSellerSplitData = Object.values(sellerWiseSplit).map((split) => {
       const comm = (split.sellerSubtotal * settings.commissionPercent) / 100;
       const gst = (comm * settings.gstOnCommissionPercent) / 100;
@@ -429,37 +441,36 @@ exports.createOrder = async (req, res) => {
         gstTotal: gst,
         tdsTotal: tds,
         actualShippingCost: split.teamShare, 
-        customerChargedShipping: split.adminRevenue, 
+        customerChargedShipping: split.adminRevenue, // 🌟 Fixed: No dumping, only split revenue
         finalPayableToSeller: split.sellerSubtotal - (comm + gst + tds), 
         packageStatus: "Placed",
       };
     });
 
-    // 📝 THE PENDING FIX: Always Pending, no matter the method
+    // 📝 4️⃣ MASTER ORDER CREATION
     const newOrder = new Order({
       customerId: user._id,
       items: processedItems,
       sellerSplitData: finalSellerSplitData,
       billDetails: {
         itemTotal: totalItemTotal,
-        deliveryCharge: frontendDeliveryAmount,
+        deliveryCharge: totalFrontendDelivery,
         totalAmount: finalGrandTotal,
       },
       totalAmount: finalGrandTotal,
       paymentMethod,
       shippingAddress,
       status: "Placed", 
-      paymentStatus: "Pending", // 🌟 IPPO IDHU STRICTLY PENDING
+      paymentStatus: "Pending", 
     });
 
     await newOrder.save();
     
-    // Refresh to ensure all DB defaults are captured
     const finalStoredOrder = await Order.findById(newOrder._id);
     res.status(201).json({ success: true, order: finalStoredOrder });
 
   } catch (err) {
-    console.error("CRITICAL ORDER ERROR:", err.message);
+    console.error("❌ CRITICAL ORDER FAILURE:", err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 };
