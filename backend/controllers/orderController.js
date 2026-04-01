@@ -803,6 +803,7 @@ exports.getSellerReturnRequests = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
+
 exports.updateOrderStatus = async (req, res) => {
   try {
     const { status, sellerId, adminNote, awbNumber } = req.body;
@@ -810,49 +811,43 @@ exports.updateOrderStatus = async (req, res) => {
 
     if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
-    let sellerPackageFound = false;
-    let totalRefundAmount = 0;
-    let itemsToRestore = [];
-    let splitToUpdate = null;
+    let splitToUpdate = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId?.toString());
+    if (!splitToUpdate) return res.status(400).json({ success: false, message: "Seller split not found." });
 
-    // 🌟 STEP 1: Sync Seller Split Data
-    for (let split of order.sellerSplitData) {
-      if (split.sellerId.toString() === sellerId?.toString()) {
-        if (split.packageStatus === "Returned" && status === "Returned") {
-          return res.status(400).json({ success: false, message: "Already returned." });
-        }
+    // 🌟 1. UPDATE STATUS & REMARKS
+    splitToUpdate.packageStatus = status;
+    splitToUpdate.adminRemarks = adminNote || splitToUpdate.adminRemarks;
+    if (awbNumber) splitToUpdate.awbNumber = awbNumber;
 
-        split.packageStatus = status;
-        split.adminRemarks = adminNote || split.adminRemarks;
-        if (awbNumber) split.awbNumber = awbNumber;
-        
-        // 🌟 Real-time Date Storage (Admin/Seller View)
-        if (status === "Delivered") split.deliveredDate = new Date();
-        if (status === "Returned") split.returnDate = new Date();
-
-        sellerPackageFound = true;
-        splitToUpdate = split;
-      }
+    // 🌟 2. DATE LOGIC (Strict Separation)
+    if (status === "Delivered") {
+      splitToUpdate.deliveredDate = new Date();
+    }
+    
+    // 🔥 Webhook vandhu status "Returned" nu maaruna mattum dhaan Return Date vizhanum
+    if (status === "Returned") {
+      splitToUpdate.returnDate = new Date();
     }
 
-    if (!sellerPackageFound) return res.status(400).json({ success: false, message: "Seller split not found." });
-
-    // 🌟 STEP 2: Item Status & Stock restoration logic
-    for (let item of order.items) {
+    // 🌟 3. ITEM STATUS SYNC
+    let totalRefundAmount = 0;
+    let itemsToRestore = [];
+    
+    order.items.forEach((item) => {
       if (item.sellerId.toString() === sellerId?.toString()) {
-        // Refund & Stock strictly happens only when status is "Returned"
-        if (status === "Returned" && item.itemStatus !== "Returned") {
+        item.itemStatus = status;
+        
+        // 💰 REFUND ONLY ON FINAL 'Returned' STATUS
+        if (status === "Returned" && !item.isReturned) {
           totalRefundAmount += item.price * item.quantity;
           item.isReturned = true;
           item.returnProcessedDate = new Date();
           itemsToRestore.push({ productId: item.productId, qty: item.quantity });
         }
-        item.itemStatus = status;
-        if (awbNumber) item.itemAwbNumber = awbNumber;
       }
-    }
+    });
 
-    // 💰 STEP 3: WALLET REFUND & STOCK RESTORE (Only on final 'Returned' status)
+    // 💰 4. WALLET & STOCK (Final Return mattum dhaan)
     if (status === "Returned" && totalRefundAmount > 0) {
       const user = await User.findById(order.customerId);
       if (user) {
@@ -860,50 +855,37 @@ exports.updateOrderStatus = async (req, res) => {
         user.walletTransactions.unshift({
           amount: totalRefundAmount,
           type: "CREDIT",
-          reason: `Refund: Order #${order._id.toString().slice(-6).toUpperCase()} Approved`,
+          reason: `Refund: Order #${order._id.toString().slice(-6).toUpperCase()} Returned`,
           date: new Date(),
         });
         await user.save();
-
-        for (let restore of itemsToRestore) {
-          await Product.findByIdAndUpdate(restore.productId, { $inc: { stock: restore.qty }, $set: { status: "active" } });
+        for (let r of itemsToRestore) {
+          await Product.findByIdAndUpdate(r.productId, { $inc: { stock: r.qty }, $set: { status: "active" } });
         }
       }
     }
 
-    // 🚚 STEP 3.5: REAL-TIME LOGISTICS SYNC
-    // Trigger Delhivery Reverse Pickup strictly when Admin clicks "Return Approved"
+    // 🚚 5. DELHIvery RVP (Only on Approval)
     if (status === "Return Approved") {
-      console.log("🚚 Triggering Delhivery RVP for Return Approval...");
       const rvpResult = await createReversePickupInternal(order._id, sellerId);
-      
       if (rvpResult.success && rvpResult.awb) {
-        splitToUpdate.returnAwbNumber = rvpResult.awb; // 🌟 Real Return AWB saved to split
-        
-        // Individual items sync
+        splitToUpdate.returnAwbNumber = rvpResult.awb;
         order.items.forEach(item => {
-          if(item.sellerId.toString() === sellerId.toString()) {
-            item.itemAwbNumber = rvpResult.awb; 
-          }
+          if(item.sellerId.toString() === sellerId.toString()) item.itemAwbNumber = rvpResult.awb;
         });
-        console.log("✅ Real-time RVP Sync Success:", rvpResult.awb);
-      } else {
-        console.log("❌ Delhivery RVP Failed:", rvpResult.message);
-        // We don't block the DB update, but log the error for manual check
       }
     }
 
-    // 🛡️ STEP 4: MASTER BADGE SYNC
-    const allPackageStatuses = order.sellerSplitData.map((s) => s.packageStatus);
-    if (allPackageStatuses.every((s) => s === "Delivered")) order.status = "Delivered";
-    else if (allPackageStatuses.every((s) => s === "Returned")) order.status = "Returned";
-    else if (allPackageStatuses.some((s) => s === "Shipped" || s === "Delivered" || s === "Return Approved")) order.status = "Partially Shipped";
+    // 🛡️ 6. MASTER BADGE SYNC
+    const allStatuses = order.sellerSplitData.map(s => s.packageStatus);
+    if (allStatuses.every(s => s === "Delivered")) order.status = "Delivered";
+    else if (allStatuses.every(s => s === "Returned")) order.status = "Returned";
+    else order.status = "Partially Shipped";
 
     await order.save();
-    res.json({ success: true, message: `Status updated to ${status} and synced with Logistics!`, data: order });
-    
+    res.json({ success: true, message: `Status updated to ${status}`, data: order });
+
   } catch (err) {
-    console.error("❌ UPDATE STATUS ERROR:", err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 };
