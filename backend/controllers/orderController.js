@@ -709,65 +709,64 @@ exports.bypassPaymentAndShip = async (req, res) => {
 //     res.status(500).json({ success: false, error: err.message });
 //   }
 // };
-
 /* =====================================================
-    🔙 REQUEST RETURN (Customer App Trigger)
+    🔙 REQUEST RETURN (Customer App Trigger Only)
+    Logic: Strictly ONLY register the request. No Logistics API yet.
 ===================================================== */
 exports.requestReturn = async (req, res) => {
   try {
     const { orderId, sellerId, reason } = req.body;
+    
+    // 🛡️ Validation
+    if (!orderId || !sellerId) {
+      return res.status(400).json({ success: false, message: "Order ID and Seller ID are required." });
+    }
+
     const order = await Order.findById(orderId);
+    if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
-    if (!order)
-      return res
-        .status(404)
-        .json({ success: false, message: "Order not found" });
+    let sellerFound = false;
 
-    // Generate individual Dummy Return Tracking ID (until Seller approves)
-    const returnAWB = "RTN" + Math.floor(100000 + Math.random() * 900000);
-
-    let sellerItemsFound = false;
-
-    // 🌟 THE MISSING FIX: Sync the Master Seller Split Data for Admin/Seller Dashboard
+    // 🌟 STEP 1: Sync Seller Split Data (For Seller Dashboard)
+    // Inga logistics API-ah call panna koodadhu. Approval-ku waiting-nu kaattanum.
     order.sellerSplitData.forEach((split) => {
-      if (split.sellerId.toString() === sellerId?.toString()) {
-        split.packageStatus = "Return Requested"; // 👈 Seller dashboard-ku idhu dhaan pogum
-        split.returnAwbNumber = returnAWB;
+      if (split.sellerId.toString() === sellerId.toString()) {
+        split.packageStatus = "Return Requested"; // 👈 Strictly 'Requested'
+        split.adminRemarks = reason || "Customer requested return";
+        sellerFound = true;
       }
     });
 
-    // 🌟 Sync Individual Items (Customer View)
+    // 🌟 STEP 2: Sync Individual Items (For Customer App UI)
     order.items.forEach((item) => {
-      if (item.sellerId.toString() === sellerId?.toString()) {
+      if (item.sellerId.toString() === sellerId.toString()) {
         item.itemStatus = "Return Requested";
-        item.itemAwbNumber = returnAWB;
-        item.isReturned = true;
+        item.isReturned = false; // 👈 Innum return completed illa, so false.
         item.returnReason = reason;
-        sellerItemsFound = true;
       }
     });
 
-    if (!sellerItemsFound)
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message: "Invalid seller for this order split",
-        });
+    if (!sellerFound) {
+      return res.status(400).json({ success: false, message: "Seller not found in this order." });
+    }
+
+    // 🌟 STEP 3: Status Promotion (Optional)
+    // Motha order status-ah 'Return Requested'-nu maathalaam if needed
+    order.status = "Return Requested";
 
     await order.save();
-    
+
     res.json({
       success: true,
-      message: "Return request processed for specific seller package",
-      returnAWB,
+      message: "Return request submitted. Waiting for seller approval.",
       data: order,
     });
+
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    console.error("❌ RETURN REQUEST ERROR:", err.message);
+    res.status(500).json({ success: false, error: "Internal Server Error during return request." });
   }
 };
-
 
 /* =====================================================
     🔍 GET SELLER RETURN REQUESTS (Only Return Requested)
