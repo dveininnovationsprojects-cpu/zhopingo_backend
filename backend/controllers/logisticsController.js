@@ -439,46 +439,84 @@ const generateWarehouseName = (sellerDoc) => {
     const idSuffix = sellerDoc._id.toString().slice(-4);
     return (baseName + idSuffix).substring(0, 30);
 };
-
-// Ippo processShipmentCreation kulla idhai sync pannu
-exports.processShipmentCreation = async (orderId, sellerId) => { // 👈 removed pickupLocation param for safety
+exports.processShipmentCreation = async (orderId, sellerId) => {
     try {
         const order = await Order.findById(orderId);
         const sellerDoc = await Seller.findById(sellerId);
-        
-        if (!order || !sellerDoc) return { success: false, message: "Order/Seller not found" };
 
-        // 🌟 THE SYNC: Dashboard-la ulla adhae peru generate aagum
+        if (!order || !sellerDoc) {
+            return { success: false, message: "Order/Seller not found" };
+        }
+
+        // Pickup location name
         const pickupLocationName = generateWarehouseName(sellerDoc);
 
-        const sellerItems = order.items.filter(item => item.sellerId.toString() === sellerId.toString());
-        const totalWeight = sellerItems.reduce((sum, it) => sum + (exports.getWeightInKg(it.weightValue || it.weight, it.unit) * it.quantity), 0);
-
-        const shipmentData = {
-            "shipments": [{
-                "name": order.shippingAddress?.receiverName || "Customer",
-                "add": `${order.shippingAddress?.flatNo || ""}, ${order.shippingAddress?.addressLine || ""}`,
-                "pin": order.shippingAddress?.pincode,
-                "phone": order.shippingAddress?.phone || "9876543210", 
-                "order": order._id.toString(),
-                "payment_mode": order.paymentMethod === "COD" ? "Cash" : "Pre-paid",
-                "amount": order.totalAmount,
-                "weight": totalWeight.toFixed(3) 
-            }],
-            "pickup_location": { "name": pickupLocationName } // 👈 Katchithama sync aayiduchi!
-        };
-
-        const response = await axios.post(`${DELHI_BASE_URL}/api/cmu/create.json`, 
-            `format=json&data=${JSON.stringify(shipmentData)}`, 
-            { headers: { 'Authorization': `Token ${DELHI_TOKEN}`, 'Content-Type': 'application/x-www-form-urlencoded' } }
+        // Get only this seller items
+        const sellerItems = order.items.filter(
+            item => item.sellerId.toString() === sellerId.toString()
         );
 
-        // ... rest of the status update logic ...
-        if (response.data && response.data.packages && response.data.packages[0]) {
-            // Success Logic
-            return { success: true, awb: response.data.packages[0].waybill };
+        // 🔥 Correct Weight Calculation from Product DB
+        let totalWeight = 0;
+
+        for (const item of sellerItems) {
+            const productDoc = await Product.findById(item.productId);
+            if (productDoc) {
+                const weightKg = exports.getWeightInKg(
+                    productDoc.weight || 500,
+                    productDoc.unit || "g"
+                );
+                totalWeight += weightKg * item.quantity;
+            }
         }
-        return { success: false, message: response.data?.data?.message || "Delhivery API Reject" };
+
+        // Delhivery minimum weight safety
+        if (totalWeight <= 0) totalWeight = 0.5;
+
+        const shipmentData = {
+            shipments: [{
+                name: order.shippingAddress?.receiverName || "Customer",
+                add: `${order.shippingAddress?.flatNo || ""}, ${order.shippingAddress?.addressLine || ""}`,
+                pin: order.shippingAddress?.pincode,
+                phone: order.shippingAddress?.phone || "9876543210",
+                order: order._id.toString(),
+                payment_mode: order.paymentMethod === "COD" ? "Cash" : "Pre-paid",
+                amount: order.totalAmount,
+
+                // ✅ Important fields
+                weight: totalWeight.toFixed(3),
+                length: 10,
+                breadth: 10,
+                height: 10
+            }],
+            pickup_location: {
+                name: pickupLocationName
+            }
+        };
+
+        console.log("📦 Shipment Payload:", shipmentData);
+
+        const response = await axios.post(
+            `${DELHI_BASE_URL}/api/cmu/create.json`,
+            `format=json&data=${JSON.stringify(shipmentData)}`,
+            {
+                headers: {
+                    Authorization: `Token ${DELHI_TOKEN}`,
+                    "Content-Type": "application/x-www-form-urlencoded"
+                }
+            }
+        );
+
+        if (response.data && response.data.packages && response.data.packages[0]) {
+            const awb = response.data.packages[0].waybill;
+            return { success: true, awb };
+        }
+
+        return {
+            success: false,
+            message: response.data?.data?.message || "Delhivery API Reject"
+        };
+
     } catch (err) {
         console.error("❌ Logistics Fail:", err.response?.data || err.message);
         return { success: false, error: err.message };
@@ -764,21 +802,48 @@ exports.testAwbGeneration = async (req, res) => {
         res.status(500).json({ success: false, error: err.response?.data || err.message });
     }
 };
-
-// 📄 A. DOWNLOAD SHIPPING LABEL (Box mela otturadhuku)
 exports.getShippingLabel = async (req, res) => {
     try {
         const { awb } = req.params;
-        const response = await axios.get(`${DELHI_BASE_URL}/api/p/packing_slip?wbns=${awb}`, {
-            headers: { 'Authorization': `Token ${DELHI_TOKEN}` }
-        });
-        if (response.data?.packages?.[0]?.pdf_url) {
-            return res.json({ success: true, labelUrl: response.data.packages[0].pdf_url });
-        }
-        res.status(404).json({ success: false, message: "Label generating, try in 1 min." });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
-};
 
+        const response = await axios.get(
+            `https://track.delhivery.com/api/p/packing_slip`,
+            {
+                params: {
+                    wbns: awb,
+                    pdf: "true",
+                    pdf_size: "A4"
+                },
+                headers: {
+                    Authorization: `Token ${process.env.DELHIVERY_TOKEN}`
+                }
+            }
+        );
+
+        const packages = response.data?.packages;
+
+        // ✅ If label ready
+        if (packages && packages.length > 0 && packages[0].pdf_download_link) {
+            return res.json({
+                success: true,
+                labelUrl: packages[0].pdf_download_link
+            });
+        }
+
+        // ⏳ If label not ready yet
+        return res.json({
+            success: false,
+            message: "Label not ready yet. Try again in 30 seconds."
+        });
+
+    } catch (err) {
+        console.error("Label Error:", err.response?.data || err.message);
+        res.status(500).json({
+            success: false,
+            message: "Delhivery API error"
+        });
+    }
+};
 // 📄 B. GENERATE MANIFEST (Courier boy-kitta signature vaanga)
 exports.getManifest = async (req, res) => {
     try {
@@ -808,8 +873,7 @@ exports.syncOrderStatusManual = async (req, res) => {
         res.json({ success: true, currentStatus: latestStatus, fullData: response.data });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 };
-// 🚚 1. SCHEDULE PICKUP (Request to Ship)
-// Seller "Ready to Ship" click panna idhu trigger aaganum
+// 🚚 1. SCHEDULE PICKUP (Timezone-Safe Production Fix)
 exports.schedulePickup = async (req, res) => {
     try {
         const { sellerId } = req.body;
@@ -819,29 +883,54 @@ exports.schedulePickup = async (req, res) => {
 
         const pickupLocationName = (sellerDoc.shopName.replace(/[^a-zA-Z0-9]/g, "").substring(0, 10) + sellerDoc._id.toString().slice(-4)).substring(0, 30);
 
-        // Delhivery Pickup Request Payload
-        const pickupData = {
+        /* =====================================================
+           🌟 THE IST SYNC: Force Today's Date in Indian Time
+        ===================================================== */
+        const now = new Date();
+        // IST logic: UTC + 5:30
+        const ISTOffset = 5.5 * 60 * 60 * 1000;
+        const ISTTime = new Date(now.getTime() + ISTOffset);
+        const todayIST = ISTTime.toISOString().split('T')[0];
+
+        // 🌟 THE ULTIMATE SYNC URL
+        const PICKUP_URL = `https://track.delhivery.com/fm/request/new/`;
+
+        const payload = {
+            "pickup_time": "14:00:00", 
+            "pickup_date": todayIST, // 👈 Correct IST Date (April 1st)
             "pickup_location": pickupLocationName,
-            "pickup_date": new Date().toISOString().split('T')[0], // Today's date (YYYY-MM-DD)
-            "pickup_time": "14:00:00", // Standard pickup window
-            "expected_package_count": 1
+            "expected_package_count": 1 
         };
 
-        const response = await axios.post(`${DELHI_BASE_URL}/api/backend/clientwarehouse/pickup/create/`, 
-            pickupData,
-            { headers: { 'Authorization': `Token ${DELHI_TOKEN}`, 'Content-Type': 'application/json' } }
+        console.log(`📡 Requesting Pickup for: ${pickupLocationName} on ${todayIST}`);
+
+        const response = await axios.post(PICKUP_URL, 
+            payload,
+            { 
+                headers: { 
+                    'Authorization': `Token ${DELHI_TOKEN}`, 
+                    'Content-Type': 'application/json' 
+                } 
+            }
         );
 
-        console.log(`📡 Pickup Requested for: ${pickupLocationName}`);
-
-        res.json({ 
-            success: true, 
-            message: "Pickup Scheduled Successfully!", 
-            details: response.data 
-        });
+        if (response.data) {
+            console.log("✅ PICKUP REQUEST SUCCESS!");
+            return res.json({ 
+                success: true, 
+                message: "Pickup Scheduled! Date: " + todayIST, 
+                data: response.data 
+            });
+        }
 
     } catch (err) {
-        console.error("❌ Pickup Request Error:", err.response?.data || err.message);
-        res.status(500).json({ success: false, error: err.response?.data || err.message });
+        console.error("❌ Pickup API Error Status:", err.response?.status);
+        console.error("❌ Error Details:", err.response?.data);
+
+        res.status(500).json({ 
+            success: false, 
+            error: "Logistics Sync Failed",
+            details: err.response?.data || err.message
+        });
     }
 };
