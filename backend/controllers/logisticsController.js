@@ -908,7 +908,7 @@ exports.handleDelhiveryWebhook = async (req, res) => {
 
     if (!waybill) return res.status(400).send("No Waybill Found");
 
-    // 🌟 FIX 1: Search for BOTH Forward AWB and Return AWB
+    // 🌟 Search for BOTH Forward AWB and Return AWB
     const order = await Order.findOne({
       $or: [
         { "sellerSplitData.awbNumber": waybill },
@@ -919,40 +919,37 @@ exports.handleDelhiveryWebhook = async (req, res) => {
     if (order) {
       let newStatus = null;
 
-      // 🌟 FIX 2: Industry Status Mapping for ALL cases
+      // 🌟 FIX 2: Updated Industry Mapping (Matching your Frontend flow)
       if (rawStatus.includes("dispatched") || rawStatus.includes("shipped")) {
         newStatus = "Shipped";
       } else if (rawStatus.includes("transit") || rawStatus.includes("in-transit")) {
-        newStatus = "In Transit"; 
+        newStatus = "In Transit"; // 👈 Space is important for Frontend logic
       } else if (rawStatus.includes("out for delivery") || rawStatus.includes("pending delivery")) {
-        newStatus = "Out for delivery"; 
+        newStatus = "Out for delivery"; // 👈 Amazon Style flow
       } else if (rawStatus.includes("delivered")) {
         newStatus = "Delivered";
-      } else if (rawStatus.includes("return") || rawStatus.includes("rto")) {
-        newStatus = "Returned";
+      } else if (rawStatus.includes("return") || rawStatus.includes("rto") || rawStatus.includes("undelivered")) {
+        newStatus = "Returned"; 
       } else if (rawStatus.includes("cancel")) {
         newStatus = "Cancelled";
       }
 
       if (newStatus) {
         order.sellerSplitData.forEach((split) => {
-          // Check which AWB matches (Forward or Return)
           if (split.awbNumber === waybill || split.returnAwbNumber === waybill) {
             
-            // Allow update only if not already refunded (to protect financial data)
             if (split.packageStatus !== "Refunded") {
                split.packageStatus = newStatus;
                
-               // 🌟 FIX 3: Store Exact Dates Real-time
+               // 🌟 Date Locking
                if (newStatus === "Delivered") split.deliveredDate = new Date();
                if (newStatus === "Returned") split.returnDate = new Date();
                
-               // Auto-POD Download for Delivered
+               // Auto-POD Download
                if (newStatus === "Delivered") {
-                 // Using full URL to avoid 'undefined' variables
-                 axios.get(`https://track.delhivery.com/api/pvt/shipping/pod.json`, {
+                 axios.get(`${DELHI_BASE_URL}/api/p/pod.json`, {
                       params: { wbns: waybill },
-                      headers: { Authorization: `Token ${process.env.DELHIVERY_TOKEN}` }
+                      headers: { Authorization: `Token ${DELHI_TOKEN}` }
                   }).then(async (podRes) => {
                       if(podRes.data && podRes.data[waybill] && podRes.data[waybill].pod_link) {
                           await Order.updateOne(
@@ -966,7 +963,7 @@ exports.handleDelhiveryWebhook = async (req, res) => {
           }
         });
 
-        // Sync Individual Items for App View (Stepper Highlight)
+        // Sync Individual Items for App View
         order.items.forEach((item) => {
           if (item.itemAwbNumber === waybill || item.returnAwbNumber === waybill) {
             item.itemStatus = newStatus;
