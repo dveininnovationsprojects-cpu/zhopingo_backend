@@ -91,7 +91,6 @@
 // }, { timestamps: true });
 
 // module.exports = mongoose.model('Order', orderSchema);
-
 const mongoose = require('mongoose');
 
 const orderSchema = new mongoose.Schema({
@@ -107,21 +106,19 @@ const orderSchema = new mongoose.Schema({
         sellerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Seller', required: true }, 
         image: { type: String },
         
-        // 🌟 ITEM LEVEL STATUS
+        // 🌟 ITEM LEVEL STATUS (Stepper Sync)
         itemStatus: { 
             type: String, 
             default: 'Placed',
             enum: [
-                'Placed', 'Packed', 'Shipped', 'Delivered', 'Cancelled', 
-                'Return Requested', 
-                'Return Approved', // 👈 Indha missing value dhaan 500 error tharudhu
-                'Return In-Progress', 
-                'Returned'
+                'Placed', 'Packed', 'Shipped', 
+                'In Transit', // 👈 Space match for Webhook
+                'Out for delivery', // 👈 Added for Real-time tracking
+                'Delivered', 'Cancelled', 
+                'Return Requested', 'Return Approved', 'Return In-Progress', 'Returned'
             ]
         },
         itemAwbNumber: { type: String, default: null },
-
-        // 🛡️ REAL-WORLD RETURN LOGIC
         returnReason: { type: String, default: null },
         returnImages: [{ type: String }], 
         returnProcessedDate: { type: Date, default: null }
@@ -132,34 +129,28 @@ const orderSchema = new mongoose.Schema({
         shopName: String,
         sellerSubtotal: Number,
         
-        // 🚀 THE FIX: Enum list-ah katchithama update pannittaen
+        // 🌟 SELLER PACKAGE STATUS
         packageStatus: { 
             type: String, 
             default: 'Placed',
             enum: [
-                'Placed', 
-                'Packed', 
-                'Shipped', 
-                'Delivered', 
-                'Cancelled', 
-                'Return Requested', 
-                'Return Approved',// 👈 Added
-                'Return In-Progress', // 👈 Added
-                'Returned'
+                'Placed', 'Packed', 'Shipped', 
+                'In Transit', // 👈 Space match for Webhook
+                'Out for delivery', // 👈 Added for Real-time tracking
+                'Delivered', 'Cancelled', 
+                'Return Requested', 'Return Approved', 'Return In-Progress', 'Returned'
             ]
         },
         awbNumber: { type: String, default: null }, 
-        returnAwbNumber: { type: String, default: null }, // 👈 Multi-seller tracking support
+        returnAwbNumber: { type: String, default: null }, 
         deliveredDate: { type: Date, default: null },
         returnDate: { type: Date, default: null },
-
         commissionTotal: { type: Number, default: 0 },
         gstTotal: { type: Number, default: 0 }, 
         tdsTotal: { type: Number, default: 0 },
         deliveryDeduction: { type: Number, default: 0 }, 
         actualShippingCost: { type: Number, default: 0 }, 
         customerChargedShipping: { type: Number, default: 0 },
-
         finalPayableToSeller: { type: Number, default: 0 },
         isSettled: { type: Boolean, default: false } 
     }],
@@ -177,13 +168,17 @@ const orderSchema = new mongoose.Schema({
     paymentMethod: { type: String, required: true }, 
     paymentStatus: { type: String, enum: ['Pending', 'Paid', 'Failed', 'Refunded', 'Partially Refunded'], default: 'Pending' },
 
+    // 🌟 GLOBAL MASTER STATUS
     status: { 
         type: String, 
         default: 'Placed',
         enum: [
-            'Pending', 'Placed', 'Shipped', 'Delivered', 'Cancelled', 
-            'Partially Cancelled', 'Partially Shipped', 'Return Requested', 
-            'Return In-Progress', 'Returned'
+            'Pending', 'Placed', 'Shipped', 
+            'In Transit', // 👈 Space match for Webhook
+            'Out for delivery', // 👈 Added
+            'Delivered', 'Cancelled', 
+            'Partially Cancelled', 'Partially Shipped', 
+            'Return Requested', 'Return Approved', 'Return In-Progress', 'Returned'
         ] 
     },
 
