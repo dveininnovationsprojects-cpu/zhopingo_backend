@@ -920,12 +920,12 @@ exports.handleDelhiveryWebhook = async (req, res) => {
       let newStatus = null;
 
       // 🌟 FIX 2: Industry Status Mapping for ALL cases
-     if (rawStatus.includes("dispatched") || rawStatus.includes("shipped")) {
+      if (rawStatus.includes("dispatched") || rawStatus.includes("shipped")) {
         newStatus = "Shipped";
       } else if (rawStatus.includes("transit") || rawStatus.includes("in-transit")) {
-        newStatus = "In Transit"; // 👈 Space katchithama irukkanum frontend sync-ku
+        newStatus = "In Transit"; 
       } else if (rawStatus.includes("out for delivery") || rawStatus.includes("pending delivery")) {
-        newStatus = "Out for delivery"; // 👈 Exact match for Frontend
+        newStatus = "Out for delivery"; 
       } else if (rawStatus.includes("delivered")) {
         newStatus = "Delivered";
       } else if (rawStatus.includes("return") || rawStatus.includes("rto")) {
@@ -949,9 +949,10 @@ exports.handleDelhiveryWebhook = async (req, res) => {
                
                // Auto-POD Download for Delivered
                if (newStatus === "Delivered") {
-                  axios.get(`${DELHI_BASE_URL}/api/pod.json`, {
+                 // Using full URL to avoid 'undefined' variables
+                 axios.get(`https://track.delhivery.com/api/pvt/shipping/pod.json`, {
                       params: { wbns: waybill },
-                      headers: { Authorization: `Token ${DELHI_TOKEN}` }
+                      headers: { Authorization: `Token ${process.env.DELHIVERY_TOKEN}` }
                   }).then(async (podRes) => {
                       if(podRes.data && podRes.data[waybill] && podRes.data[waybill].pod_link) {
                           await Order.updateOne(
@@ -965,7 +966,7 @@ exports.handleDelhiveryWebhook = async (req, res) => {
           }
         });
 
-        // Sync Individual Items for App View
+        // Sync Individual Items for App View (Stepper Highlight)
         order.items.forEach((item) => {
           if (item.itemAwbNumber === waybill || item.returnAwbNumber === waybill) {
             item.itemStatus = newStatus;
@@ -981,7 +982,7 @@ exports.handleDelhiveryWebhook = async (req, res) => {
           order.status = "Returned";
         } else if (allPackageStatuses.every((s) => s === "Cancelled")) {
           order.status = "Cancelled";
-        } else if (allPackageStatuses.some((s) => s === "Shipped" || s === "Delivered")) {
+        } else if (allPackageStatuses.some((s) => ["Shipped", "In Transit", "Out for delivery", "Delivered"].includes(s))) {
           order.status = "Partially Shipped";
         }
 
