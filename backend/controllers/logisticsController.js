@@ -350,6 +350,7 @@
 const Order = require('../models/Order');
 const Seller = require('../models/Seller');
 const axios = require('axios');
+const Product = require('../models/Product');
 
 // ⚡ LIVE CONFIG
 const DELHI_TOKEN = process.env.DELHIVERY_TOKEN; 
@@ -448,29 +449,32 @@ exports.processShipmentCreation = async (orderId, sellerId) => {
             return { success: false, message: "Order/Seller not found" };
         }
 
-        // Pickup location name
         const pickupLocationName = generateWarehouseName(sellerDoc);
 
-        // Get only this seller items
         const sellerItems = order.items.filter(
             item => item.sellerId.toString() === sellerId.toString()
         );
 
-        // 🔥 Correct Weight Calculation from Product DB
+        // ✅ Weight calculation (but AWB fail aagatha madhiri safe logic)
         let totalWeight = 0;
 
         for (const item of sellerItems) {
-            const productDoc = await Product.findById(item.productId);
-            if (productDoc) {
-                const weightKg = exports.getWeightInKg(
-                    productDoc.weight || 500,
-                    productDoc.unit || "g"
-                );
-                totalWeight += weightKg * item.quantity;
+            try {
+                const productDoc = await Product.findById(item.productId);
+                if (productDoc) {
+                    const weightKg = exports.getWeightInKg(
+                        productDoc.weight || 500,
+                        productDoc.unit || "g"
+                    );
+                    totalWeight += weightKg * item.quantity;
+                } else {
+                    totalWeight += 0.5 * item.quantity;
+                }
+            } catch (e) {
+                totalWeight += 0.5 * item.quantity;
             }
         }
 
-        // Delhivery minimum weight safety
         if (totalWeight <= 0) totalWeight = 0.5;
 
         const shipmentData = {
@@ -482,9 +486,9 @@ exports.processShipmentCreation = async (orderId, sellerId) => {
                 order: order._id.toString(),
                 payment_mode: order.paymentMethod === "COD" ? "Cash" : "Pre-paid",
                 amount: order.totalAmount,
-
-                // ✅ Important fields
                 weight: totalWeight.toFixed(3),
+
+                // ✅ Add dimensions (important)
                 length: 10,
                 breadth: 10,
                 height: 10
@@ -509,6 +513,24 @@ exports.processShipmentCreation = async (orderId, sellerId) => {
 
         if (response.data && response.data.packages && response.data.packages[0]) {
             const awb = response.data.packages[0].waybill;
+
+            // ✅ SAVE AWB like old code (important)
+            order.sellerSplitData.forEach(split => {
+                if (split.sellerId.toString() === sellerId.toString()) {
+                    split.awbNumber = awb;
+                    split.packageStatus = 'Packed';
+                }
+            });
+
+            order.items.forEach(item => {
+                if (item.sellerId.toString() === sellerId.toString()) {
+                    item.itemAwbNumber = awb;
+                    item.itemStatus = 'Packed';
+                }
+            });
+
+            await order.save();
+
             return { success: true, awb };
         }
 
