@@ -319,12 +319,8 @@ const {
 //   }
 // };
 /* =====================================================
-    🌟 MASTER CREATE ORDER (1Cr Standard - Final Edition)
-    Logic: 
-    1. Atomic Stock Blocking (Instant guard)
-    2. Multi-Seller Splitting (Bulk order support)
-    3. Golden Logic Shipping: If 1 item is paid, whole seller split gets revenue.
-    4. Finance Precision: GST, TDS, Payouts per seller.
+    🌟 MASTER CREATE ORDER (1Cr Standard - Golden Logic Edition)
+    Logic: Atomic Stock, Product-level Delivery Split, Multi-Seller Finance.
 ===================================================== */
 exports.createOrder = async (req, res) => {
   try {
@@ -343,7 +339,7 @@ exports.createOrder = async (req, res) => {
     let sellerWiseSplit = {};
     const processedItems = [];
 
-    // 🛡️ STEP 1: ATOMIC LOOP - Process 100+ items with individual precision
+    // 1️⃣ PRODUCT LEVEL LOOP: Clear analysis for each of 100+ items
     for (const item of items) {
       const productDoc = await Product.findById(item.productId || item._id);
       const sellerDoc = await Seller.findById(productDoc?.seller || item.sellerId);
@@ -354,10 +350,10 @@ exports.createOrder = async (req, res) => {
 
       // STOCK GUARD
       if (productDoc.stock < qty) {
-        return res.status(400).json({ success: false, message: `Insufficient stock for ${productDoc.name}.` });
+        return res.status(400).json({ success: false, message: `Stock out: ${productDoc.name}` });
       }
 
-      // BLOCK STOCK (Atomic Reduction)
+      // ATOMIC STOCK BLOCK
       productDoc.stock -= qty;
       if (productDoc.stock <= 0) {
         productDoc.stock = 0;
@@ -372,33 +368,27 @@ exports.createOrder = async (req, res) => {
       const sIdStr = sellerDoc._id.toString();
 
       if (!sellerWiseSplit[sIdStr]) {
-        // Logistics Quote (Team Share info)
-        const weightVal = Number(productDoc.weight) || 500;
-        const weightKg = getWeightInKg(weightVal, productDoc.unit || "g") * qty;
+        // Prepare Seller Split Container
+        const weightKg = getWeightInKg(productDoc.weight || 500, productDoc.unit || "g") * qty;
         const originPin = sellerDoc.shopAddress?.pincode || "600001";
 
-        const teamLogisticsCost = await getRealTimeRateInternal(
-          shippingAddress.pincode,
-          weightKg,
-          originPin,
-          "Pre-paid"
-        );
+        const teamCost = await getRealTimeRateInternal(shippingAddress.pincode, weightKg, originPin, "Pre-paid");
 
         sellerWiseSplit[sIdStr] = {
           sellerId: sellerDoc._id,
           shopName: sellerDoc.shopName,
           sellerSubtotal: 0,
-          teamShare: teamLogisticsCost, // Cost to Delhivery
-          adminLogisticsRevenue: 0,    // Revenue from Customer
-          isSellerSplitPaid: false     // 🌟 Golden Logic Flag
+          teamShare: teamCost,
+          allocatedRevenue: 0, 
+          hasPaidItem: false // 🌟 Golden Logic Flag
         };
       }
 
       sellerWiseSplit[sIdStr].sellerSubtotal += subtotal;
 
-      // 🌟 GOLDEN LOGIC: If even 1 product in this seller group is NOT free, the split is PAID.
+      // 🌟 GOLDEN LOGIC: Item-level check. If even ONE item is NOT free, this seller split is PAID.
       if (productDoc.isFreeDelivery === false) {
-        sellerWiseSplit[sIdStr].isSellerSplitPaid = true;
+        sellerWiseSplit[sIdStr].hasPaidItem = true;
       }
 
       processedItems.push({
@@ -414,26 +404,26 @@ exports.createOrder = async (req, res) => {
       });
     }
 
-    // 🚚 STEP 2: PRECISE DELIVERY REVENUE ALLOCATION
-    const totalFrontendDeliveryAmount = Number(deliveryCharge) || 0;
+    // 2️⃣ PRECISE SHIPPING REVENUE ALLOCATION
+    const totalFrontendCharge = Number(deliveryCharge) || 0;
     
-    // Find sellers who actually trigger a delivery charge
-    const paidSellers = Object.values(sellerWiseSplit).filter(s => s.isSellerSplitPaid === true);
+    // Find sellers who actually trigger a charge (Paid items)
+    const paidSellers = Object.values(sellerWiseSplit).filter(s => s.hasPaidItem === true);
     
     if (paidSellers.length > 0) {
-      // Divide the total frontend delivery charge equally among paid sellers
-      const sharePerPaidSeller = totalFrontendDeliveryAmount / paidSellers.length;
+      // Divide total frontend delivery amount among paid sellers equally
+      const sharePerPaidSeller = totalFrontendCharge / paidSellers.length;
       
       Object.keys(sellerWiseSplit).forEach(sId => {
-        if (sellerWiseSplit[sId].isSellerSplitPaid) {
-          sellerWiseSplit[sId].adminLogisticsRevenue = sharePerPaidSeller;
+        if (sellerWiseSplit[sId].hasPaidItem) {
+          sellerWiseSplit[sId].allocatedRevenue = sharePerPaidSeller;
         }
       });
     }
 
-    const finalGrandTotal = totalItemTotal + totalFrontendDeliveryAmount;
+    const finalGrandTotal = totalItemTotal + totalFrontendCharge;
 
-    // 💰 STEP 3: FINANCE SPLIT (Calculated per individual seller account)
+    // 3️⃣ FINANCE SPLIT DATA (Pure Sync)
     const finalSellerSplitData = Object.values(sellerWiseSplit).map((split) => {
       const comm = (split.sellerSubtotal * settings.commissionPercent) / 100;
       const gst = (comm * settings.gstOnCommissionPercent) / 100;
@@ -446,21 +436,21 @@ exports.createOrder = async (req, res) => {
         commissionTotal: comm,
         gstTotal: gst,
         tdsTotal: tds,
-        actualShippingCost: split.teamShare, // What we pay to Delhivery
-        customerChargedShipping: split.adminLogisticsRevenue, // What customer paid for this seller
+        actualShippingCost: split.teamShare, // Delhivery Price
+        customerChargedShipping: split.allocatedRevenue, // 🌟 REAL Split Revenue
         finalPayableToSeller: split.sellerSubtotal - (comm + gst + tds), 
         packageStatus: "Placed",
       };
     });
 
-    // 📝 STEP 4: MASTER ORDER RECORD
+    // 4️⃣ FINAL RECORD CREATION
     const newOrder = new Order({
       customerId: user._id,
       items: processedItems,
       sellerSplitData: finalSellerSplitData,
       billDetails: {
         itemTotal: totalItemTotal,
-        deliveryCharge: totalFrontendDeliveryAmount,
+        deliveryCharge: totalFrontendCharge,
         totalAmount: finalGrandTotal,
       },
       totalAmount: finalGrandTotal,
@@ -471,12 +461,11 @@ exports.createOrder = async (req, res) => {
     });
 
     await newOrder.save();
-    
     const finalStoredOrder = await Order.findById(newOrder._id);
     res.status(201).json({ success: true, order: finalStoredOrder });
 
   } catch (err) {
-    console.error("❌ CRITICAL ORDER ERROR:", err.message);
+    console.error("❌ CRITICAL ERROR:", err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 };
