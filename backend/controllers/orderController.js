@@ -840,6 +840,7 @@ exports.updateOrderStatus = async (req, res) => {
     // 🌟 STEP 2: Item Status & Stock restoration logic
     for (let item of order.items) {
       if (item.sellerId.toString() === sellerId?.toString()) {
+        // Refund & Stock strictly happens only when status is "Returned"
         if (status === "Returned" && item.itemStatus !== "Returned") {
           totalRefundAmount += item.price * item.quantity;
           item.isReturned = true;
@@ -851,7 +852,7 @@ exports.updateOrderStatus = async (req, res) => {
       }
     }
 
-    // 💰 STEP 3: WALLET REFUND & STOCK RESTORE
+    // 💰 STEP 3: WALLET REFUND & STOCK RESTORE (Only on final 'Returned' status)
     if (status === "Returned" && totalRefundAmount > 0) {
       const user = await User.findById(order.customerId);
       if (user) {
@@ -868,17 +869,27 @@ exports.updateOrderStatus = async (req, res) => {
           await Product.findByIdAndUpdate(restore.productId, { $inc: { stock: restore.qty }, $set: { status: "active" } });
         }
       }
+    }
 
-      // 🚚 3.5 REAL-TIME LOGISTICS SYNC: Trigger Delhivery Reverse Pickup (RVP)
-      // Indha API hit aanaale Delhivery system-la pickup schedule aagidum
+    // 🚚 STEP 3.5: REAL-TIME LOGISTICS SYNC
+    // Trigger Delhivery Reverse Pickup strictly when Admin clicks "Return Approved"
+    if (status === "Return Approved") {
+      console.log("🚚 Triggering Delhivery RVP for Return Approval...");
       const rvpResult = await createReversePickupInternal(order._id, sellerId);
+      
       if (rvpResult.success && rvpResult.awb) {
-        splitToUpdate.returnAwbNumber = rvpResult.awb; // 🌟 Store REAL return AWB
-        // Update individual items too for tracking
+        splitToUpdate.returnAwbNumber = rvpResult.awb; // 🌟 Real Return AWB saved to split
+        
+        // Individual items sync
         order.items.forEach(item => {
-           if(item.sellerId.toString() === sellerId.toString()) item.returnAwbNumber = rvpResult.awb;
+          if(item.sellerId.toString() === sellerId.toString()) {
+            item.itemAwbNumber = rvpResult.awb; 
+          }
         });
         console.log("✅ Real-time RVP Sync Success:", rvpResult.awb);
+      } else {
+        console.log("❌ Delhivery RVP Failed:", rvpResult.message);
+        // We don't block the DB update, but log the error for manual check
       }
     }
 
@@ -886,11 +897,13 @@ exports.updateOrderStatus = async (req, res) => {
     const allPackageStatuses = order.sellerSplitData.map((s) => s.packageStatus);
     if (allPackageStatuses.every((s) => s === "Delivered")) order.status = "Delivered";
     else if (allPackageStatuses.every((s) => s === "Returned")) order.status = "Returned";
-    else if (allPackageStatuses.some((s) => s === "Shipped" || s === "Delivered")) order.status = "Partially Shipped";
+    else if (allPackageStatuses.some((s) => s === "Shipped" || s === "Delivered" || s === "Return Approved")) order.status = "Partially Shipped";
 
     await order.save();
     res.json({ success: true, message: `Status updated to ${status} and synced with Logistics!`, data: order });
+    
   } catch (err) {
+    console.error("❌ UPDATE STATUS ERROR:", err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 };
