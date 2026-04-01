@@ -920,12 +920,16 @@ exports.handleDelhiveryWebhook = async (req, res) => {
       let newStatus = null;
 
       // 🌟 FIX 2: Industry Status Mapping for ALL cases
-      if (rawStatus.includes("transit") || rawStatus.includes("pickup") || rawStatus.includes("dispatched")) {
+     if (rawStatus.includes("dispatched") || rawStatus.includes("shipped")) {
         newStatus = "Shipped";
+      } else if (rawStatus.includes("transit") || rawStatus.includes("in-transit")) {
+        newStatus = "In Transit"; // 👈 Space katchithama irukkanum frontend sync-ku
+      } else if (rawStatus.includes("out for delivery") || rawStatus.includes("pending delivery")) {
+        newStatus = "Out for delivery"; // 👈 Exact match for Frontend
       } else if (rawStatus.includes("delivered")) {
         newStatus = "Delivered";
-      } else if (rawStatus.includes("return") || rawStatus.includes("rto") || rawStatus.includes("undelivered")) {
-        newStatus = "Returned"; // Covers both RTO and Reverse Pickup Returns
+      } else if (rawStatus.includes("return") || rawStatus.includes("rto")) {
+        newStatus = "Returned";
       } else if (rawStatus.includes("cancel")) {
         newStatus = "Cancelled";
       }
