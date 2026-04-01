@@ -318,9 +318,11 @@ const {
 //     res.status(500).json({ success: false, error: "Internal System Failure" });
 //   }
 // };
+
 /* =====================================================
-    🌟 MASTER CREATE ORDER (1Cr Standard - Golden Logic Edition)
-    Logic: Atomic Stock Blocking, Finance Splits, Precise Delivery Revenue Split.
+    🌟 MASTER CREATE ORDER (1Cr Standard - Pure Creation Edition)
+    Logic: Stock Blocking, Finance Splits, Payout Data Preparation.
+    Status: STRICTLY PENDING (No Payment/AWB Trigger here)
 ===================================================== */
 exports.createOrder = async (req, res) => {
   try {
@@ -349,12 +351,12 @@ exports.createOrder = async (req, res) => {
 
       const qty = Number(item.quantity);
 
-      // 🛡️ STOCK GUARD
+      // 🛡️ STOCK GUARD: Atomic verification (Block stock on creation)
       if (productDoc.stock < qty) {
         return res.status(400).json({ success: false, message: `Insufficient stock for ${productDoc.name}.` });
       }
 
-      // 📉 BLOCK STOCK
+      // 📉 BLOCK STOCK: Stock-ah katchithama minus pannuvom
       productDoc.stock -= qty;
       if (productDoc.stock <= 0) {
         productDoc.stock = 0;
@@ -369,7 +371,7 @@ exports.createOrder = async (req, res) => {
       const sIdStr = sellerDoc._id.toString();
 
       if (!sellerWiseSplit[sIdStr]) {
-        // 🚚 REAL-TIME LOGISTICS QUOTE
+        // 🚚 REAL-TIME LOGISTICS QUOTE (Preserved for Payout info)
         const weightVal = Number(productDoc.weight) || 500;
         const weightKg = getWeightInKg(weightVal, productDoc.unit || "g") * qty;
         const originPin = sellerDoc.shopAddress?.pincode || "600001";
@@ -385,18 +387,12 @@ exports.createOrder = async (req, res) => {
           sellerId: sellerDoc._id,
           shopName: sellerDoc.shopName,
           sellerSubtotal: 0,
-          teamShare: teamLogisticsCost, 
-          adminRevenue: 0,
-          isSellerSplitPaid: false // 🌟 Golden Logic Flag
+          teamShare: teamLogisticsCost, // 👈 Admin Profit & Payout info
+          adminRevenue: 0, 
         };
       }
 
       sellerWiseSplit[sIdStr].sellerSubtotal += subtotal;
-
-      // 🌟 IF EVEN ONE ITEM IN THIS SELLER SPLIT IS PAID, THE SPLIT IS NOT FREE
-      if (productDoc.isFreeDelivery === false) {
-        sellerWiseSplit[sIdStr].isSellerSplitPaid = true;
-      }
 
       processedItems.push({
         productId: productDoc._id,
@@ -411,17 +407,11 @@ exports.createOrder = async (req, res) => {
       });
     }
 
-    // 🌟 ALLOCATE LOGISTICS REVENUE (Only to Paid Sellers)
+    // 🌟 ALLOCATE LOGISTICS REVENUE
     const frontendDeliveryAmount = Number(deliveryCharge) || 0;
-    const paidSellersCount = Object.values(sellerWiseSplit).filter(s => s.isSellerSplitPaid === true).length;
-    
-    if (paidSellersCount > 0) {
-        const sharePerPaidSeller = frontendDeliveryAmount / paidSellersCount;
-        Object.keys(sellerWiseSplit).forEach(sId => {
-            if (sellerWiseSplit[sId].isSellerSplitPaid) {
-                sellerWiseSplit[sId].adminRevenue = sharePerPaidSeller;
-            }
-        });
+    const firstSellerKey = Object.keys(sellerWiseSplit)[0];
+    if (firstSellerKey) {
+      sellerWiseSplit[firstSellerKey].adminRevenue = frontendDeliveryAmount;
     }
 
     const finalGrandTotal = totalItemTotal + frontendDeliveryAmount;
@@ -440,13 +430,13 @@ exports.createOrder = async (req, res) => {
         gstTotal: gst,
         tdsTotal: tds,
         actualShippingCost: split.teamShare, 
-        customerChargedShipping: split.adminRevenue, // 🌟 Allocated Precisely
+        customerChargedShipping: split.adminRevenue, 
         finalPayableToSeller: split.sellerSubtotal - (comm + gst + tds), 
         packageStatus: "Placed",
       };
     });
 
-    // 📝 MASTER ORDER RECORD
+    // 📝 THE PENDING FIX: Always Pending, no matter the method
     const newOrder = new Order({
       customerId: user._id,
       items: processedItems,
@@ -460,11 +450,12 @@ exports.createOrder = async (req, res) => {
       paymentMethod,
       shippingAddress,
       status: "Placed", 
-      paymentStatus: "Pending", 
+      paymentStatus: "Pending", // 🌟 IPPO IDHU STRICTLY PENDING
     });
 
     await newOrder.save();
     
+    // Refresh to ensure all DB defaults are captured
     const finalStoredOrder = await Order.findById(newOrder._id);
     res.status(201).json({ success: true, order: finalStoredOrder });
 
