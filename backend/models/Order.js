@@ -136,7 +136,8 @@ const orderSchema = new mongoose.Schema({
                 'Shipped', 
                 'Delivered', 
                 'Cancelled', 
-                'Return Requested', // 👈 Added
+                'Return Requested', 
+                'Return Approved',// 👈 Added
                 'Return In-Progress', // 👈 Added
                 'Returned'
             ]
