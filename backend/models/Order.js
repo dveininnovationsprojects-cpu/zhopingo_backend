@@ -124,7 +124,7 @@ const orderSchema = new mongoose.Schema({
         packageStatus: { 
             type: String, 
             default: 'Placed',
-            enum: ['Placed', 'Shipped', 'Delivered', 'Cancelled', 'Returned']
+            enum: ['Placed', 'Shipped', 'Delivered', 'Cancelled', 'Returned','Packed']
         },
         awbNumber: { type: String, default: null }, 
         deliveredDate: { type: Date, default: null },

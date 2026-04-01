@@ -518,14 +518,14 @@ exports.processShipmentCreation = async (orderId, sellerId) => {
             order.sellerSplitData.forEach(split => {
                 if (split.sellerId.toString() === sellerId.toString()) {
                     split.awbNumber = awb;
-                    split.packageStatus = 'Packed';
+                    split.packageStatus = 'Placed';
                 }
             });
 
             order.items.forEach(item => {
                 if (item.sellerId.toString() === sellerId.toString()) {
                     item.itemAwbNumber = awb;
-                    item.itemStatus = 'Packed';
+                    item.itemStatus = 'Placed';
                 }
             });
 
