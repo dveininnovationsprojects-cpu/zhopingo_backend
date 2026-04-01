@@ -111,7 +111,13 @@ const orderSchema = new mongoose.Schema({
         itemStatus: { 
             type: String, 
             default: 'Placed',
-            enum: ['Placed', 'Packed', 'Shipped', 'Delivered', 'Cancelled', 'Return Requested', 'Return In-Progress', 'Returned']
+            enum: [
+                'Placed', 'Packed', 'Shipped', 'Delivered', 'Cancelled', 
+                'Return Requested', 
+                'Return Approved', // 👈 Indha missing value dhaan 500 error tharudhu
+                'Return In-Progress', 
+                'Returned'
+            ]
         },
         itemAwbNumber: { type: String, default: null },
 
