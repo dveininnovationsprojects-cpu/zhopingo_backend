@@ -1088,19 +1088,23 @@ exports.updateOrderStatus = async (req, res) => {
 //     res.status(500).json({ success: false, error: err.message });
 //   }
 // };
+
 exports.cancelOrder = async (req, res) => {
   try {
     const { sellerId } = req.body;
     const order = await Order.findById(req.params.orderId);
     if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
-    const sellerSplitIndex = order.sellerSplitData.findIndex((split) => split.sellerId.toString() === sellerId?.toString());
-    if (sellerSplitIndex === -1) return res.status(400).json({ success: false, message: "Seller split not found." });
+    const split = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId?.toString());
+    if (!split) return res.status(400).json({ success: false, message: "Seller split not found." });
+
+    // 🛡️ Security Guard: Already cancel aana thirumba panna vida koodadhu
+    if (split.packageStatus === "Cancelled") return res.status(400).json({ success: false, message: "Already cancelled." });
 
     let refundAmount = 0;
     let itemsToRestore = [];
 
-    // 🌟 STEP 1: Process Items for Status & Stock
+    // 1. Update Items & Stock prep
     order.items.forEach((item) => {
       if (item.sellerId.toString() === sellerId?.toString()) {
         item.itemStatus = "Cancelled";
@@ -1109,39 +1113,43 @@ exports.cancelOrder = async (req, res) => {
       }
     });
 
-    // 💰 STEP 2: WALLET REFUND & STOCK RESTORE
+    // 2. Wallet Refund (Only if Paid)
     if (order.paymentStatus === "Paid") {
       const user = await User.findById(order.customerId);
       if (user) {
         user.walletBalance += refundAmount;
-        user.walletTransactions.unshift({ amount: refundAmount, type: "CREDIT", reason: `Refund: Order #${order._id.toString().slice(-6).toUpperCase()} Cancelled`, date: new Date() });
+        user.walletTransactions.unshift({ 
+          amount: refundAmount, 
+          type: "CREDIT", 
+          reason: `Refund: Order #${order._id.toString().slice(-6).toUpperCase()} Cancelled`, 
+          date: new Date() 
+        });
         await user.save();
       }
     }
+
+    // 3. Restore Stock
     for (let restore of itemsToRestore) {
       await Product.findByIdAndUpdate(restore.productId, { $inc: { stock: restore.qty }, $set: { status: "active" } });
     }
 
-    // 🚚 STEP 3: REAL-TIME LOGISTICS SYNC (Trigger Delhivery Cancel API)
-    const cancelledSplit = order.sellerSplitData[sellerSplitIndex];
-    if (cancelledSplit && cancelledSplit.awbNumber && cancelledSplit.awbNumber !== "128374922") { 
-        await cancelShipmentInternal(cancelledSplit.awbNumber);
-        console.log(`✅ Delhivery Shipment Cancelled for AWB: ${cancelledSplit.awbNumber}`);
+    // 4. Update Split Status (DON'T SPLICE!)
+    split.packageStatus = "Cancelled"; // Record maintain aagum
+
+    // 5. Logistics Sync
+    if (split.awbNumber && split.awbNumber !== "128374922") { 
+        await cancelShipmentInternal(split.awbNumber);
     }
 
-    // 🛡️ STEP 4: DB CLEANUP & STATUS SYNC
-    order.sellerSplitData.splice(sellerSplitIndex, 1);
-    const allStatuses = order.items.map((i) => i.itemStatus);
-    if (allStatuses.every((s) => s === "Cancelled")) {
+    // 6. Master Status Sync
+    const allStatuses = order.sellerSplitData.map(s => s.packageStatus);
+    if (allStatuses.every(s => s === "Cancelled")) {
       order.status = "Cancelled";
       order.paymentStatus = "Refunded";
-    } else {
-      const remainingActive = order.items.some((i) => i.itemStatus === "Shipped" || i.itemStatus === "Delivered");
-      order.status = remainingActive ? "Shipped" : "Placed";
     }
 
     await order.save();
-    res.json({ success: true, message: "Order Cancelled & Logistics Notified successfully!" });
+    res.json({ success: true, message: "Order Cancelled katchithama!" });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
