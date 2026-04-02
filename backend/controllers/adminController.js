@@ -454,7 +454,6 @@ exports.updateFinanceSettings = async (req, res) => {
 // };
 
 // 🌟 1. GENERATE WEEKLY SETTLEMENT (Detailed Breakdown Sync)
-// 🌟 1. GENERATE WEEKLY SETTLEMENT (Final Math-Fix Edition)
 exports.generateWeeklySettlement = async (req, res) => {
     try {
         const { sellerId, startDate, endDate } = req.body;
@@ -466,13 +465,11 @@ exports.generateWeeklySettlement = async (req, res) => {
         const settings = (await FinanceSettings.findOne()) || { commissionPercent: 10, gstOnCommissionPercent: 18, tdsPercent: 2 };
 
         // 🚀 THE CRITICAL FETCH FIX: 
-        // 1. Delivered orders fetch panna strictly 'isSettled: false' irukanum.
-        // 2. Returned orders eppovum fetch pannanum even if they were settled as 'Delivered' before.
         const orders = await Order.find({
             "sellerSplitData.sellerId": sellerId, 
             $or: [
-                { status: "Delivered", isSettled: { $ne: true } }, // New deliveries only
-                { status: "Returned" } // Fetch all returns to check for sync
+                { status: "Delivered", isSettled: { $ne: true } },
+                { status: "Returned" } 
             ],
             updatedAt: { $gte: filterStart, $lte: filterEnd }
         }).populate('items.productId');
@@ -501,14 +498,16 @@ exports.generateWeeklySettlement = async (req, res) => {
                 sellerItems.forEach(p => {
                     const prodName = p.name || p.productId?.name || "Product";
                     
-                    // 🌟 SYNC CHECK: Pathuko machi, ippo "Delivered" aagi settle aana product "Returned" aana
-                    // old "SALE" row-ah thookitu "RETURN" row-ah update pannuvom.
-                    const existingRowIndex = settlement?.payoutBreakdown?.findIndex(row => 
-                        row.orderId.toString() === order._id.toString() && row.productName === prodName
-                    );
+                    // 🌟 CRASH GUARD: Null check for settlement before finding index
+                    let existingRowIndex = -1;
+                    if (settlement && settlement.payoutBreakdown) {
+                        existingRowIndex = settlement.payoutBreakdown.findIndex(row => 
+                            row.orderId.toString() === order._id.toString() && row.productName === prodName
+                        );
+                    }
 
                     // Skip if SALE is already settled and nothing changed
-                    if (existingRowIndex !== -1 && settlement.payoutBreakdown[existingRowIndex].type === order.status.toUpperCase()) {
+                    if (settlement && existingRowIndex !== -1 && settlement.payoutBreakdown[existingRowIndex].type === order.status.toUpperCase()) {
                         return;
                     }
 
@@ -542,8 +541,6 @@ exports.generateWeeklySettlement = async (req, res) => {
                         // 🛑 🛑 RETURN LOGIC (80 + 39 + 39 STRICT SYNC)
                         const customerRefundPortion = productPrice + (totalShippingChargedToCustomer / sellerItemCount);
                         const totalLogisticsLiability = partnerSharePerItem; 
-
-                        // If previously settled as SALE, we must subtract the old profit too
                         net = -(customerRefundPortion + totalLogisticsLiability);
 
                         batchStats.sales -= customerRefundPortion; 
@@ -572,8 +569,7 @@ exports.generateWeeklySettlement = async (req, res) => {
                         returnDate: isReturned ? order.updatedAt : null,
                     };
 
-                    if (existingRowIndex !== -1 && existingRowIndex !== undefined) {
-                        // Update existing row (Sale turned to Return)
+                    if (settlement && existingRowIndex !== -1) {
                         settlement.payoutBreakdown[existingRowIndex] = rowData;
                     } else {
                         newPayoutRows.push(rowData);
@@ -611,7 +607,6 @@ exports.generateWeeklySettlement = async (req, res) => {
                 });
             }
             await settlement.save();
-            // Only mark newly Delivered orders as settled
             const deliveredOrderIds = orders.filter(o => o.status === "Delivered").map(o => o._id);
             if(deliveredOrderIds.length > 0) {
                 await Order.updateMany({ _id: { $in: deliveredOrderIds } }, { $set: { isSettled: true } });
@@ -626,7 +621,6 @@ exports.generateWeeklySettlement = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
-
 
 // 3. Mark as Paid (🌟 Strictly Button Click - No Body Needed)
 exports.markSettlementAsPaid = async (req, res) => {
