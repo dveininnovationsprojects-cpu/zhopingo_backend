@@ -454,7 +454,7 @@ exports.updateFinanceSettings = async (req, res) => {
 // };
 // 🌟 1. GENERATE WEEKLY SETTLEMENT (Detailed Breakdown Sync)
 // 🌟 1. GENERATE WEEKLY SETTLEMENT (Detailed Breakdown Sync)
-// 🌟 1. GENERATE WEEKLY SETTLEMENT (Detailed Breakdown Sync)
+// 🌟 1. GENERATE WEEKLY SETTLEMENT (Final Corrected Math)
 exports.generateWeeklySettlement = async (req, res) => {
     try {
         const { sellerId, startDate, endDate } = req.body;
@@ -465,7 +465,9 @@ exports.generateWeeklySettlement = async (req, res) => {
 
         const settings = (await FinanceSettings.findOne()) || { commissionPercent: 10, gstOnCommissionPercent: 18, tdsPercent: 2 };
 
-        // 🚀 THE CRITICAL FETCH: Delivered aagi settle aana orders-um Return aana thirumba fetch aaganum sync aaga.
+        // 🚀 THE CRITICAL FETCH: 
+        // 1. Delivered orders fetch panna strictly 'isSettled: false' irukanum.
+        // 2. Returned orders eppovum fetch pannanum even if they were settled as 'Delivered' before to adjust the math.
         const orders = await Order.find({
             "sellerSplitData.sellerId": sellerId, 
             $or: [
@@ -506,29 +508,16 @@ exports.generateWeeklySettlement = async (req, res) => {
                         );
                     }
 
-                    // skip if status is same
+                    // skip if status is already updated and same
                     if (settlement && existingRowIndex !== -1 && settlement.payoutBreakdown[existingRowIndex].type === order.status.toUpperCase()) {
                         return;
-                    }
-
-                    // 🔄 THE REVERSE SYNC: Old Delivered value-ah total-la irundhu remove pannuvom
-                    if (settlement && existingRowIndex !== -1 && settlement.payoutBreakdown[existingRowIndex].type === "DELIVERED" && isReturned) {
-                        const oldRow = settlement.payoutBreakdown[existingRowIndex];
-                        settlement.totalSalesRevenue -= oldRow.productPriceOnly;
-                        settlement.totalPlatformCommission -= oldRow.platformCommission;
-                        settlement.totalGstOnCommission -= oldRow.gstOnCommission;
-                        settlement.totalTdsDeduction -= oldRow.tdsDeduction;
-                        settlement.totalSellerDeliveryDeduction -= oldRow.sellerShippingDeduction;
-                        settlement.totalLogisticsPartnerBill -= oldRow.logisticsPartnerCost; // 👈 Fixed
-                        settlement.totalAdminDeliveryProfit -= oldRow.adminShippingProfit;
-                        settlement.finalSettlementAmount -= oldRow.netPayableToSeller;
-                        settlement.totalOrderCount -= 1;
                     }
 
                     const productPrice = p.price * p.quantity;
                     let cAmt = 0, gAmt = 0, tAmt = 0, sDed = 0, adminShipProf = 0, net = 0;
                     
-                    // 🌟 80 + 39 + 39 Logic (Real Partner Fee already has total from Webhook/Controller)
+                    // 🌟 80 + 39 + 39 Logic
+                    // partnerSharePerItem represents (Forward 39 + Return 39 = 78) in Return case
                     const partnerSharePerItem = realPartnerFee / sellerItemCount;
 
                     if (order.status === "Delivered") {
@@ -550,19 +539,20 @@ exports.generateWeeklySettlement = async (req, res) => {
                         batchStats.gst += gAmt;
                         batchStats.tds += tAmt;
                         batchStats.delivDed += sDed;
-                        batchStats.partnerBill += partnerSharePerItem; // 👈 Fixed
+                        batchStats.partnerBill += partnerSharePerItem;
                         batchStats.adminProf += adminShipProf;
                         batchStats.final += net;
                     } else {
-                        // 🛑 THE MASTER -258 MATH
+                        // 🛑 THE MASTER -258 MATH (STRICT RETURN DEDUCTION)
                         const customerRefundPortion = productPrice + (totalShippingChargedToCustomer / sellerItemCount);
                         const totalLogisticsLiability = partnerSharePerItem; 
-                        
+
                         net = -(customerRefundPortion + totalLogisticsLiability);
 
+                        // Statistics adjustments for RETURN
                         batchStats.sales -= customerRefundPortion; 
                         batchStats.delivDed += totalLogisticsLiability;
-                        batchStats.partnerBill += totalLogisticsLiability; // 👈 THE CRITICAL FIX: Add to bill
+                        batchStats.partnerBill += totalLogisticsLiability; 
                         batchStats.final += net;
                     }
 
@@ -578,7 +568,7 @@ exports.generateWeeklySettlement = async (req, res) => {
                         gstOnCommission: Number(gAmt.toFixed(2)),
                         tdsDeduction: Number(tAmt.toFixed(2)),
                         shippingType: isPaidDelivery ? "PAID" : "FREE",
-                        sellerShippingDeduction: Number((isReturned ? totalLogisticsLiability : sDed).toFixed(2)),
+                        sellerShippingDeduction: Number((isReturned ? partnerSharePerItem : sDed).toFixed(2)),
                         logisticsPartnerCost: Number(partnerSharePerItem.toFixed(2)),
                         adminShippingProfit: Number(adminShipProf.toFixed(2)), 
                         netPayableToSeller: Number(net.toFixed(2)),
@@ -588,6 +578,7 @@ exports.generateWeeklySettlement = async (req, res) => {
                     };
 
                     if (settlement && existingRowIndex !== -1) {
+                        // 🔄 Replace old Delivered row with new Return row
                         settlement.payoutBreakdown[existingRowIndex] = rowData;
                     } else {
                         newPayoutRows.push(rowData);
@@ -596,7 +587,7 @@ exports.generateWeeklySettlement = async (req, res) => {
             }
         });
 
-        // 🌟 ATOMIC DATABASE SYNC (Keeping your exact structure)
+        // 🌟 DATABASE SYNC Logic
         if (newPayoutRows.length > 0 || batchStats.count > 0) {
             if (settlement) {
                 if(newPayoutRows.length > 0) settlement.payoutBreakdown.push(...newPayoutRows);
@@ -606,7 +597,7 @@ exports.generateWeeklySettlement = async (req, res) => {
                 settlement.totalGstOnCommission = Number((settlement.totalGstOnCommission + batchStats.gst).toFixed(2));
                 settlement.totalTdsDeduction = Number((settlement.totalTdsDeduction + batchStats.tds).toFixed(2));
                 settlement.totalSellerDeliveryDeduction = Number((settlement.totalSellerDeliveryDeduction + batchStats.delivDed).toFixed(2));
-                settlement.totalLogisticsPartnerBill = Number((settlement.totalLogisticsPartnerBill + batchStats.partnerBill).toFixed(2)); // 👈 Now reflects Return bill
+                settlement.totalLogisticsPartnerBill = Number((settlement.totalLogisticsPartnerBill + batchStats.partnerBill).toFixed(2));
                 settlement.totalAdminDeliveryProfit = Number((settlement.totalAdminDeliveryProfit + batchStats.adminProf).toFixed(2));
                 settlement.finalSettlementAmount = Number((settlement.finalSettlementAmount + batchStats.final).toFixed(2));
             } else {
@@ -632,7 +623,7 @@ exports.generateWeeklySettlement = async (req, res) => {
         }
 
         const finalData = await Settlement.findById(settlement?._id || settlement).populate('sellerId', 'shopName email');
-        res.json({ success: true, message: "100% Mathematical Precision Sync! ✅", data: finalData });
+        res.json({ success: true, message: "Mathematical Precision Synced! ✅", data: finalData });
 
     } catch (err) {
         console.error("Settlement Error:", err.message);
