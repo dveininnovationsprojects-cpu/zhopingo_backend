@@ -819,43 +819,48 @@ exports.updateOrderStatus = async (req, res) => {
     splitToUpdate.adminRemarks = adminNote || splitToUpdate.adminRemarks;
     if (awbNumber) splitToUpdate.awbNumber = awbNumber;
 
-    // 🌟 2. DATE LOGIC (Strict Separation)
+    // 🌟 2. DATE LOGIC
     if (status === "Delivered") {
       splitToUpdate.deliveredDate = new Date();
     }
     
-    // 🔥 Webhook vandhu status "Returned" nu maaruna mattum dhaan Return Date vizhanum
     if (status === "Returned") {
       splitToUpdate.returnDate = new Date();
     }
 
-    // 🌟 3. ITEM STATUS SYNC
-    let totalRefundAmount = 0;
+    // 🌟 3. ITEM STATUS SYNC & DYNAMIC REFUND CALCULATION
+    let totalRefundToCustomer = 0;
     let itemsToRestore = [];
     
-    order.items.forEach((item) => {
-      if (item.sellerId.toString() === sellerId?.toString()) {
-        item.itemStatus = status;
-        
-        // 💰 REFUND ONLY ON FINAL 'Returned' STATUS
-        if (status === "Returned" && !item.isReturned) {
-          totalRefundAmount += item.price * item.quantity;
+    // Status Strictly 'Returned' aana mattum dhaan Wallet credit pannanum
+    if (status === "Returned") {
+      order.items.forEach((item) => {
+        if (item.sellerId.toString() === sellerId?.toString() && !item.isReturned) {
+          // A. Item Price Refund (e.g., 100)
+          totalRefundToCustomer += item.price * item.quantity;
+          
+          item.itemStatus = "Returned";
           item.isReturned = true;
           item.returnProcessedDate = new Date();
           itemsToRestore.push({ productId: item.productId, qty: item.quantity });
         }
-      }
-    });
+      });
 
-    // 💰 4. WALLET & STOCK (Final Return mattum dhaan)
-    if (status === "Returned" && totalRefundAmount > 0) {
+      // B. Shipping Charge Refund (e.g., 80)
+      // Customer kitta namma vānguna forward shipping-aiyum thirumba kuduthuruvoam
+      const sellerShippingCharge = splitToUpdate.customerChargedShipping || 0;
+      totalRefundToCustomer += sellerShippingCharge;
+    }
+
+    // 💰 4. WALLET & STOCK ATOMIC SYNC
+    if (status === "Returned" && totalRefundToCustomer > 0) {
       const user = await User.findById(order.customerId);
       if (user) {
-        user.walletBalance += totalRefundAmount;
+        user.walletBalance += totalRefundToCustomer;
         user.walletTransactions.unshift({
-          amount: totalRefundAmount,
+          amount: totalRefundToCustomer,
           type: "CREDIT",
-          reason: `Refund: Order #${order._id.toString().slice(-6).toUpperCase()} Returned`,
+          reason: `Refund: Order #${order._id.toString().slice(-6).toUpperCase()} Returned (Incl. Shipping)`,
           date: new Date(),
         });
         await user.save();
@@ -865,11 +870,22 @@ exports.updateOrderStatus = async (req, res) => {
       }
     }
 
-    // 🚚 5. DELHIvery RVP (Only on Approval)
+    // 🚚 5. DYNAMIC DELHIvery RVP (Approval Point)
     if (status === "Return Approved") {
+      // Logic: createReversePickupInternal-la API response dynamic-ah varum
       const rvpResult = await createReversePickupInternal(order._id, sellerId);
+      
       if (rvpResult.success && rvpResult.awb) {
         splitToUpdate.returnAwbNumber = rvpResult.awb;
+        
+        // 🔥 THE DYNAMIC LOGISTICS MATH:
+        // 'rvpResult.cost' API-la irundhu vara real rate. 
+        // Adhai already irukkura forward cost kooda add pannitta namma settlement math bullet-proof-ah aydum.
+        const currentForwardCost = splitToUpdate.actualShippingCost || 0;
+        const dynamicReturnCost = rvpResult.actualCost || rvpResult.rate || 0; 
+        
+        splitToUpdate.actualShippingCost = currentForwardCost + dynamicReturnCost;
+
         order.items.forEach(item => {
           if(item.sellerId.toString() === sellerId.toString()) item.itemAwbNumber = rvpResult.awb;
         });
@@ -883,211 +899,12 @@ exports.updateOrderStatus = async (req, res) => {
     else order.status = "Partially Shipped";
 
     await order.save();
-    res.json({ success: true, message: `Status updated to ${status}`, data: order });
+    res.json({ success: true, message: `Status updated to ${status} with Dynamic Logistics`, data: order });
 
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 };
-// /* =====================================================
-//     🚚 UPDATE ORDER STATUS (Handover & Refund Logic)
-// ===================================================== */
-// exports.updateOrderStatus = async (req, res) => {
-//   try {
-//     const { status, sellerId, adminNote, awbNumber } = req.body;
-//     const order = await Order.findById(req.params.orderId);
-
-//     if (!order)
-//       return res
-//         .status(404)
-//         .json({ success: false, message: "Order not found" });
-
-//     let sellerPackageFound = false;
-//     let totalRefundAmount = 0;
-//     let itemsToRestore = [];
-
-//     // 🌟 STEP 1: Sync Seller Split Data & Security Guard
-//     for (let split of order.sellerSplitData) {
-//       if (split.sellerId.toString() === sellerId?.toString()) {
-//         // 🛡️ Guard: Already processed-ah irundha double-dip panna koodadhu
-//         if (split.packageStatus === "Returned" && status === "Returned") {
-//           return res
-//             .status(400)
-//             .json({
-//               success: false,
-//               message: "Package already returned and refunded.",
-//             });
-//         }
-
-//         split.packageStatus = status;
-//         split.adminRemarks = adminNote || split.adminRemarks;
-
-//         // Real-time AWB update if provided during 'Shipped' status
-//         if (awbNumber) split.awbNumber = awbNumber;
-
-//         if (status === "Delivered") split.deliveredDate = new Date();
-//         if (status === "Returned") split.returnDate = new Date();
-
-//         sellerPackageFound = true;
-//       }
-//     }
-
-//     if (!sellerPackageFound)
-//       return res
-//         .status(400)
-//         .json({ success: false, message: "Seller split not found." });
-
-//     // 🌟 STEP 2: Item Status Handshake & Inventory Prep
-//     for (let item of order.items) {
-//       if (item.sellerId.toString() === sellerId?.toString()) {
-//         // Logic: Item status promote panna porom
-//         if (status === "Returned" && item.itemStatus !== "Returned") {
-//           totalRefundAmount += item.price * item.quantity;
-//           item.isReturned = true;
-//           item.returnProcessedDate = new Date();
-
-//           // 📉 Restore stock prep
-//           itemsToRestore.push({
-//             productId: item.productId,
-//             qty: item.quantity,
-//           });
-//         }
-
-//         item.itemStatus = status;
-//         if (awbNumber) item.itemAwbNumber = awbNumber;
-//       }
-//     }
-
-//     // 💰 STEP 3: ATOMIC WALLET REFUND & STOCK RESTORATION
-//     if (status === "Returned" && totalRefundAmount > 0) {
-//       const user = await User.findById(order.customerId);
-//       if (user) {
-//         user.walletBalance += totalRefundAmount;
-//         user.walletTransactions.unshift({
-//           amount: totalRefundAmount,
-//           type: "CREDIT",
-//           reason: `Refund: Order #${order._id.toString().slice(-6).toUpperCase()} Approved`,
-//           date: new Date(),
-//         });
-//         await user.save();
-
-//         // 🔄 Industrial Stock Sync: Products-ah thirumba sale-ku kootitu varom
-//         for (let restore of itemsToRestore) {
-//           await Product.findByIdAndUpdate(restore.productId, {
-//             $inc: { stock: restore.qty },
-//             $set: { status: "active" },
-//           });
-//         }
-
-//         // Global Order Sync: Ellaa seller-um return pannunaa order is 'Refunded'
-//         const allSettled = order.items.every(
-//           (i) => i.itemStatus === "Returned" || i.itemStatus === "Cancelled",
-//         );
-//         if (allSettled) order.paymentStatus = "Refunded";
-//       }
-//     }
-
-//     // 🛡️ STEP 4: MASTER ORDER BADGE SYNC
-//     const allPackageStatuses = order.sellerSplitData.map(
-//       (s) => s.packageStatus,
-//     );
-
-//     if (allPackageStatuses.every((s) => s === "Delivered")) {
-//       order.status = "Delivered";
-//     } else if (allPackageStatuses.every((s) => s === "Returned")) {
-//       order.status = "Returned";
-//     } else if (
-//       allPackageStatuses.some((s) => s === "Shipped" || s === "Delivered")
-//     ) {
-//       // Multi-seller case: partial completion
-//       order.status = "Partially Shipped";
-//     }
-
-//     await order.save();
-//     res.json({
-//       success: true,
-//       message: `Status updated to ${status} katchithama!`,
-//       data: order,
-//     });
-//   } catch (err) {
-//     console.error("Update Status Error:", err);
-//     res.status(500).json({ success: false, error: err.message });
-//   }
-// };
-
-// exports.cancelOrder = async (req, res) => {
-//   try {
-//     const { sellerId } = req.body;
-//     const order = await Order.findById(req.params.orderId);
-//     if (!order)
-//       return res
-//         .status(404)
-//         .json({ success: false, message: "Order not found" });
-
-//     // 1️⃣ Find Seller Split Index
-//     const sellerSplitIndex = order.sellerSplitData.findIndex(
-//       (split) => split.sellerId.toString() === sellerId?.toString(),
-//     );
-
-//     if (sellerSplitIndex === -1) {
-//       return res
-//         .status(400)
-//         .json({ success: false, message: "Seller already removed." });
-//     }
-
-//     let refundAmount = 0;
-//     let sellerItemsFound = false;
-
-//     // 2️⃣ Update Status Strictly for this seller
-//     order.items.forEach((item) => {
-//       if (item.sellerId.toString() === sellerId?.toString()) {
-//         item.itemStatus = "Cancelled"; // 👈 Seller products strictly Cancelled
-//         refundAmount += item.price * item.quantity;
-//         sellerItemsFound = true;
-//       }
-//     });
-
-//     // 💰 3️⃣ WALLET REFUND
-//     if (order.paymentStatus === "Paid") {
-//       const user = await User.findById(order.customerId);
-//       if (user) {
-//         user.walletBalance += refundAmount;
-//         user.walletTransactions.unshift({
-//           amount: refundAmount,
-//           type: "CREDIT",
-//           reason: `Split Refund: Order #${order._id.toString().slice(-6).toUpperCase()}`,
-//           date: new Date(),
-//         });
-//         await user.save();
-//       }
-//     }
-
-//     // 🛡️ 4️⃣ REMOVE FROM PAYOUT LIST
-//     order.sellerSplitData.splice(sellerSplitIndex, 1);
-
-//     // 🛡️ 5️⃣ MASTER STATUS SYNC (No Partially Cancelled Badge)
-//     const allStatuses = order.items.map((i) => i.itemStatus);
-//     if (allStatuses.every((s) => s === "Cancelled")) {
-//       order.status = "Cancelled";
-//       order.paymentStatus = "Refunded";
-//     } else {
-//       // Logic: Do NOT change main order status to 'Partially Cancelled'
-//       // Keep it as Placed/Shipped based on other sellers
-//       const remainingActive = order.items.some(
-//         (i) => i.itemStatus === "Shipped" || i.itemStatus === "Delivered",
-//       );
-//       order.status = remainingActive ? "Shipped" : "Placed";
-//     }
-
-//     await order.save();
-//     res.json({
-//       success: true,
-//       message: "Seller products cancelled successfully.",
-//     });
-//   } catch (err) {
-//     res.status(500).json({ success: false, error: err.message });
-//   }
-// };
 
 exports.cancelOrder = async (req, res) => {
   try {

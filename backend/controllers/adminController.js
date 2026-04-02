@@ -452,7 +452,7 @@ exports.updateFinanceSettings = async (req, res) => {
 //         res.status(500).json({ success: false, error: err.message });
 //     }
 // };
-
+// 🌟 1. GENERATE WEEKLY SETTLEMENT (Detailed Breakdown Sync)
 // 🌟 1. GENERATE WEEKLY SETTLEMENT (Detailed Breakdown Sync)
 exports.generateWeeklySettlement = async (req, res) => {
     try {
@@ -464,9 +464,7 @@ exports.generateWeeklySettlement = async (req, res) => {
 
         const settings = (await FinanceSettings.findOne()) || { commissionPercent: 10, gstOnCommissionPercent: 18, tdsPercent: 2 };
 
-        // 🚀 THE CRITICAL FETCH FIX: 
-        // 1. Delivered orders fetch panna strictly 'isSettled: false' irukanum.
-        // 2. Returned orders eppovum fetch pannanum even if they were settled as 'Delivered' before.
+        // 🚀 THE CRITICAL FETCH: 
         const orders = await Order.find({
             "sellerSplitData.sellerId": sellerId, 
             $or: [
@@ -500,7 +498,6 @@ exports.generateWeeklySettlement = async (req, res) => {
                 sellerItems.forEach(p => {
                     const prodName = p.name || p.productId?.name || "Product";
                     
-                    // 🌟 CRASH GUARD & SYNC CHECK
                     let existingRowIndex = -1;
                     if (settlement && settlement.payoutBreakdown) {
                         existingRowIndex = settlement.payoutBreakdown.findIndex(row => 
@@ -508,14 +505,33 @@ exports.generateWeeklySettlement = async (req, res) => {
                         );
                     }
 
-                    // Skip if SALE is already settled as the CORRECT status and nothing changed
+                    // skip if status is same
                     if (settlement && existingRowIndex !== -1 && settlement.payoutBreakdown[existingRowIndex].type === order.status.toUpperCase()) {
                         return;
                     }
 
+                    // 🔄 THE REVERSE SYNC: If old row was DELIVERED and now it is RETURNED, 
+                    // we must subtract the old values from settlement totals first.
+                    if (settlement && existingRowIndex !== -1 && settlement.payoutBreakdown[existingRowIndex].type === "DELIVERED" && isReturned) {
+                        const oldRow = settlement.payoutBreakdown[existingRowIndex];
+                        settlement.totalSalesRevenue -= oldRow.productPriceOnly;
+                        settlement.totalPlatformCommission -= oldRow.platformCommission;
+                        settlement.totalGstOnCommission -= oldRow.gstOnCommission;
+                        settlement.totalTdsDeduction -= oldRow.tdsDeduction;
+                        settlement.totalSellerDeliveryDeduction -= oldRow.sellerShippingDeduction;
+                        settlement.totalLogisticsPartnerBill -= oldRow.logisticsPartnerCost;
+                        settlement.totalAdminDeliveryProfit -= oldRow.adminShippingProfit;
+                        settlement.finalSettlementAmount -= oldRow.netPayableToSeller;
+                        settlement.totalOrderCount -= 1;
+                    }
+
                     const productPrice = p.price * p.quantity;
                     let cAmt = 0, gAmt = 0, tAmt = 0, sDed = 0, adminShipProf = 0, net = 0;
-                    const partnerSharePerItem = realPartnerFee / sellerItemCount;
+                    
+                    // 🌟 80 + 39 + 39 DYNAMIC CALCULATION
+                    // realPartnerFee usually 39. If Returned, it must act as 78.
+                    const dynamicLogisticsFee = isReturned ? (realPartnerFee * 2) : realPartnerFee;
+                    const partnerSharePerItem = dynamicLogisticsFee / sellerItemCount;
 
                     if (order.status === "Delivered") {
                         cAmt = productPrice * (settings.commissionPercent / 100);
@@ -540,9 +556,10 @@ exports.generateWeeklySettlement = async (req, res) => {
                         batchStats.adminProf += adminShipProf;
                         batchStats.final += net;
                     } else {
-                        // 🛑 🛑 RETURN LOGIC (80 + 39 + 39 STRICT SYNC)
+                        // 🛑 THE MASTER -258 MATH
                         const customerRefundPortion = productPrice + (totalShippingChargedToCustomer / sellerItemCount);
                         const totalLogisticsLiability = partnerSharePerItem; 
+                        
                         net = -(customerRefundPortion + totalLogisticsLiability);
 
                         batchStats.sales -= customerRefundPortion; 
@@ -562,7 +579,7 @@ exports.generateWeeklySettlement = async (req, res) => {
                         gstOnCommission: Number(gAmt.toFixed(2)),
                         tdsDeduction: Number(tAmt.toFixed(2)),
                         shippingType: isPaidDelivery ? "PAID" : "FREE",
-                        sellerShippingDeduction: Number((order.status === "Returned" ? partnerSharePerItem : sDed).toFixed(2)),
+                        sellerShippingDeduction: Number((isReturned ? partnerSharePerItem : sDed).toFixed(2)),
                         logisticsPartnerCost: Number(partnerSharePerItem.toFixed(2)),
                         adminShippingProfit: Number(adminShipProf.toFixed(2)), 
                         netPayableToSeller: Number(net.toFixed(2)),
@@ -572,7 +589,6 @@ exports.generateWeeklySettlement = async (req, res) => {
                     };
 
                     if (settlement && existingRowIndex !== -1) {
-                        // 🔄 RE-SYNC: Update Delivered row to Returned row if status changed
                         settlement.payoutBreakdown[existingRowIndex] = rowData;
                     } else {
                         newPayoutRows.push(rowData);
@@ -610,8 +626,6 @@ exports.generateWeeklySettlement = async (req, res) => {
                 });
             }
             await settlement.save();
-            
-            // 🛡️ Only mark Delivered orders as settled (Returns stay flexible for sync)
             const deliveredOrderIds = orders.filter(o => o.status === "Delivered").map(o => o._id);
             if(deliveredOrderIds.length > 0) {
                 await Order.updateMany({ _id: { $in: deliveredOrderIds } }, { $set: { isSettled: true } });
@@ -626,7 +640,6 @@ exports.generateWeeklySettlement = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
-
 // 3. Mark as Paid (🌟 Strictly Button Click - No Body Needed)
 exports.markSettlementAsPaid = async (req, res) => {
   try {
