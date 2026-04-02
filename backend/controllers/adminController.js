@@ -454,6 +454,7 @@ exports.updateFinanceSettings = async (req, res) => {
 // };
 // 🌟 1. GENERATE WEEKLY SETTLEMENT (Detailed Breakdown Sync)
 // 🌟 1. GENERATE WEEKLY SETTLEMENT (Detailed Breakdown Sync)
+// 🌟 1. GENERATE WEEKLY SETTLEMENT (Detailed Breakdown Sync)
 exports.generateWeeklySettlement = async (req, res) => {
     try {
         const { sellerId, startDate, endDate } = req.body;
@@ -464,7 +465,7 @@ exports.generateWeeklySettlement = async (req, res) => {
 
         const settings = (await FinanceSettings.findOne()) || { commissionPercent: 10, gstOnCommissionPercent: 18, tdsPercent: 2 };
 
-        // 🚀 THE CRITICAL FETCH: 
+        // 🚀 THE CRITICAL FETCH: Delivered aagi settle aana orders-um Return aana thirumba fetch aaganum sync aaga.
         const orders = await Order.find({
             "sellerSplitData.sellerId": sellerId, 
             $or: [
@@ -510,8 +511,7 @@ exports.generateWeeklySettlement = async (req, res) => {
                         return;
                     }
 
-                    // 🔄 THE REVERSE SYNC: If old row was DELIVERED and now it is RETURNED, 
-                    // we must subtract the old values from settlement totals first.
+                    // 🔄 THE REVERSE SYNC: Old Delivered value-ah total-la irundhu remove pannuvom
                     if (settlement && existingRowIndex !== -1 && settlement.payoutBreakdown[existingRowIndex].type === "DELIVERED" && isReturned) {
                         const oldRow = settlement.payoutBreakdown[existingRowIndex];
                         settlement.totalSalesRevenue -= oldRow.productPriceOnly;
@@ -519,7 +519,7 @@ exports.generateWeeklySettlement = async (req, res) => {
                         settlement.totalGstOnCommission -= oldRow.gstOnCommission;
                         settlement.totalTdsDeduction -= oldRow.tdsDeduction;
                         settlement.totalSellerDeliveryDeduction -= oldRow.sellerShippingDeduction;
-                        settlement.totalLogisticsPartnerBill -= oldRow.logisticsPartnerCost;
+                        settlement.totalLogisticsPartnerBill -= oldRow.logisticsPartnerCost; // 👈 Fixed
                         settlement.totalAdminDeliveryProfit -= oldRow.adminShippingProfit;
                         settlement.finalSettlementAmount -= oldRow.netPayableToSeller;
                         settlement.totalOrderCount -= 1;
@@ -528,10 +528,8 @@ exports.generateWeeklySettlement = async (req, res) => {
                     const productPrice = p.price * p.quantity;
                     let cAmt = 0, gAmt = 0, tAmt = 0, sDed = 0, adminShipProf = 0, net = 0;
                     
-                    // 🌟 80 + 39 + 39 DYNAMIC CALCULATION
-                    // realPartnerFee usually 39. If Returned, it must act as 78.
-                    const dynamicLogisticsFee = isReturned ? (realPartnerFee * 2) : realPartnerFee;
-                    const partnerSharePerItem = dynamicLogisticsFee / sellerItemCount;
+                    // 🌟 80 + 39 + 39 Logic (Real Partner Fee already has total from Webhook/Controller)
+                    const partnerSharePerItem = realPartnerFee / sellerItemCount;
 
                     if (order.status === "Delivered") {
                         cAmt = productPrice * (settings.commissionPercent / 100);
@@ -552,7 +550,7 @@ exports.generateWeeklySettlement = async (req, res) => {
                         batchStats.gst += gAmt;
                         batchStats.tds += tAmt;
                         batchStats.delivDed += sDed;
-                        batchStats.partnerBill += partnerSharePerItem;
+                        batchStats.partnerBill += partnerSharePerItem; // 👈 Fixed
                         batchStats.adminProf += adminShipProf;
                         batchStats.final += net;
                     } else {
@@ -564,6 +562,7 @@ exports.generateWeeklySettlement = async (req, res) => {
 
                         batchStats.sales -= customerRefundPortion; 
                         batchStats.delivDed += totalLogisticsLiability;
+                        batchStats.partnerBill += totalLogisticsLiability; // 👈 THE CRITICAL FIX: Add to bill
                         batchStats.final += net;
                     }
 
@@ -579,7 +578,7 @@ exports.generateWeeklySettlement = async (req, res) => {
                         gstOnCommission: Number(gAmt.toFixed(2)),
                         tdsDeduction: Number(tAmt.toFixed(2)),
                         shippingType: isPaidDelivery ? "PAID" : "FREE",
-                        sellerShippingDeduction: Number((isReturned ? partnerSharePerItem : sDed).toFixed(2)),
+                        sellerShippingDeduction: Number((isReturned ? totalLogisticsLiability : sDed).toFixed(2)),
                         logisticsPartnerCost: Number(partnerSharePerItem.toFixed(2)),
                         adminShippingProfit: Number(adminShipProf.toFixed(2)), 
                         netPayableToSeller: Number(net.toFixed(2)),
@@ -597,7 +596,7 @@ exports.generateWeeklySettlement = async (req, res) => {
             }
         });
 
-        // 🌟 ATOMIC DATABASE SYNC
+        // 🌟 ATOMIC DATABASE SYNC (Keeping your exact structure)
         if (newPayoutRows.length > 0 || batchStats.count > 0) {
             if (settlement) {
                 if(newPayoutRows.length > 0) settlement.payoutBreakdown.push(...newPayoutRows);
@@ -607,7 +606,7 @@ exports.generateWeeklySettlement = async (req, res) => {
                 settlement.totalGstOnCommission = Number((settlement.totalGstOnCommission + batchStats.gst).toFixed(2));
                 settlement.totalTdsDeduction = Number((settlement.totalTdsDeduction + batchStats.tds).toFixed(2));
                 settlement.totalSellerDeliveryDeduction = Number((settlement.totalSellerDeliveryDeduction + batchStats.delivDed).toFixed(2));
-                settlement.totalLogisticsPartnerBill = Number((settlement.totalLogisticsPartnerBill + batchStats.partnerBill).toFixed(2));
+                settlement.totalLogisticsPartnerBill = Number((settlement.totalLogisticsPartnerBill + batchStats.partnerBill).toFixed(2)); // 👈 Now reflects Return bill
                 settlement.totalAdminDeliveryProfit = Number((settlement.totalAdminDeliveryProfit + batchStats.adminProf).toFixed(2));
                 settlement.finalSettlementAmount = Number((settlement.finalSettlementAmount + batchStats.final).toFixed(2));
             } else {
