@@ -340,10 +340,14 @@ exports.createSession = async (req, res) => {
         const order = await Order.findById(orderId);
         if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
+        // 🌟 THE FIX: Fallback to actual domain if ENV is missing
+        const BASE_URL = process.env.BASE_URL || "https://api.zhopingo.in";
+
         const request = StandardCheckoutPayRequest.builder()
             .merchantOrderId(order._id.toString())
             .amount(Math.round(order.totalAmount * 100))
-            .redirectUrl(`${process.env.BASE_URL}/api/v1/payments/phonepe-return/${orderId}`)
+            // 👈 Ippo 'undefined' varaadhu, katchithama domain name varum
+            .redirectUrl(`${BASE_URL}/api/v1/payments/phonepe-return/${orderId}`) 
             .build();
 
         const response = await phonePeClient.pay(request);
@@ -373,7 +377,6 @@ exports.createSession = async (req, res) => {
         res.status(500).json({ success: false, error: error.message });
     }
 };
-
 exports.verifyPayment = async (req, res) => {
     try {
         const { orderId } = req.params;
