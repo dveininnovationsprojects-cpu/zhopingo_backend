@@ -453,9 +453,7 @@ exports.updateFinanceSettings = async (req, res) => {
 //     }
 // };
 
-
 // 🌟 1. GENERATE WEEKLY SETTLEMENT (Detailed Breakdown Sync)
-// 🌟 1. GENERATE WEEKLY SETTLEMENT (Final Math-Fix Edition)
 // 🌟 1. GENERATE WEEKLY SETTLEMENT (Final Math-Fix Edition)
 exports.generateWeeklySettlement = async (req, res) => {
     try {
@@ -467,10 +465,15 @@ exports.generateWeeklySettlement = async (req, res) => {
 
         const settings = (await FinanceSettings.findOne()) || { commissionPercent: 10, gstOnCommissionPercent: 18, tdsPercent: 2 };
 
+        // 🚀 THE CRITICAL FETCH FIX: 
+        // 1. Delivered orders fetch panna strictly 'isSettled: false' irukanum.
+        // 2. Returned orders eppovum fetch pannanum even if they were settled as 'Delivered' before.
         const orders = await Order.find({
             "sellerSplitData.sellerId": sellerId, 
-            isSettled: { $ne: true },
-            status: { $in: ["Delivered", "Returned"] },
+            $or: [
+                { status: "Delivered", isSettled: { $ne: true } }, // New deliveries only
+                { status: "Returned" } // Fetch all returns to check for sync
+            ],
             updatedAt: { $gte: filterStart, $lte: filterEnd }
         }).populate('items.productId');
 
@@ -488,14 +491,9 @@ exports.generateWeeklySettlement = async (req, res) => {
             const split = order.sellerSplitData.find(s => s.sellerId.toString() === sellerId);
             if (split) {
                 const isReturned = order.status === "Returned";
-                
-                // 🌟 YOUR GOD LEVEL DETECTION LOGIC (STRICTLY UNTOUCHED)
                 const totalShippingChargedToCustomer = order.billDetails?.deliveryCharge || 0;
                 const isPaidDelivery = totalShippingChargedToCustomer > 0;
-
-                // 🚀 PURE DYNAMIC DATA MAPPING
                 const realPartnerFee = Number(split.actualShippingCost || 0); 
-                const dynamicFreeDeduction = Number(split.deliveryDeduction || 0);
 
                 const sellerItems = order.items.filter(item => item.sellerId.toString() === sellerId);
                 const sellerItemCount = sellerItems.length;
@@ -503,92 +501,91 @@ exports.generateWeeklySettlement = async (req, res) => {
                 sellerItems.forEach(p => {
                     const prodName = p.name || p.productId?.name || "Product";
                     
-                    const alreadyPresent = settlement?.payoutBreakdown?.some(row => 
+                    // 🌟 SYNC CHECK: Pathuko machi, ippo "Delivered" aagi settle aana product "Returned" aana
+                    // old "SALE" row-ah thookitu "RETURN" row-ah update pannuvom.
+                    const existingRowIndex = settlement?.payoutBreakdown?.findIndex(row => 
                         row.orderId.toString() === order._id.toString() && row.productName === prodName
                     );
 
-                    if (!alreadyPresent) {
-                        const productPrice = p.price * p.quantity;
-                        let cAmt = 0, gAmt = 0, tAmt = 0, sDed = 0, adminShipProf = 0, net = 0;
-                        const partnerSharePerItem = realPartnerFee / sellerItemCount;
+                    // Skip if SALE is already settled and nothing changed
+                    if (existingRowIndex !== -1 && settlement.payoutBreakdown[existingRowIndex].type === order.status.toUpperCase()) {
+                        return;
+                    }
 
-                        if (order.status === "Delivered") {
-                            cAmt = productPrice * (settings.commissionPercent / 100);
-                            gAmt = cAmt * (settings.gstOnCommissionPercent / 100);
-                            tAmt = productPrice * (settings.tdsPercent / 100);
+                    const productPrice = p.price * p.quantity;
+                    let cAmt = 0, gAmt = 0, tAmt = 0, sDed = 0, adminShipProf = 0, net = 0;
+                    const partnerSharePerItem = realPartnerFee / sellerItemCount;
 
-                            if (isPaidDelivery) {
-                                // ✅ PAID: Customer pays, Delhivery takes. Profit = (Charged - Partner)
-                                sDed = 0; 
-                                adminShipProf = (totalShippingChargedToCustomer / sellerItemCount) - partnerSharePerItem;
-                            } else {
-                                // 🎁 FREE: Seller pays, Delhivery takes. Profit = 0 (Exactly what you asked)
-                                // We take from seller ONLY what is needed to pay Delhivery.
-                                sDed = partnerSharePerItem; 
-                                adminShipProf = 0; 
-                            }
+                    if (order.status === "Delivered") {
+                        cAmt = productPrice * (settings.commissionPercent / 100);
+                        gAmt = cAmt * (settings.gstOnCommissionPercent / 100);
+                        tAmt = productPrice * (settings.tdsPercent / 100);
 
-                            net = productPrice - (cAmt + gAmt + tAmt + sDed);
-
-                            // 📊 Update Batch Statistics
-                            batchStats.sales += productPrice;
-                            batchStats.comm += cAmt;
-                            batchStats.gst += gAmt;
-                            batchStats.tds += tAmt;
-                            batchStats.delivDed += sDed;
-                            batchStats.partnerBill += partnerSharePerItem;
-                            batchStats.adminProf += adminShipProf;
-                            batchStats.final += net;
+                        if (isPaidDelivery) {
+                            sDed = 0; 
+                            adminShipProf = (totalShippingChargedToCustomer / sellerItemCount) - partnerSharePerItem;
                         } else {
-                            // 🛑 🛑 RETURN LOGIC (80 + 39 + 39 STRICT SYNC)
-                            // 1. Customer-ku return pōra 80 (Forward Shipping) + Product Price (100) = 180
-                            const customerRefundPortion = productPrice + (totalShippingChargedToCustomer / sellerItemCount);
-                            
-                            // 2. Delhivery-ku thara vendiya Forward API cost + Return API cost (e.g., 39 + 39 = 78)
-                            // Intha amount 'partnerSharePerItem'-la already sync aagi irukkum
-                            const totalLogisticsLiability = partnerSharePerItem; 
-
-                            // 🌟 FINAL DEDUCTION: -(180 + 78) = -258
-                            net = -(customerRefundPortion + totalLogisticsLiability);
-
-                            // 📊 Statistics Update for Return
-                            batchStats.sales -= customerRefundPortion; 
-                            batchStats.delivDed += totalLogisticsLiability;
-                            batchStats.final += net;
+                            sDed = partnerSharePerItem; 
+                            adminShipProf = 0; 
                         }
+                        net = productPrice - (cAmt + gAmt + tAmt + sDed);
 
-                        batchStats.count++;
+                        batchStats.sales += productPrice;
+                        batchStats.comm += cAmt;
+                        batchStats.gst += gAmt;
+                        batchStats.tds += tAmt;
+                        batchStats.delivDed += sDed;
+                        batchStats.partnerBill += partnerSharePerItem;
+                        batchStats.adminProf += adminShipProf;
+                        batchStats.final += net;
+                    } else {
+                        // 🛑 🛑 RETURN LOGIC (80 + 39 + 39 STRICT SYNC)
+                        const customerRefundPortion = productPrice + (totalShippingChargedToCustomer / sellerItemCount);
+                        const totalLogisticsLiability = partnerSharePerItem; 
 
-                        newPayoutRows.push({
-                            orderId: order._id,
-                            productName: prodName,
-                            type: order.status.toUpperCase(),
-                            customerPaidTotal: Number((productPrice + (totalShippingChargedToCustomer / sellerItemCount)).toFixed(2)),
-                            productPriceOnly: productPrice,
-                            platformCommission: Number(cAmt.toFixed(2)),
-                            gstOnCommission: Number(gAmt.toFixed(2)),
-                            tdsDeduction: Number(tAmt.toFixed(2)),
-                            
-                            shippingType: isPaidDelivery ? "PAID" : "FREE",
-                            customerPaidShipping: Number((totalShippingChargedToCustomer / sellerItemCount).toFixed(2)),
-                            sellerShippingDeduction: Number((order.status === "Returned" ? partnerSharePerItem : sDed).toFixed(2)),
-                            logisticsPartnerCost: Number(partnerSharePerItem.toFixed(2)),
-                            adminShippingProfit: Number(adminShipProf.toFixed(2)), 
-                            
-                            netPayableToSeller: Number(net.toFixed(2)),
-                            statusDate: order.updatedAt,
-                            deliveryDate: order.status === "Delivered" ? order.updatedAt : null,
-                            returnDate: isReturned ? order.updatedAt : null,
-                        });
+                        // If previously settled as SALE, we must subtract the old profit too
+                        net = -(customerRefundPortion + totalLogisticsLiability);
+
+                        batchStats.sales -= customerRefundPortion; 
+                        batchStats.delivDed += totalLogisticsLiability;
+                        batchStats.final += net;
+                    }
+
+                    batchStats.count++;
+
+                    const rowData = {
+                        orderId: order._id,
+                        productName: prodName,
+                        type: order.status.toUpperCase(),
+                        customerPaidTotal: Number((productPrice + (totalShippingChargedToCustomer / sellerItemCount)).toFixed(2)),
+                        productPriceOnly: productPrice,
+                        platformCommission: Number(cAmt.toFixed(2)),
+                        gstOnCommission: Number(gAmt.toFixed(2)),
+                        tdsDeduction: Number(tAmt.toFixed(2)),
+                        shippingType: isPaidDelivery ? "PAID" : "FREE",
+                        sellerShippingDeduction: Number((order.status === "Returned" ? partnerSharePerItem : sDed).toFixed(2)),
+                        logisticsPartnerCost: Number(partnerSharePerItem.toFixed(2)),
+                        adminShippingProfit: Number(adminShipProf.toFixed(2)), 
+                        netPayableToSeller: Number(net.toFixed(2)),
+                        statusDate: order.updatedAt,
+                        deliveryDate: order.status === "Delivered" ? order.updatedAt : null,
+                        returnDate: isReturned ? order.updatedAt : null,
+                    };
+
+                    if (existingRowIndex !== -1 && existingRowIndex !== undefined) {
+                        // Update existing row (Sale turned to Return)
+                        settlement.payoutBreakdown[existingRowIndex] = rowData;
+                    } else {
+                        newPayoutRows.push(rowData);
                     }
                 });
             }
         });
 
-        // 🌟 ATOMIC DATABASE SYNC (Keeping your exact structure)
-        if (newPayoutRows.length > 0) {
+        // 🌟 ATOMIC DATABASE SYNC
+        if (newPayoutRows.length > 0 || batchStats.count > 0) {
             if (settlement) {
-                settlement.payoutBreakdown.push(...newPayoutRows);
+                if(newPayoutRows.length > 0) settlement.payoutBreakdown.push(...newPayoutRows);
                 settlement.totalOrderCount += batchStats.count;
                 settlement.totalSalesRevenue = Number((settlement.totalSalesRevenue + batchStats.sales).toFixed(2));
                 settlement.totalPlatformCommission = Number((settlement.totalPlatformCommission + batchStats.comm).toFixed(2));
@@ -614,7 +611,11 @@ exports.generateWeeklySettlement = async (req, res) => {
                 });
             }
             await settlement.save();
-            await Order.updateMany({ _id: { $in: orders.map(o => o._id) } }, { $set: { isSettled: true } });
+            // Only mark newly Delivered orders as settled
+            const deliveredOrderIds = orders.filter(o => o.status === "Delivered").map(o => o._id);
+            if(deliveredOrderIds.length > 0) {
+                await Order.updateMany({ _id: { $in: deliveredOrderIds } }, { $set: { isSettled: true } });
+            }
         }
 
         const finalData = await Settlement.findById(settlement?._id || settlement).populate('sellerId', 'shopName email');
@@ -625,8 +626,6 @@ exports.generateWeeklySettlement = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
-
-
 
 
 // 3. Mark as Paid (🌟 Strictly Button Click - No Body Needed)
