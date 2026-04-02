@@ -454,7 +454,7 @@ exports.updateFinanceSettings = async (req, res) => {
 // };
 // 🌟 1. GENERATE WEEKLY SETTLEMENT (Detailed Breakdown Sync)
 // 🌟 1. GENERATE WEEKLY SETTLEMENT (Detailed Breakdown Sync)
-// 🌟 1. GENERATE WEEKLY SETTLEMENT (Final Corrected Math)
+// 🌟 1. GENERATE WEEKLY SETTLEMENT (Detailed Breakdown Sync)
 exports.generateWeeklySettlement = async (req, res) => {
     try {
         const { sellerId, startDate, endDate } = req.body;
@@ -466,8 +466,6 @@ exports.generateWeeklySettlement = async (req, res) => {
         const settings = (await FinanceSettings.findOne()) || { commissionPercent: 10, gstOnCommissionPercent: 18, tdsPercent: 2 };
 
         // 🚀 THE CRITICAL FETCH: 
-        // 1. Delivered orders fetch panna strictly 'isSettled: false' irukanum.
-        // 2. Returned orders eppovum fetch pannanum even if they were settled as 'Delivered' before to adjust the math.
         const orders = await Order.find({
             "sellerSplitData.sellerId": sellerId, 
             $or: [
@@ -508,17 +506,29 @@ exports.generateWeeklySettlement = async (req, res) => {
                         );
                     }
 
-                    // skip if status is already updated and same
                     if (settlement && existingRowIndex !== -1 && settlement.payoutBreakdown[existingRowIndex].type === order.status.toUpperCase()) {
                         return;
+                    }
+
+                    // 🔄 THE REVERSE SYNC: Old value-ah total-la irundhu katchithama subtract pannuvom
+                    if (settlement && existingRowIndex !== -1 && settlement.payoutBreakdown[existingRowIndex].type === "DELIVERED" && isReturned) {
+                        const oldRow = settlement.payoutBreakdown[existingRowIndex];
+                        settlement.totalSalesRevenue -= oldRow.productPriceOnly;
+                        settlement.totalPlatformCommission -= oldRow.platformCommission;
+                        settlement.totalGstOnCommission -= oldRow.gstOnCommission;
+                        settlement.totalTdsDeduction -= oldRow.tdsDeduction;
+                        settlement.totalSellerDeliveryDeduction -= oldRow.sellerShippingDeduction;
+                        settlement.totalLogisticsPartnerBill -= oldRow.logisticsPartnerCost;
+                        settlement.totalAdminDeliveryProfit -= oldRow.adminShippingProfit;
+                        settlement.finalSettlementAmount -= oldRow.netPayableToSeller;
+                        settlement.totalOrderCount -= 1;
                     }
 
                     const productPrice = p.price * p.quantity;
                     let cAmt = 0, gAmt = 0, tAmt = 0, sDed = 0, adminShipProf = 0, net = 0;
                     
-                    // 🌟 80 + 39 + 39 Logic
-                    // partnerSharePerItem represents (Forward 39 + Return 39 = 78) in Return case
-                    const partnerSharePerItem = realPartnerFee / sellerItemCount;
+                    const dynamicLogisticsFee = isReturned ? (realPartnerFee * 2) : realPartnerFee;
+                    const partnerSharePerItem = dynamicLogisticsFee / sellerItemCount;
 
                     if (order.status === "Delivered") {
                         cAmt = productPrice * (settings.commissionPercent / 100);
@@ -543,16 +553,16 @@ exports.generateWeeklySettlement = async (req, res) => {
                         batchStats.adminProf += adminShipProf;
                         batchStats.final += net;
                     } else {
-                        // 🛑 THE MASTER -258 MATH (STRICT RETURN DEDUCTION)
+                        // 🛑 THE MASTER -258 MATH
                         const customerRefundPortion = productPrice + (totalShippingChargedToCustomer / sellerItemCount);
                         const totalLogisticsLiability = partnerSharePerItem; 
-
+                        
                         net = -(customerRefundPortion + totalLogisticsLiability);
 
-                        // Statistics adjustments for RETURN
-                        batchStats.sales -= customerRefundPortion; 
+                        // 🌟 SYNC: SUMMARY LA MINUS AAGATHA MAARI ADD PANDROM
+                        batchStats.sales += customerRefundPortion; 
                         batchStats.delivDed += totalLogisticsLiability;
-                        batchStats.partnerBill += totalLogisticsLiability; 
+                        batchStats.partnerBill += totalLogisticsLiability;
                         batchStats.final += net;
                     }
 
@@ -578,7 +588,6 @@ exports.generateWeeklySettlement = async (req, res) => {
                     };
 
                     if (settlement && existingRowIndex !== -1) {
-                        // 🔄 Replace old Delivered row with new Return row
                         settlement.payoutBreakdown[existingRowIndex] = rowData;
                     } else {
                         newPayoutRows.push(rowData);
@@ -587,7 +596,7 @@ exports.generateWeeklySettlement = async (req, res) => {
             }
         });
 
-        // 🌟 DATABASE SYNC Logic
+        // 🌟 ATOMIC DATABASE SYNC (Addition Only Flow)
         if (newPayoutRows.length > 0 || batchStats.count > 0) {
             if (settlement) {
                 if(newPayoutRows.length > 0) settlement.payoutBreakdown.push(...newPayoutRows);
@@ -623,7 +632,7 @@ exports.generateWeeklySettlement = async (req, res) => {
         }
 
         const finalData = await Settlement.findById(settlement?._id || settlement).populate('sellerId', 'shopName email');
-        res.json({ success: true, message: "Mathematical Precision Synced! ✅", data: finalData });
+        res.json({ success: true, message: "1Cr Scalable Precision Sync Complete! ✅", data: finalData });
 
     } catch (err) {
         console.error("Settlement Error:", err.message);
