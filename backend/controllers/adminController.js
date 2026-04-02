@@ -465,10 +465,12 @@ exports.generateWeeklySettlement = async (req, res) => {
         const settings = (await FinanceSettings.findOne()) || { commissionPercent: 10, gstOnCommissionPercent: 18, tdsPercent: 2 };
 
         // 🚀 THE CRITICAL FETCH FIX: 
+        // 1. Delivered orders fetch panna strictly 'isSettled: false' irukanum.
+        // 2. Returned orders eppovum fetch pannanum even if they were settled as 'Delivered' before.
         const orders = await Order.find({
             "sellerSplitData.sellerId": sellerId, 
             $or: [
-                { status: "Delivered", isSettled: { $ne: true } },
+                { status: "Delivered", isSettled: { $ne: true } }, 
                 { status: "Returned" } 
             ],
             updatedAt: { $gte: filterStart, $lte: filterEnd }
@@ -498,7 +500,7 @@ exports.generateWeeklySettlement = async (req, res) => {
                 sellerItems.forEach(p => {
                     const prodName = p.name || p.productId?.name || "Product";
                     
-                    // 🌟 CRASH GUARD: Null check for settlement before finding index
+                    // 🌟 CRASH GUARD & SYNC CHECK
                     let existingRowIndex = -1;
                     if (settlement && settlement.payoutBreakdown) {
                         existingRowIndex = settlement.payoutBreakdown.findIndex(row => 
@@ -506,7 +508,7 @@ exports.generateWeeklySettlement = async (req, res) => {
                         );
                     }
 
-                    // Skip if SALE is already settled and nothing changed
+                    // Skip if SALE is already settled as the CORRECT status and nothing changed
                     if (settlement && existingRowIndex !== -1 && settlement.payoutBreakdown[existingRowIndex].type === order.status.toUpperCase()) {
                         return;
                     }
@@ -570,6 +572,7 @@ exports.generateWeeklySettlement = async (req, res) => {
                     };
 
                     if (settlement && existingRowIndex !== -1) {
+                        // 🔄 RE-SYNC: Update Delivered row to Returned row if status changed
                         settlement.payoutBreakdown[existingRowIndex] = rowData;
                     } else {
                         newPayoutRows.push(rowData);
@@ -607,6 +610,8 @@ exports.generateWeeklySettlement = async (req, res) => {
                 });
             }
             await settlement.save();
+            
+            // 🛡️ Only mark Delivered orders as settled (Returns stay flexible for sync)
             const deliveredOrderIds = orders.filter(o => o.status === "Delivered").map(o => o._id);
             if(deliveredOrderIds.length > 0) {
                 await Order.updateMany({ _id: { $in: deliveredOrderIds } }, { $set: { isSettled: true } });
