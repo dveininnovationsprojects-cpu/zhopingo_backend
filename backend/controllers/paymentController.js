@@ -388,19 +388,48 @@ exports.verifyPayment = async (req, res) => {
         res.status(500).json({ success: false, error: error.message });
     }
 };
-
 exports.phonepeReturn = async (req, res) => {
     try {
         const { orderId } = req.params;
         const response = await phonePeClient.getOrderStatus(orderId);
         const state = response.state || (response.data && response.data.state);
 
+        let statusFlag = "failed";
         if (state === "COMPLETED") {
-            await updateOrderSuccess(orderId);
-            return res.redirect(`zhopingo://payment-verify/${orderId}?status=success`);
+            await updateOrderSuccess(orderId); // 🌟 FIRST STATUS UPDATE PANNIDUM
+            statusFlag = "success";
         }
-        res.redirect(`zhopingo://payment-verify/${orderId}?status=failed`);
+
+        // 🚀 THE BRIDGE HANDSHAKE: Automatic redirect with manual fallback button
+        const deepLink = `zhopingo://payment-verify/${orderId}?status=${statusFlag}`;
+
+        res.send(`
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Redirecting to Zhopingo...</title>
+            </head>
+            <body style="text-align:center; padding-top:100px; font-family:sans-serif; background:#fff;">
+                <h2 style="color:#0c831f;">Payment ${statusFlag === 'success' ? 'Successful' : 'Failed'}!</h2>
+                <p>Please wait, redirecting you back to the app...</p>
+                <br/>
+                <a href="${deepLink}" id="manualRedirect" style="background:#0c831f; color:#fff; padding:15px 30px; text-decoration:none; border-radius:12px; font-weight:bold; font-size:16px;">
+                   Click here if not redirected
+                </a>
+                <script>
+                    window.location.href = "${deepLink}";
+                    // Forced redirect fallback for chrome/safari
+                    setTimeout(function() {
+                        document.getElementById('manualRedirect').click();
+                    }, 1000);
+                </script>
+            </body>
+            </html>
+        `);
+
     } catch (error) {
+        console.error("handshake error:", error.message);
         res.redirect(`zhopingo://payment-verify/${orderId}?status=failed`);
     }
 };
