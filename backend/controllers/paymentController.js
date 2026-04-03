@@ -260,68 +260,78 @@ const phonePeClient = StandardCheckoutClient.getInstance(
 // Export for wallet
 exports.phonePeClient = phonePeClient;
 
+
 /* =====================================================
-    🌟 ONLINE PAYMENT MASTER SYNC (THE FIX)
+    🌟 MASTER SYNC: updateOrderSuccess (PhonePe + AWB Fix)
 ===================================================== */
 const updateOrderSuccess = async (orderId) => {
-    try {
-        const lockedOrder = await Order.findOneAndUpdate(
-            { _id: orderId, paymentStatus: "Pending" },
-            { 
-                $set: { 
-                    paymentStatus: "Processing_Logistics", 
-                    status: "Packed", 
-                    paymentMethod: "Online" 
-                } 
-            },
-            { new: true }
-        );
+    try {
+        const order = await Order.findById(orderId);
+        if (!order || order.paymentStatus === "Paid") return true;
 
-        if (!lockedOrder) return true;
+        // 1. Initial Status Flip
+        order.paymentStatus = "Paid";
+        order.status = "Placed";
+        order.paymentMethod = "Online"; // PhonePe logic sync
+        await order.save(); 
 
-        if (lockedOrder.sellerSplitData && lockedOrder.sellerSplitData.length > 0) {
-            for (let split of lockedOrder.sellerSplitData) {
+        console.log(`📡 PhonePe Success: Syncing Master Logistics for Order ${orderId}`);
+
+        if (order.sellerSplitData && order.sellerSplitData.length > 0) {
+            for (let split of order.sellerSplitData) {
+                
+                /* =====================================================
+                   🌟 THE ABSOLUTE SYNC (PhonePe Edition):
+                   Inga vera endha manual name-um (Navi) anuppa koodadhu.
+                   Strictly unga 'processShipmentCreation' master call.
+                   Adhu dhaan 'Navib5eb' format-ah Delhivery Dashboard-ku anuppum.
+                ===================================================== */
+                const shipmentResult = await processShipmentCreation(order._id, split.sellerId);
                 
-                const shipmentResult = await processShipmentCreation(lockedOrder._id, split.sellerId);
-                
-                let finalAwb = null;
                 if (shipmentResult && shipmentResult.success && shipmentResult.awb) {
-                    finalAwb = shipmentResult.awb;
-                } else if (!IS_PROD) {
-                    finalAwb = "4716" + Math.floor(Math.random() * 10000000);
-                }
+                    console.log(`✅ PhonePe AWB Stored: ${shipmentResult.awb}`);
 
-                if (finalAwb) {
-                    split.awbNumber = finalAwb;
-                    split.packageStatus = "Packed";
-
-                    lockedOrder.items.forEach(item => {
-                        if (item.sellerId.toString() === split.sellerId.toString()) {
-                            item.itemAwbNumber = finalAwb;
-                            item.itemStatus = "Packed";
+                    // 🌟 PERSISTENCE: Seller Array Update
+                    await Order.updateOne(
+                        { _id: order._id, "sellerSplitData.sellerId": split.sellerId },
+                        { 
+                            $set: { 
+                                "sellerSplitData.$.awbNumber": shipmentResult.awb,
+                                "sellerSplitData.$.packageStatus": "Packed" 
+                            } 
                         }
-                    });
+                    );
+
+                    // 🌟 PERSISTENCE: Item Tracking Sync
+                    await Order.updateOne(
+                        { _id: order._id },
+                        { 
+                            $set: { 
+                                "items.$[elem].itemAwbNumber": shipmentResult.awb,
+                                "items.$[elem].itemStatus": "Packed"
+                            } 
+                        },
+                        { arrayFilters: [{ "elem.sellerId": split.sellerId }] }
+                    );
+                } else {
+                    console.error(`❌ PhonePe Logistics Fail [${split.sellerId}]: ${shipmentResult?.message}`);
+                    
+                    // Fallback logic for production resilience (Blinkit Standard)
+                    if (!IS_PROD) {
+                        const fallbackAWB = "4716" + Math.floor(Math.random() * 10000000);
+                        await Order.updateOne(
+                            { _id: order._id, "sellerSplitData.sellerId": split.sellerId },
+                            { $set: { "sellerSplitData.$.awbNumber": fallbackAWB, "sellerSplitData.$.packageStatus": "Packed" } }
+                        );
+                    }
                 }
-            }
-        }
-
-        lockedOrder.paymentStatus = "Paid";
-        
-        // 👇👇👇 IDHU DHAAN ANTHA EXACT FIX 👇👇👇
-        lockedOrder.markModified('items');
-        lockedOrder.markModified('sellerSplitData');
-        // 👆👆👆 ============================== 👆👆👆
-        
-        await lockedOrder.save(); 
-
-        return true;
-    } catch (err) {
-        console.error("❌ updateOrderSuccess Error:", err.message);
-        try {
-            await Order.updateOne({ _id: orderId }, { $set: { paymentStatus: "Paid" } });
-        } catch(e) {}
-        return false;
-    }
+            }
+        }
+        return true;
+    } catch (err) {
+        console.error("❌ updateOrderSuccess Error:", err.message);
+        return false;
+    }
 };
 /* =====================================================
     💳 PHONEPE SESSION (The Critical Fix for OrderId)
