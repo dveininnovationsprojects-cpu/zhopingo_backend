@@ -69,9 +69,9 @@ exports.getRealTimeRateInternal = async (
   }
 };
 /* =====================================================
-    🌟 7. PUBLIC RATE CALCULATION (Multi-Seller Golden Logic)
-    Logic: Same seller items-la oru item paid-naalum charge apply aagum.
-    Multi-seller na cumulative delivery charge katanum.
+    🌟 7. PUBLIC RATE CALCULATION (Multi-Seller Golden Logic - Item Level Split)
+    Logic: Strictly calculate delivery charge ONLY for the weight of PAID items.
+    If an item is marked as Free Delivery, its weight is ignored from the calculation.
 ===================================================== */
 exports.calculateLiveDeliveryRate = async (req, res) => {
     try {
@@ -94,42 +94,46 @@ exports.calculateLiveDeliveryRate = async (req, res) => {
         for (const sid in sellerGroups) {
             const sellerItems = sellerGroups[sid];
 
-            // 🛡️ THE GOLDEN logic: Check if ALL items from THIS seller are free
-            const isSellerOrderFullyFree = sellerItems.every(item => item.isFreeDelivery === true);
+            // 🛡️ THE FIX: Only filter items that are NOT free delivery
+            const paidItemsOnly = sellerItems.filter(item => item.isFreeDelivery === false);
 
-            if (!isSellerOrderFullyFree) {
-                // If even ONE item is paid, calculate real rate from Delhivery
-                let sellerWeightKg = sellerItems.reduce((sum, it) => {
+            if (paidItemsOnly.length > 0) {
+                // Calculate weight strictly using ONLY the paid items
+                let sellerPaidWeightKg = paidItemsOnly.reduce((sum, it) => {
                     const kg = exports.getWeightInKg(it.weightValue || it.weight || 500, it.unit || 'g');
                     return sum + (kg * it.quantity);
                 }, 0);
                 
-                totalWeightKg += sellerWeightKg;
+                totalWeightKg += sellerPaidWeightKg;
 
+                // Fetch seller details to get the origin pincode
                 const sellerDoc = await Seller.findById(sid);
                 const originPin = sellerDoc?.shopAddress?.pincode || "600001";
 
                 try {
+                    // Call Delhivery API with ONLY the calculated paid weight
                     const realApiRate = await exports.getRealTimeRateInternal(
                         pincode,
-                        sellerWeightKg,
+                        sellerPaidWeightKg, // 👈 THE CRITICAL FIX (Using only paid weight)
                         originPin,
                         paymentMode || "Pre-paid"
                     );
-                    // Profit Guard: Seller level-la minimum ₹80
+                    
+                    // Profit Guard: Minimum ₹80 for any package that has at least one paid item
                     totalDeliveryCharge += (realApiRate < 80 ? 80 : realApiRate);
                 } catch (apiErr) {
                     totalDeliveryCharge += 80; // API fail fallback
                 }
             }
-            // else: Intha seller products ellame free-na charge 0 (No addition)
+            // else: Intha seller kitta irundhu vānguna ellame Free delivery products.
+            // So charge 0 (Nothing is added to totalDeliveryCharge)
         }
 
         res.json({
             success: true,
-            finalCharge: totalDeliveryCharge, // Cumulative charge of all paid sellers
+            finalCharge: totalDeliveryCharge,
             type: totalDeliveryCharge === 0 ? "FREE" : "PAID",
-            weight: totalWeightKg.toFixed(3)
+            weight: totalWeightKg.toFixed(3) // Optional: Just for debugging response
         });
 
     } catch (err) {
