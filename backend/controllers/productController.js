@@ -110,17 +110,22 @@ exports.requestNewProduct = async (req, res) => {
     res.status(400).json({ success: false, error: err.message });
   }
 };
-
+// productController.js -> getAllProducts function mattum replace pannunga
 exports.getAllProducts = async (req, res) => {
   try {
-    const { category, subCategory, search, page = 1, limit = 50 } = req.query;
+    // 🌟 Added masterProductId to query params
+    const { category, subCategory, masterProductId, search, page = 1, limit = 50 } = req.query;
 
-    // 🌟 THE CRITICAL FILTER: Product strictly active-ah irukkanum
-    // Seller 'active' status populate 'match'-la handle aagudhu
     let query = { status: "active" }; 
 
     if (category) query.category = category;
     if (subCategory) query.subCategory = subCategory;
+    
+    // 🔥 THE CRITICAL FIX: Master Product filter (Variety filter)
+    if (masterProductId && masterProductId !== "all" && masterProductId !== "null") {
+      query.masterProductId = masterProductId;
+    }
+
     if (search) query.name = { $regex: search, $options: "i" };
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
@@ -129,7 +134,7 @@ exports.getAllProducts = async (req, res) => {
       .populate("category subCategory", "name image")
       .populate({
         path: "seller",
-        match: { status: "active" }, // Only active sellers
+        match: { status: "active" },
         select: "shopName name address status",
       })
       .sort({ createdAt: -1 })
@@ -137,7 +142,6 @@ exports.getAllProducts = async (req, res) => {
       .limit(parseInt(limit))
       .lean();
 
-    // 🛡️ Filter: Seller inactive-na populate 'null' varum, so andha products-ah remove panrom
     const filteredProducts = products.filter((p) => p.seller !== null);
     
     const data = filteredProducts.map((p) => ({
@@ -145,16 +149,15 @@ exports.getAllProducts = async (req, res) => {
       stock: p.stock !== undefined ? p.stock : 0,
       price: p.price || 99,
       mrp: p.mrp || 150,
-      // 📉 Dynamic Availability: Stock illana "Out of Stock" nu varum
       availability: p.stock > 0 ? "Available" : "Out of Stock",
-      ratingCount: Math.floor(Math.random() * 100) + 10,
+      // Hardcoded review preserved as per your request
+      ratingCount: 15999, 
     }));
 
-    // Single Clean Response (No Duplicates)
     res.status(200).json({
       success: true,
       count: data.length,
-      total_found_in_db: products.length, // Unnoda original metric preserved
+      total_found_in_db: products.length,
       data,
     });
 
