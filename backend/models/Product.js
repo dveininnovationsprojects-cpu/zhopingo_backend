@@ -102,9 +102,9 @@ const mongoose = require('mongoose');
 
 const productSchema = new mongoose.Schema({
   // 🌟 NEW: Master Product List-oda link (Idhu dhaan main mapping)
-  masterProductId: { 
+ masterProductId: { 
     type: mongoose.Schema.Types.ObjectId, 
-    ref: 'ProductList', 
+    ref: 'MasterProduct', // 👈 'ProductList'-ku bathila 'MasterProduct' nu maathirukaen
     required: true,
     index: true 
   },
