@@ -65,7 +65,8 @@ const {
     getPendingDailyOrders,
     getSellerLedger,
     getSellerKycForAdmin,
-    getAllLedgerEntries
+    getAllLedgerEntries,
+    getSettlementBreakdown
 } = require("../controllers/adminController"); 
 const { protect } = require('../middleware/authMiddleware');
 
@@ -109,6 +110,8 @@ router.post('/logistics-settlement', protect, generateGlobalLogisticsSettlement)
 router.get('/finance/settlements/:sellerId', protect, getSellerSettlements); // Add this function in controller
 router.get('/ledger/:sellerId', protect, getSellerLedger); // Add this function in controller
 router.get("/seller-kyc/:sellerId", protect, getSellerKycForAdmin);
+// Example in your routes file:
+router.get('/settlements/breakdown/:settlementId',protect,getSettlementBreakdown);
 
 
 router.get('/ledger/all', protect, getAllLedgerEntries);

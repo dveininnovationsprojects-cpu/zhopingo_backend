@@ -907,3 +907,58 @@ exports.getSellerKycForAdmin = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
+
+/* =====================================================
+    🌟 GET SETTLEMENT BREAKDOWN DETAILS (For Seller View)
+    Purpose: To show the detailed itemized list of orders inside a Paid Settlement
+===================================================== */
+exports.getSettlementBreakdown = async (req, res) => {
+    try {
+        const { settlementId } = req.params;
+
+        // 1. Fetch the specific settlement
+        const settlement = await Settlement.findById(settlementId);
+
+        if (!settlement) {
+            return res.status(404).json({ success: false, message: "Settlement not found" });
+        }
+
+        // 2. We only want to show this detailed data if the settlement is PAID (or you can remove this check if you want them to see pending ones too)
+        if (settlement.status !== "Paid") {
+            return res.status(400).json({ success: false, message: "Details are available only for Paid settlements." });
+        }
+
+        // 3. Map and format the exact fields you requested
+        const formattedBreakdown = settlement.payoutBreakdown.map((row) => {
+            // Calculate Commission + GST together
+            const totalCommissionAndGST = (row.platformCommission || 0) + (row.gstOnCommission || 0);
+
+            return {
+                orderId: row.orderId,
+                productName: row.productName,
+                status: row.type, // e.g., DELIVERED, RETURNED
+                orderDate: row.deliveryDate || row.statusDate, // Best date representing the action
+                statusDate: row.statusDate,
+                
+                // Money Matters
+                totalCustomerPaid: row.customerPaidTotal || 0,
+                productAmountOnly: row.productPriceOnly || 0,
+                commissionAndGst: Number(totalCommissionAndGST.toFixed(2)),
+                deliveryDeduction: row.sellerShippingDeduction || 0,
+                finalShare: row.netPayableToSeller || 0
+            };
+        });
+
+        res.json({
+            success: true,
+            settlementPeriod: settlement.weekRange,
+            paymentDate: settlement.paymentDate,
+            totalSettledAmount: settlement.finalSettlementAmount,
+            data: formattedBreakdown
+        });
+
+    } catch (err) {
+        console.error("Settlement Breakdown Error:", err.message);
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
